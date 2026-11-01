@@ -13,7 +13,8 @@ import {
   runResultSummaries,
   sourceFailureReasons,
 } from '@/lib/run-outcome';
-import { runResultLines } from '@/lib/run-result';
+import { isEarlierRunResult, runResultLines, showsRunResult } from '@/lib/run-result';
+import { executionNotice, type ScoutExecution } from '@/lib/scout-execution';
 import captured from '@/test/fixtures/scout-run-outcomes.json';
 import { orgModel } from '@/test/handlers';
 import { server } from '@/test/server';
@@ -26,7 +27,7 @@ import { renderApp } from '@/test/utils';
  * src/test/fixtures/scout-run-outcomes.json (LANE-BRIEF §5: a hand-written fixture can agree with
  * a bug). The page reads the typed `run_outcome` and the `RunStats` counts only.
  */
-type Case = Pick<ScoutRequestOut, 'status' | 'stats' | 'run_outcome'>;
+type Case = Pick<ScoutRequestOut, 'status' | 'stats' | 'run_outcome' | 'coverage' | 'execution'>;
 type CaseName = keyof typeof captured.cases;
 // The JSON import widens the enums to `string`; the API test pins the values themselves.
 const cases = captured.cases as unknown as Record<CaseName, Case>;
@@ -294,5 +295,138 @@ describe('the next step follows the viewer\'s role (fix pass: every next step is
     expect(within(panel).queryByText(runNextActions[action])).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Run now' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Review r1 (W21-REV-Q1) MINOR-1..3, PROPOSED. Each page test renders a whole body the real route
+ * returned (src/test/fixtures/scout-run-outcomes.json, pinned by the API test), including its real
+ * `coverage` and `execution`, so the D-25 notice renders beside the panel as it does in the product.
+ */
+const NOTICE_RUN_STEPS = [
+  'Run now to try again.',
+  'Run now to start a new run.',
+  'so this scout can run again',
+  'You can run this scout now',
+];
+
+describe('a run that read no source is not presented as complete (review r1 MINOR-1)', () => {
+  beforeEach(() => orgModel.setMembership('org-1', 'user-1', 'owner'));
+  afterEach(() => orgModel.reset());
+
+  it('showsRunResult: no panel for sources [], a panel for null sources (a pre-#268 refusal)', () => {
+    expect(showsRunResult(cases.no_source.run_outcome)).toBe(false);
+    expect(showsRunResult({ ...cases.refused_at_bound.run_outcome!, sources: null })).toBe(true);
+    expect(showsRunResult(cases.complete.run_outcome)).toBe(true);
+    expect(showsRunResult(null)).toBe(false);
+  });
+
+  it('the real body of a market no source covers: no "complete" claim; the zero-result panel explains it once', async () => {
+    serve(scout(cases.no_source));
+    const screen = renderApp(<App />, { route: `/scout-requests/${DALLAS}` });
+    expect(await screen.findByText('No source covered the last run')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: runResultCopy.heading })).not.toBeInTheDocument();
+    expect(screen.queryByText(runResultSummaries.complete)).not.toBeInTheDocument();
+    expect(screen.queryByText(runResultLabels.complete)).not.toBeInTheDocument();
+  });
+});
+
+describe('the panel never calls an earlier run the latest (review r1 MINOR-2)', () => {
+  beforeEach(() => orgModel.setMembership('org-1', 'user-1', 'owner'));
+  afterEach(() => orgModel.reset());
+
+  const exec = (state: ScoutExecution['state'], reason: ScoutExecution['reason']): ScoutExecution => ({
+    state,
+    reason,
+    next_action: 'run_now',
+    since: null,
+  });
+
+  it('isEarlierRunResult: only states in which the latest run ended without a result', () => {
+    expect(isEarlierRunResult(exec('stopped', 'admission_unresolved'))).toBe(true);
+    expect(isEarlierRunResult(exec('stopped', 'run_cancelled'))).toBe(true);
+    expect(isEarlierRunResult(exec('stopped', 'run_interrupted'))).toBe(true);
+    // A refusal ends `stopped / run_failed` and is itself the result; the others may have written one.
+    expect(isEarlierRunResult(exec('stopped', 'run_failed'))).toBe(false);
+    expect(isEarlierRunResult(exec('idle', 'none'))).toBe(false);
+    expect(isEarlierRunResult(exec('paused', 'paused_by_user'))).toBe(false);
+    expect(isEarlierRunResult(exec('in_progress', 'run_active'))).toBe(false);
+    expect(isEarlierRunResult(exec('needs_attention', 'operation_outcome_unknown'))).toBe(false);
+    expect(isEarlierRunResult(null)).toBe(false);
+  });
+
+  it('the real body after a later run failed admission_unresolved: the panel says it is an earlier run', async () => {
+    const c = cases.earlier_result_after_admission_unresolved;
+    expect(c.execution).toMatchObject({ state: 'stopped', reason: 'admission_unresolved' });
+    const { screen, panel } = await openPanel(scout(c));
+    expect(runResultCopy.heading).toBe('Result of the last run that read its sources');
+    expect(within(panel).getByRole('heading', { name: runResultCopy.heading })).toBeInTheDocument();
+    expect(within(panel).getByText(runResultCopy.earlierRun)).toBeInTheDocument();
+    expect(screen.queryByText(/latest run result/i)).not.toBeInTheDocument();
+    // The D-25 notice above says the latest run could not continue; the two now agree.
+    const notice = document.querySelector('[data-execution-state="stopped"]');
+    expect(notice?.textContent).toMatch(/^The last run could not continue/);
+  });
+
+  it('a result that is the latest run has no such qualifier', async () => {
+    const { panel } = await openPanel(scout(cases.partial_source_failed));
+    expect(within(panel).queryByText(runResultCopy.earlierRun)).not.toBeInTheDocument();
+  });
+});
+
+describe('a refused run has exactly one next step on the page (review r1 MINOR-3)', () => {
+  afterEach(() => orgModel.reset());
+
+  it.each([
+    ['owner', runNextActions.narrow_request],
+    ['viewer', runNextActionsForNonEditors.narrow_request],
+  ] as const)('the real refused body with its real execution (%s)', async (role, step) => {
+    orgModel.setMembership('org-1', 'user-1', role);
+    const c = cases.refused_at_bound;
+    expect(c.execution).toMatchObject({ state: 'stopped', reason: 'run_failed' });
+    const { screen, panel } = await openPanel(scout(c));
+    // The D-25 notice keeps its title and points at the panel instead of giving its own step.
+    const title = screen.getByText(/^The last run did not complete/);
+    const notice = title.closest('[data-execution-state]') as HTMLElement;
+    expect(notice).toHaveAttribute('data-execution-state', 'stopped');
+    expect(within(notice).getByText(runResultCopy.seeResultBelow)).toBeInTheDocument();
+    // Exactly one next step: the panel's.
+    const page = document.body.textContent ?? '';
+    expect(sections(panel)[runResultCopy.nextStep]).toEqual([step]);
+    expect(page.split(step).length - 1).toBe(1);
+    for (const other of [...NOTICE_RUN_STEPS, ...Object.values(runNextActions), ...Object.values(runNextActionsForNonEditors)]) {
+      if (other !== step) expect(page).not.toContain(other);
+    }
+  });
+
+  it('executionNotice: a run-again step defers to the panel; a prerequisite step is kept; titles never change', () => {
+    const exec = (state: ScoutExecution['state'], reason: ScoutExecution['reason']): ScoutExecution => ({
+      state,
+      reason,
+      next_action: 'run_now',
+      since: null,
+    });
+    const see = runResultCopy.seeResultBelow;
+    const deferred = [
+      [exec('stopped', 'run_failed'), 'failed'],
+      [exec('stopped', 'run_cancelled'), 'draft'],
+      [exec('stopped', 'admission_unresolved'), 'failed'],
+      [exec('in_progress', 'operation_finishing'), 'failed'],
+    ] as const;
+    for (const [e, status] of deferred) {
+      const plain = executionNotice(e, status)!;
+      const got = executionNotice(e, status, { deferNextStep: true })!;
+      expect(got.title).toBe(plain.title);
+      expect(got.body.endsWith(see)).toBe(true);
+      for (const step of NOTICE_RUN_STEPS) expect(got.body).not.toContain(step);
+    }
+    const kept = [
+      [exec('paused', 'paused_by_user'), 'paused'],
+      [exec('needs_attention', 'operation_overdue'), 'failed'],
+      [exec('stopped', 'run_interrupted'), 'queued'],
+    ] as const;
+    for (const [e, status] of kept) {
+      expect(executionNotice(e, status, { deferNextStep: true })).toEqual(executionNotice(e, status));
+    }
   });
 });

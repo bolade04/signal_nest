@@ -1,4 +1,5 @@
 import type { ScoutRequestOut } from '@/api/types';
+import type { ScoutExecution } from '@/lib/scout-execution';
 import {
   runNextActions,
   runNextActionsForNonEditors,
@@ -20,6 +21,33 @@ import { formatStat, statValue } from '@/lib/scout-stats';
  * whether the viewer can edit and run the Scout (`canEdit`, the same gate that shows Edit and
  * Run now): a member who cannot is never told to edit or run it.
  */
+/**
+ * Whether the page shows the run-result panel for this outcome (review r1 MINOR-1). A run that
+ * read no source (`sources: []`: only a market no source covers, `fetch_signals`' default batch;
+ * every other path reports at least one source) is not shown here: "complete" would claim that
+ * every source was read when none was, and the zero-result panel already explains that run
+ * ("No source covered the last run"), once (W16 round 1a CF2). `sources: null` (a refusal
+ * recorded before per-source facts existed) is still shown.
+ */
+export function showsRunResult(result: RunResult | null | undefined): result is RunResult {
+  return Boolean(result) && !(result!.sources && result!.sources.length === 0);
+}
+
+/**
+ * Whether `execution` says the latest run ended without writing a result, so the panel shows an
+ * earlier run's (review r1 MINOR-2): the latest run failed to admit an operation, was cancelled,
+ * or was interrupted. Not `run_failed` (a refusal ends so and is itself the result), not paused,
+ * in progress or needs attention (the latest run may still have written its result).
+ */
+export function isEarlierRunResult(execution: ScoutExecution | null | undefined): boolean {
+  return (
+    execution?.state === 'stopped' &&
+    (execution.reason === 'admission_unresolved' ||
+      execution.reason === 'run_cancelled' ||
+      execution.reason === 'run_interrupted')
+  );
+}
+
 export interface RunResultLines {
   ran: string[];
   didNot: string[];

@@ -83,7 +83,17 @@ const sources = (n: number) => `${n} ${n === 1 ? 'source' : 'sources'}`;
 const count = (n: string, one: string, many: string) => `${n} ${n === '1' ? one : many}`;
 
 export const runResultCopy = {
-  heading: 'Latest run result',
+  // Review r1 MINOR-2: `stats` hold the last run that read its sources (completed or refused); a
+  // later run that ended without a result (cancelled, stopped, skipped, failed) writes none, so
+  // the panel never calls itself the latest run's result.
+  heading: 'Result of the last run that read its sources',
+  /** Shown when `execution` says the latest run ended without a result (lib/run-result.ts). */
+  earlierRun: 'The latest run ended without a result, so this is the result of an earlier run.',
+  /**
+   * Review r1 MINOR-3: the D-25 notice's body when the panel carries a refused run's one next
+   * step and the notice's own step would be to run the scout again (lib/scout-execution.ts).
+   */
+  seeResultBelow: 'See the run result below for what to do next.',
   whatRan: 'What ran',
   whatDidNot: 'What did not run',
   nextStep: 'Next step',

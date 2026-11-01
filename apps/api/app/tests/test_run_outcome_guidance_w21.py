@@ -22,6 +22,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 
 from app.connectors import fetch_limits
@@ -43,6 +44,7 @@ from app.jobs.admission import (
 from app.jobs.models import Job
 from app.jobs.outcomes import RunOutcome, RunOutcomeReason, run_outcome
 from app.jobs.pipeline import refused_run_stats
+from app.jobs.worker import JobRunner
 from app.scouting_requests.models import ScoutRequest
 from app.scouting_requests.schemas import (
     PartialFetchReason,
@@ -79,9 +81,19 @@ def _web_fixture() -> dict:
 
 
 def _assert_is_the_web_fixture(body: dict, case: str) -> None:
+    """The real body is the web fixture's case: ``status``, ``run_outcome``, ``coverage``,
+    ``execution`` (review r1 §5.5: the page renders the D-25 notice beside the panel; ``since`` is a
+    wall-clock time for an idle Scout, so only its presence is pinned) and ``stats``."""
     want = _web_fixture()["cases"][case]
     assert body["status"] == want["status"]
     assert body["run_outcome"] == want["run_outcome"]
+    assert body["coverage"] == want["coverage"]
+
+    def unstamped(execution: dict) -> dict:
+        return {k: v for k, v in execution.items() if k != "since"}
+
+    assert unstamped(body["execution"]) == unstamped(want["execution"])
+    assert (body["execution"]["since"] is None) == (want["execution"]["since"] is None)
 
     def unsplit(stats: dict) -> dict:
         return {k: v for k, v in stats.items() if k not in _SPLIT}
@@ -264,6 +276,61 @@ def test_refused_run_at_the_bound_says_why_and_to_narrow_the_scout(client, repla
     }
     assert body["coverage"] is None  # a refused run did not complete (P6-DATA-2, unchanged)
     _assert_is_the_web_fixture(body, "refused_at_bound")
+
+
+def test_a_run_that_read_no_source_lifts_complete_with_no_sources(factory, client):
+    """Review r1 MINOR-1: a market no source covers. The lift says ``complete`` with ``sources:
+    []`` (what the run recorded); the page does not present it as "every source was read" (web
+    test ``no_source``), the zero-result panel explains it from ``coverage``."""
+    with factory() as session:
+        req = session.get(ScoutRequest, _rid())
+        kept = (req.location_id, req.resolved_market)
+        req.location_id, req.resolved_market = None, "Nowhere, ZZ"
+        session.commit()
+    try:
+        _queue(factory, _rid())
+        _poll(factory)
+        body = _scout(client)
+    finally:
+        with factory() as session:
+            req = session.get(ScoutRequest, _rid())
+            req.location_id, req.resolved_market = kept
+            session.commit()
+    assert body["status"] == "completed"
+    assert body["coverage"]["status"] == "not_covered"
+    assert body["run_outcome"] == {
+        "kind": "complete",
+        "sources": [],
+        "partial_reasons": [],
+        "refusal_reason": None,
+        "bound": None,
+        "next_action": None,
+    }
+    _assert_is_the_web_fixture(body, "no_source")
+
+
+def test_a_later_run_without_a_result_leaves_the_earlier_result(factory, client, monkeypatch):
+    """Review r1 MINOR-2: a complete run, then a run that fails ``admission_unresolved`` (it writes
+    no stats). ``run_outcome`` still describes the earlier run, and ``execution`` says the latest
+    run stopped without a result; the page qualifies the panel (web test ``earlier_result``)."""
+    _queue(factory, _rid())
+    _poll(factory)
+    first = _scout(client)
+
+    def blocked(_db, _rid, _context=None):
+        raise AdmissionUnresolved("blocking-admission", "model", ADMISSION_WAIT_NONE)
+
+    monkeypatch.setattr(handlers, "_run", blocked)
+    _queue(factory, _rid())
+    _poll(factory)
+    body = _scout(client)
+    assert body["status"] == "failed"
+    assert body["run_outcome"] == first["run_outcome"]
+    assert (body["execution"]["state"], body["execution"]["reason"]) == (
+        "stopped",
+        "admission_unresolved",
+    )
+    _assert_is_the_web_fixture(body, "earlier_result_after_admission_unresolved")
 
 
 def test_the_list_carries_the_same_run_outcome_as_the_detail(client, replay):
@@ -526,6 +593,46 @@ def test_only_a_recorded_wait_until_the_deadline_is_worded_as_timed_out(summary,
         last_error_code="non_retryable",
         last_error_summary="admission_unresolved",
     ) == (RunOutcome.FAILED, reason)
+
+
+def test_a_stale_attempt_never_writes_the_wait(factory, client, monkeypatch):
+    """Review r1 MINOR-4(b): the wait record is fenced. Right after the attempt rolls back, before
+    its fenced failure transaction, a newer attempt takes the job (new worker and lease token)
+    and records its own summary. The stale attempt writes nothing over it: neither its wait
+    record nor its failure. (Template: the reviewer's ``test_r_fence_…``.)"""
+
+    def blocked(_db, _rid, _context=None):
+        raise AdmissionUnresolved("blocking-admission", "model", ADMISSION_WAIT_UNTIL_DEADLINE)
+
+    monkeypatch.setattr(handlers, "_run", blocked)
+    real = JobRunner._write_after_rollback
+    newer = {"outcome": "completed", "marker": "newer-attempt"}
+    target: dict = {}
+
+    def steal_then_write(self, db, writers, **kw):
+        if target.get("id") and not target.get("stolen"):
+            db.execute(
+                update(Job)
+                .where(Job.id == target["id"])
+                .values(worker_id="w-newer", lease_token="newer-token", result_summary=newer)
+            )
+            db.commit()
+            target["stolen"] = True
+        return real(self, db, writers, **kw)
+
+    monkeypatch.setattr(JobRunner, "_write_after_rollback", steal_then_write)
+    job_id = _queue(factory, _rid())
+    target["id"] = job_id
+    _poll(factory)
+    assert target.get("stolen") is True
+    with factory() as session:
+        row = session.get(Job, job_id)
+        assert row.result_summary == newer  # no admission_wait over the newer attempt's row
+        assert (row.worker_id, row.lease_token) == ("w-newer", "newer-token")
+        assert row.last_error_summary is None  # the stale failure transition did not land
+        # Leave a terminal job for the ``committed`` fixture's cleanup.
+        row.status, row.worker_id, row.lease_token = "failed", None, None
+        session.commit()
 
 
 def test_the_wait_record_never_changes_another_failure():

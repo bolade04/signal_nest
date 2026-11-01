@@ -17,6 +17,7 @@ import { sourceTypeLabels } from '@/lib/labels';
 import { canEditWorkspace, useActorRole } from '@/lib/roles';
 import { formatCount, statValue } from '@/lib/scout-stats';
 import { isExecutionInProgress } from '@/lib/scout-execution';
+import { showsRunResult } from '@/lib/run-result';
 import { editAvailability } from '@/lib/scout-actions';
 import { zeroResult } from '@/lib/zero-result';
 import { SCOUT_IN_FLIGHT } from '@/lib/scout-status';
@@ -184,10 +185,17 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
         </div>
       </div>
 
-      <ScoutExecutionNotice execution={r.execution} status={r.status} />
+      {/* Review r1 MINOR-3 (PROPOSED): a refused run's one next step is the panel's; a notice
+          that would say "run it again" points at the panel instead. */}
+      <ScoutExecutionNotice
+        execution={r.execution}
+        status={r.status}
+        deferNextStep={showsRunResult(r.run_outcome) && r.run_outcome.kind === 'refused'}
+      />
 
-      {/* W21 FU-Q1-1 (PROPOSED): what the latest recorded run read, what it did not, one next
-          step; from the typed `run_outcome`. It replaces the zero-result panel's partial note. */}
+      {/* W21 FU-Q1-1 (PROPOSED): what the last run that read its sources read, what it did not,
+          one next step; from the typed `run_outcome`. It replaces the zero-result panel's
+          partial note. */}
       <RunResultPanel request={r} canEdit={canEdit} />
 
       {empty ? (

@@ -362,8 +362,11 @@ Source: `apps/api/app/scouting_requests/routes.py`.
       `narrow_request` (a refusal: edit the Scout to fewer source types or keywords),
       `run_again_later` (a source failed) or `no_action` (only a fetch limit clipped a source).
       It is null when the stats record none (no result yet, or a completed run recorded before
-      the per-source facts existed). The Scout page shows it as "Latest run result"; its wording
-      is PROPOSED and awaits a copy owner.
+      the per-source facts existed). The Scout page shows it as "Result of the last run that
+      read its sources", says when the latest run ended without a result (so the panel shows an
+      earlier run's), shows nothing for a run that read no source (the zero-result panel explains
+      it), and for a refused run lets the D-25 notice point at the panel's one next step instead of
+      its own "run again". Its wording is PROPOSED and awaits a copy owner.
     - *Markets.* For a Scout tied to a location, the sources see its market text read in the
       location's country ("Lagos, Lagos" of a Lagos, NG location → "Lagos, Lagos, NG", served
       by the "Lagos, NG" sample market). Text that names a country is unchanged (an explicit

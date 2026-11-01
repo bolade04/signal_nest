@@ -24,8 +24,10 @@ from app.connectors.feedcache import FeedCache
 from app.connectors.live import LiveRssConnector
 from app.connectors.retry import ConnectorFetchError
 from app.jobs import pipeline
+from app.jobs.admission import RunAdmission
 from app.jobs.models import Job
 from app.jobs.reconcile import UNKNOWN_END, list_unresolved, resolve
+from app.jobs.schemas import JobOut
 from app.jobs.status import JobStatus
 from app.jobs.store import DurableJobStore
 from app.llm.base import LLMTimeoutError, LLMUsage
@@ -34,7 +36,11 @@ from app.llm.models import LLMBudgetReservation, LLMUsageEvent
 from app.llm.service import LLMService
 from app.privacy.erasure import erase_organization
 from app.scouting_requests.models import ScoutAdmission, ScoutRequest
-from app.scouting_requests.routes import resume_scout_request, run_scout_request_endpoint
+from app.scouting_requests.routes import (
+    get_scout_request,
+    resume_scout_request,
+    run_scout_request_endpoint,
+)
 from app.tests import test_scout_pause_postgres as harness
 from app.tests._auth2_support import require_postgres
 from app.tests._llm_offline import offline_settings
@@ -517,6 +523,51 @@ def test_a_lapsed_lease_stops_the_run_retryably_and_loses_nothing(world, monkeyp
     assert end.job_summary["outcome"] == "completed" and end.status == "completed"
 
 
+class Looks:
+    """W21 review r1 MINOR-4(a): every ``RunAdmission._blocking`` look - what a waiter saw of the
+    blocking admission, ``(ended, deadline_passed)`` - with its thread, so a test decides the
+    expected ``admission_wait`` from what the waiter actually saw, never from the host's speed.
+    (Template: the W21-REV-Q1 reviewer's ``test_zz_rev_q1_postgres.Looks``.)"""
+
+    def __init__(self, monkeypatch):
+        self.items: list[tuple[int, float, tuple[bool, bool] | None]] = []
+        real = RunAdmission._blocking
+        looks = self
+
+        def spy(self, operation):
+            got = real(self, operation)
+            looks.items.append(
+                (threading.get_ident(), time.monotonic(), None if got is None else (got[1], got[2]))
+            )
+            return got
+
+        monkeypatch.setattr(RunAdmission, "_blocking", spy)
+
+    def of(self, ident: int) -> list[tuple[bool, bool] | None]:
+        return [v for i, _t, v in self.items if i == ident]
+
+
+def _set_deadline(w: World, seconds: float) -> None:
+    """Move the zombie's outstanding admission's PERSISTED deadline to ``seconds`` from now
+    (database clock), keeping ``admitted_at`` consistent with its basis (the CHECK)."""
+    with w.observer.connect() as c:
+        c.execute(
+            text(
+                "update scout_admissions a set deadline_at = t.ts + make_interval(secs => :s),"
+                " admitted_at = t.ts + make_interval(secs => :s)"
+                " - make_interval(secs => a.deadline_client_seconds + a.deadline_lease_seconds)"
+                " from (select clock_timestamp() as ts) t"
+                " where a.scout_request_id = :r and a.resolved_at is null"
+            ),
+            {"r": w.rid, "s": seconds},
+        )
+
+
+def _job_out(w: World) -> dict:
+    with w.factory() as s:
+        return JobOut.model_validate(s.get(Job, w.job_id)).model_dump(mode="json")
+
+
 def test_a_wait_behind_an_outstanding_admission_expires_definitely(world, monkeypatch):
     """A re-claim waits behind the zombie's outstanding admission; once that admission's
     deadline has passed (database time) the run ends ``failed`` (``admission_unresolved``),
@@ -541,7 +592,10 @@ def test_a_wait_behind_an_outstanding_admission_expires_definitely(world, monkey
             ),
             {"r": w.rid},
         )
-    assert _start_worker(w, _runner(w)).join_ok() is True
+    looks = Looks(monkeypatch)
+    waiter = _start_worker(w, _runner(w))
+    assert waiter.join_ok() is True
+    seen = looks.of(waiter.ident)
     expired = _end_state(w)
     still_unresolved = _unresolved(w)
     with w.factory() as s:
@@ -550,10 +604,72 @@ def test_a_wait_behind_an_outstanding_admission_expires_definitely(world, monkey
     zombie.join_ok()
     assert expired.job_status == JobStatus.FAILED.value
     assert expired.job_error == ("non_retryable", "admission_unresolved")
-    # W21 FU-Q1-2 (PROPOSED): the wait is recorded on the failed job. Whether this run reached
-    # its admission before the 0.2 s deadline (and so waited until it) depends on the host's
-    # speed, so either record is correct here; the waiting loop itself is pinned with stubs in
-    # ``test_run_outcome_guidance_w21``. It never ends with an unknown end in this case.
-    assert expired.job_summary in ({"admission_wait": "until_deadline"}, {"admission_wait": "none"})
+    # W21 FU-Q1-2 (PROPOSED; review r1 MINOR-4(a)): the record is decided by what the waiter saw.
+    # Whether it reached its admission before the 0.2 s deadline depends on the host's speed: if
+    # it looked more than once, it waited until the deadline; if its first look already found the
+    # deadline passed, nothing waited. The blocker never ends with an unknown end here.
+    assert seen and seen[-1] == (False, True)
+    waited = len(seen) >= 2
+    assert expired.job_summary == {"admission_wait": "until_deadline" if waited else "none"}
     assert expired.status == "failed" and owner is None
     assert still_unresolved == 1 and len(provider.calls) == 1
+
+
+def test_a_wait_until_a_deadline_two_seconds_ahead_reads_timed_out(world, monkeypatch):
+    """W21 FU-Q1-2 (PROPOSED; review r1 MINOR-4(a)): the outstanding admission's deadline is 2 s
+    ahead, so the re-claim waits (it looks, sleeps, looks again) until the deadline passes. The
+    failed job records exactly ``until_deadline`` and is the one real path to the "timed out"
+    wording (``earlier_operation_timed_out``). (Template: the reviewer's R-PG-DEADLINE.)"""
+    w = world
+    provider = Provider(park={1})
+    _use(monkeypatch, provider)
+    zombie = _start_worker(w)
+    assert provider.parked.wait(JOIN_SECONDS)
+    _expire_lease(w, w.job_id)
+    looks = Looks(monkeypatch)
+    _set_deadline(w, 2.0)
+    waiter = _start_worker(w, _runner(w))
+    assert waiter.join_ok() is True
+    seen = looks.of(waiter.ident)
+    end = _end_state(w)
+    provider.release.set()
+    zombie.join_ok()
+    assert seen[0] == (False, False) and seen[-1] == (False, True) and len(seen) >= 2
+    assert end.job_error == ("non_retryable", "admission_unresolved")
+    assert end.job_summary == {"admission_wait": "until_deadline"}
+    job = _job_out(w)
+    assert (job["outcome"], job["outcome_reason"]) == ("failed", "earlier_operation_timed_out")
+    assert end.status == "failed"
+
+
+def test_a_wait_that_ends_with_an_unknown_end_reads_unresolved(world, monkeypatch):
+    """W21 FU-Q1-2 (PROPOSED; review r1 MINOR-4(a)): the re-claim is waiting when the zombie's
+    parked model call times out (an unknown end). The failed job records exactly
+    ``until_unknown_end``, which is never worded as a timeout; the Scout needs attention (D-25
+    unchanged). (Template: the reviewer's R-PG-UNKNOWN.)"""
+    w = world
+    provider = Provider(park={1}, timeout={1})
+    _use(monkeypatch, provider)
+    zombie = _start_worker(w)
+    assert provider.parked.wait(JOIN_SECONDS)
+    _expire_lease(w, w.job_id)
+    looks = Looks(monkeypatch)
+    waiter = _start_worker(w, _runner(w))
+    deadline = time.monotonic() + JOIN_SECONDS
+    while not looks.of(waiter.ident) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert looks.of(waiter.ident)[0] == (False, False)  # it is waiting
+    provider.release.set()  # the zombie's parked call now times out: an unknown end
+    zombie.join_ok()
+    assert waiter.join_ok() is True
+    seen = looks.of(waiter.ident)
+    end = _end_state(w)
+    assert seen[-1][0] is True and len(seen) >= 2
+    assert end.job_error == ("non_retryable", "admission_unresolved")
+    assert end.job_summary == {"admission_wait": "until_unknown_end"}
+    job = _job_out(w)
+    assert (job["outcome"], job["outcome_reason"]) == ("failed", "earlier_operation_unresolved")
+    with w.factory() as s:
+        scout = get_scout_request(workspace_id=w.ws, request_id=w.rid, db=s, ctx=w.ctx)
+        assert scout.status == "failed"
+        assert scout.execution.state == "needs_attention"
