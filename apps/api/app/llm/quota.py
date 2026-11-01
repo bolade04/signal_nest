@@ -13,7 +13,10 @@ generation per UTC day:
 
 **Fail closed while unset.** None of the four has an approved value; each defaults to
 ``None``. While any is unset every generation attempt is refused (``ceilings_unset``) —
-there is no default that lets a call through.
+there is no default that lets a call through. A value that is not a finite number greater
+than 0 counts as unset here too (:func:`unusable_ceilings`): ``Settings`` refuses NaN,
+infinity and non-positive values when it is built (CF-2 fix C-2), and this read does not rely
+on that — NaN compares false against every spend and would never refuse.
 
 **What is counted — the ledger, never a draft's snapshot** (coordinator decision I-4 / R5).
 Spend is read from the Phase 6 usage ledger: the day's ``llm_usage_events.cost_usd`` (every
@@ -47,6 +50,7 @@ documents.
 from __future__ import annotations
 
 import hashlib
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -55,7 +59,7 @@ from decimal import Decimal
 from sqlalchemy import BigInteger, cast, func, literal, select
 from sqlalchemy.orm import Session
 
-from app.core.config import Settings
+from app.core.config import CREATIVE_GENERATION_CEILINGS, Settings
 from app.llm import budget as ledger
 from app.llm.bound import Unbounded
 from app.llm.metering import LLMBudgetExceededError, LLMMeter
@@ -164,6 +168,23 @@ def daily_usage(db: Session, *, workspace_id: str, task: str, now: datetime) -> 
     )
 
 
+def unusable_ceilings(settings: Settings) -> tuple[str, ...]:
+    """The ceiling settings generation cannot use: unset, or not a finite number greater
+    than 0 (a bool is not a number here). Generation refuses while this is non-empty."""
+    unusable = []
+    for name in CREATIVE_GENERATION_CEILINGS:
+        value = getattr(settings, name)
+        usable = (
+            isinstance(value, int | float)
+            and not isinstance(value, bool)
+            and math.isfinite(value)
+            and value > 0
+        )
+        if not usable:
+            unusable.append(name)
+    return tuple(unusable)
+
+
 def _refuse(reason: str, detail: str | None = None) -> None:
     error = LLMCeilingExceededError(
         f"generation refused: {reason}" + (f" ({detail})" if detail else ""), reason
@@ -187,7 +208,7 @@ def check_ceilings(
     fits every ceiling; ``pending_*`` are this caller's attempts not yet in the ledger.
 
     A ceiling is refused when it is already reached or the attempt could cross it."""
-    unset = settings.creative_generation_ceilings_unset()
+    unset = unusable_ceilings(settings)
     if unset:
         _refuse(CEILINGS_UNSET, ", ".join(unset))
     usage = daily_usage(db, workspace_id=workspace_id, task=task, now=now)
@@ -269,5 +290,6 @@ __all__ = [
     "day_window",
     "global_lock_statement",
     "lock_for_generation",
+    "unusable_ceilings",
     "workspace_lock_select",
 ]

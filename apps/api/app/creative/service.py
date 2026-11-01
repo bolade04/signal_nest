@@ -16,9 +16,9 @@ draft. The route only enqueues and the client polls the job, then reads the draf
   "from an approved recommendation brief" (Phase 5C plan §1);
 * a revision's parent is a draft of the same brief and workspace;
 * the requester is still a workspace editor (owner, admin or marketer);
-* every generation ceiling is configured (:mod:`app.llm.quota`; refused while any is unset)
-  and none would be breached, checked under the global and workspace generation locks
-  before every provider attempt.
+* every generation ceiling is configured — a finite number greater than 0 — and none would be
+  breached (:mod:`app.llm.quota`; refused while any is unset or unusable), checked under the
+  global and workspace generation locks before every provider attempt.
 
 **The model call** is the 5C ``generate_creative`` task through
 :meth:`app.llm.service.LLMService.run` with a :class:`~app.llm.quota.CeilingMeter` bound to
@@ -118,6 +118,7 @@ from app.llm.quota import (
     LLMCeilingExceededError,
     check_ceilings,
     lock_for_generation,
+    unusable_ceilings,
 )
 from app.llm.screening import screen_creative
 from app.organizations.models import OrganizationMember, User
@@ -348,7 +349,7 @@ def request_generation(
             "Approve this brief before generating drafts from it."
         )
     _check_parent(db, brief, body.parent_draft_id)
-    if settings.creative_generation_ceilings_unset():
+    if unusable_ceilings(settings):
         raise CreativeGenerationUnconfiguredError(
             "Creative generation is not configured yet, so no draft can be generated."
         )
@@ -617,8 +618,7 @@ def execute_generation(
     except NotFoundError:
         raise _fail(JobErrorCode.VALIDATION, "parent_not_found") from None
     author = _requester(db, org_id, payload.requested_by)
-    unset = settings.creative_generation_ceilings_unset()
-    if unset:
+    if unusable_ceilings(settings):
         raise _fail(JobErrorCode.POLICY, "ceilings_unset")
     if ctx.is_cancelled():
         raise _fail(JobErrorCode.CANCELLED, "cancelled before generation")

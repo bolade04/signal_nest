@@ -50,6 +50,7 @@ from app.llm.quota import (
     day_window,
     global_lock_statement,
     lock_for_generation,
+    unusable_ceilings,
     workspace_lock_select,
 )
 from app.llm.service import LLMService
@@ -180,6 +181,22 @@ def test_a_queued_job_refuses_when_a_ceiling_was_unset_after_enqueue(
     assert provider.calls == 0
     assert world.count(CreativeDraft, workspace_id=ws) == 0
     assert world.count(LLMUsageEvent, workspace_id=ws) == 0
+
+
+@pytest.mark.parametrize("unset", CREATIVE_GENERATION_CEILINGS)
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), 0, -1.0, True, "5"])
+def test_a_ceiling_that_is_not_a_finite_positive_number_counts_as_unset(
+    world, ws, monkeypatch, provider, unset, value
+):
+    """``Settings`` refuses these when it is built (CF-2 fix C-2); a value set on a live
+    object bypasses that, and the 5C read still fails closed (NaN would compare false
+    against every spend and never refuse)."""
+    monkeypatch.setattr(get_settings(), unset, value)
+    assert unusable_ceilings(get_settings()) == (unset,)
+    assert _refused(world, ws) == CEILINGS_UNSET
+    r = world.generate(world.seed_brief(ws), ws=ws)
+    assert (r.status_code, r.json()["error"]["code"]) == (503, "creative_generation_unconfigured")
+    assert provider.calls == 0
 
 
 def test_the_meter_itself_refuses_while_a_ceiling_is_unset(world, ws, monkeypatch, provider):
