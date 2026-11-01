@@ -38,6 +38,9 @@ Mapping of the task's output onto the brief (facts kept apart from inference):
 -> ``recommended_actions[0]``; ``suggested_angles`` -> ``suggested_angles``; ``risk_note``
 and the screen's claim warnings -> ``risk_notes``; ``evidence_refs`` = the intelligence
 record id, then the opportunity's validation-evidence ids (pointers, never copied text).
+``who_cares`` is not carried: the brief has no field for it (the opportunity already shows
+its audience). List items longer than the frozen item bound (500 characters; the screen
+admits up to 600 per text field) are capped with an ellipsis, never withheld.
 
 Failed model calls are still accounted for: when no brief can be produced the meter's usage
 rows are in the caller's session (``meter.flush``) and the route commits them before it
@@ -166,7 +169,9 @@ def _content(
         return BriefContent(
             summary=screened.get("why_it_matters") or "",
             rationale=screened.get("ai_inference") or "",
-            recommended_actions=[a for a in [screened.get("recommended_action") or ""] if a],
+            recommended_actions=[
+                _cap(a) for a in [screened.get("recommended_action") or ""] if a
+            ],
             suggested_angles=[a for a in screened.get("suggested_angles") or [] if a][
                 : BRIEF_BOUNDS["list_items"]
             ],

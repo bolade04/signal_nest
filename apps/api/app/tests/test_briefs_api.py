@@ -725,6 +725,60 @@ class TestModelStep:
 
 
 # --------------------------------------------------------------------------- #
+# The output-to-brief mapping (facts vs inference) and the item bounds
+# (review W21-REV-P5A-FEATURE r1 C2, C3; tests adopted from the reviewer's battery)
+# --------------------------------------------------------------------------- #
+DISTINCT = {
+    "why_it_matters": "WHY: commuters wait longer each morning.",
+    "who_cares": "WHO: weekday commuters",
+    "ai_inference": "INFER: speed is becoming the deciding factor.",
+    "recommended_action": "ACT: publish a brand-safe post about faster service.",
+    "risk_note": "RISK: use only approved claims.",
+    "suggested_angles": ["ANGLE one", "ANGLE two"],
+}
+
+
+class TestOutputMapping:
+    def test_each_field_lands_where_the_service_docstring_says(self, world, flag_on):
+        mk = world.m["dallas"]
+        _use_service(LLMService(_ScriptedMock(DISTINCT), settings=offline_settings()))
+        r = world.create()
+        assert r.status_code == 201, r.text
+        b = r.json()
+        assert b["summary"] == DISTINCT["why_it_matters"]  # the "why", not the inference
+        assert b["rationale"] == DISTINCT["ai_inference"]  # inference, labelled as such
+        assert b["recommended_actions"] == [DISTINCT["recommended_action"]]
+        assert b["suggested_angles"] == DISTINCT["suggested_angles"]
+        assert b["risk_notes"][0] == DISTINCT["risk_note"]
+        assert b["evidence_refs"] == [mk.record_id, *mk.evidence_ids]
+        # who_cares has no brief field: it is dropped (service docstring).
+        assert "WHO:" not in json.dumps(b)
+
+    def test_a_screened_recommended_action_over_500_chars_is_capped_not_withheld(
+        self, world, flag_on
+    ):
+        action = ("Publish a calm, brand-safe post about faster morning service " * 9)[:560]
+        action = action.strip()
+        assert 500 < len(action) <= 600  # admitted by the screen, above the item bound
+        _use_service(LLMService(_ScriptedMock({**DISTINCT, "recommended_action": action}),
+                                settings=offline_settings()))
+        r = world.create()
+        assert r.status_code == 201, r.text
+        (stored,) = r.json()["recommended_actions"]
+        assert len(stored) <= BRIEF_BOUNDS["list_item_chars"]
+        assert stored.endswith("…") and action.startswith(stored[:-1])
+        assert world.count(RecommendationBrief) == 1
+
+    def test_a_long_risk_note_is_capped_not_withheld(self, world, flag_on):
+        note = ("Check every claim against the approved list before posting. " * 10)[:590]
+        _use_service(LLMService(_ScriptedMock({**DISTINCT, "risk_note": note}),
+                                settings=offline_settings()))
+        r = world.create()
+        assert r.status_code == 201, r.text
+        assert len(r.json()["risk_notes"][0]) <= BRIEF_BOUNDS["list_item_chars"]
+
+
+# --------------------------------------------------------------------------- #
 # Exit criterion 4: no update or delete path exists
 # --------------------------------------------------------------------------- #
 class TestImmutability:
