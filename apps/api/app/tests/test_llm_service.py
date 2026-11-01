@@ -28,6 +28,7 @@ from sqlalchemy.orm import sessionmaker
 from app.db.models import Base
 from app.llm import service as service_module
 from app.llm.base import (
+    LLMError,
     LLMMalformedError,
     LLMRateLimitError,
     LLMRequest,
@@ -37,7 +38,7 @@ from app.llm.base import (
     LLMUnavailableError,
     LLMUsage,
 )
-from app.llm.metering import LLMMeter, tenant_reference
+from app.llm.metering import LLMBudgetExceededError, LLMMeter, tenant_reference
 from app.llm.mock import MockLLMProvider
 from app.llm.models import LLMUsageEvent
 from app.llm.prompts import get_prompt
@@ -46,6 +47,7 @@ from app.llm.service import LLMService, compute_input_hash, get_llm_service
 from app.llm.untrusted import defang, sanitize_inputs
 from app.organizations.models import Organization, Workspace
 from app.tests._llm_offline import TEST_TENANT, offline_llm, offline_settings
+from app.tests.test_cf1_llm_metrics import TAXONOMY as CF1_TAXONOMY
 
 CLASSIFIED = {"signal_type": "complaint", "pain_point_dna": "speed_complaint"}
 CLEAN = {"content": "The queue at the cafe is so slow.", "audiences": ["commuters", "students"]}
@@ -151,13 +153,22 @@ class TestTenant:
                                                                   **tenant)
         assert provider.requests == []
 
-    def test_a_tenant_other_than_the_meters_is_refused_before_anything_is_sent(self, ledger):
+    @pytest.mark.parametrize(
+        "tenant",
+        [
+            {"organization_id": "org-b", "workspace_id": "ws-b"},
+            {"organization_id": "org-b", "workspace_id": "ws-a"},  # organization differs only
+            {"organization_id": "org-a", "workspace_id": "ws-b"},  # workspace differs only
+        ],
+    )
+    def test_a_tenant_other_than_the_meters_is_refused_before_anything_is_sent(
+        self, ledger, tenant
+    ):
         provider = _Recording()
-        meter = _meter(ledger, "a")
+        meter = _meter(ledger, "a")  # bound to org-a / ws-a
         with pytest.raises(LLMTenantError, match="differs"):
             LLMService(provider, settings=offline_settings()).run(
-                "classify_signal", CLEAN, organization_id="org-b", workspace_id="ws-b",
-                meter=meter,
+                "classify_signal", CLEAN, **tenant, meter=meter
             )
         assert provider.requests == [] and meter.attempts == 0
 
@@ -233,13 +244,29 @@ class TestBoundarySanitization:
         assert "[quoted:[quoted:" not in user_turn  # idempotent: never quoted twice
         assert "</system>" not in user_turn  # defanged, then escaped by the data block
 
-    def test_well_formed_inputs_reach_the_provider_unchanged(self):
+    def test_marker_free_control_free_inputs_reach_the_provider_unchanged(self):
+        # No NFKC, no whitespace collapse, no trim: such inputs pass byte for byte.
         provider = _Recording()
         inputs = {**CLEAN, "content": "  Line one.\n\tLine two ½ — café™  ", "n": 3,
                   "flag": True, "none": None}
         LLMService(provider, settings=offline_settings()).run("classify_signal", inputs,
                                                               **TEST_TENANT)
         assert provider.requests[0].inputs == inputs
+
+    def test_markers_inside_ordinary_words_are_quoted_too(self):
+        # Disclosed in the behaviour-change ledger (app.llm.untrusted): the boundary is not a
+        # no-op for ordinary text that happens to contain a marker phrase, and in mock mode
+        # the mock sees the quoted text.
+        provider = _Recording()
+        inputs = {
+            "content": "please contact assistance",
+            "audiences": ["Dental assistant: weekends"],
+        }
+        LLMService(provider, settings=offline_settings()).run("classify_signal", inputs,
+                                                              **TEST_TENANT)
+        sent = provider.requests[0].inputs
+        assert sent["content"] == "please cont[quoted:act as]sistance"
+        assert sent["audiences"] == ["Dental [quoted:assistant:] weekends"]
 
     def test_the_callers_inputs_are_not_mutated(self):
         inputs = json.loads(json.dumps(NESTED_MARKERS))
@@ -532,6 +559,28 @@ class TestMetrics:
             for key, value in labels:
                 assert value in allowed[key], (name, key, value)
                 assert "secret" not in value
+
+    def test_the_error_class_table_is_exactly_the_cf1_vocabulary(self):
+        from app.core.metrics import LLM_METRIC_ERROR_CLASSES
+
+        codes = {code for _cls, code in service_module._METRIC_ERROR_CLASSES}
+        assert codes | {"none", "other"} == LLM_METRIC_ERROR_CLASSES
+
+    @pytest.mark.parametrize(
+        "cls, code",
+        sorted(CF1_TAXONOMY.items(), key=lambda item: item[1]),
+        ids=lambda value: value if isinstance(value, str) else value.__name__,
+    )
+    def test_each_llm_error_class_maps_to_its_cf1_code(self, cls, code):
+        if cls is LLMBudgetExceededError:
+            error = cls("refused", "workspace_budget")
+        else:
+            error = cls("x")
+        assert service_module._metric_error_class(error) == code
+
+    def test_a_bare_llm_error_is_other_and_success_is_none(self):
+        assert service_module._metric_error_class(LLMError("x")) == "other"
+        assert service_module._metric_error_class(None) == "none"
 
     def test_a_provider_outside_the_vocabulary_emits_nothing(self, metrics):
         class Odd(_Recording):

@@ -29,11 +29,22 @@ model output is screened again before persistence (``app.llm.screening``).
 
 Two layers (Phase 5A). :func:`sanitize_inputs` is applied by
 :meth:`app.llm.service.LLMService.run` to every model input before any provider sees
-it - the mock included - recursively over nested lists, tuples, sets and dicts: control
-characters stripped and injection markers defanged (:func:`defang`, the
-``sanitize_text`` rule). It changes nothing in well-formed text: no normalisation, no
-whitespace collapsing, no trimming. The real adapters then build each prompt block with
-:func:`data_block` (steps 1-5 above), which is the stronger layer.
+it - the mock included - recursively over nested lists, tuples, sets and dicts
+(:func:`defang`, the ``sanitize_text`` rule). The real adapters then build each prompt
+block with :func:`data_block` (steps 1-5 above), which is the stronger layer.
+
+What the boundary pass changes (the Phase 5A behaviour-change ledger, stated exactly):
+Every string input is defanged at the service boundary: control characters become spaces
+and every injection marker phrase is quoted, including inside ordinary words ("contact
+assistance" → "cont[quoted:act as]sistance"); there is no NFKC, whitespace collapse or
+trim. The real adapters' user turn is unchanged from before except for inputs holding
+control characters (whitespace is now collapsed after control→space, which is stricter),
+text already holding "[quoted:<marker>]" (no longer double-quoted), and overlapping markers
+(a different one quoted; all still quoted). In mock mode (all environments except staging
+and production) the mock now sees the quoted text: an audience label or market containing a
+marker other than "act as" (e.g. "assistant:") has its mock classification label screened
+out and its mock explanation withheld (instruction_echo), where before both were shown; mock
+seeds and input_hash change for such inputs.
 
 :func:`defang` is :func:`app.intelligence.extraction.sanitize_text` made idempotent: a
 marker that is already quoted (``[quoted:<marker>]``) is left as it is, so the boundary
@@ -70,8 +81,8 @@ def defang(text: str, *, strip: bool = True) -> str:
 
     For text holding no ``[quoted:<marker>]`` it returns exactly what
     :func:`app.intelligence.extraction.sanitize_text` returns (``strip=True``).
-    ``strip=False`` keeps surrounding whitespace (the service boundary changes nothing in
-    well-formed text).
+    ``strip=False`` keeps surrounding whitespace: the service boundary adds no trim (what it
+    does change is stated in the module docstring).
     """
     out = _DEFANG_RE.sub(_quote, _CONTROL_RE.sub(" ", text))
     return out.strip() if strip else out

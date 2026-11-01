@@ -27,7 +27,8 @@ Phase 5A seam (always live, un-flagged; disclosed in the Phase 5 plan section 9)
   derives the opaque tenant reference from the workspace, so every request carries one.
 * **Sanitized at the boundary.** Every string input, at any depth, is defanged
   (:func:`app.llm.untrusted.sanitize_inputs`) before any provider - the mock included -
-  sees it. The real adapters' prompt blocks remain the stronger layer.
+  sees it. The real adapters' prompt blocks remain the stronger layer. What this changes,
+  including in mock mode, is stated exactly in :mod:`app.llm.untrusted`.
 * **``input_hash`` computed here**, never by a provider: SHA-256 of the canonical JSON of
   the task, the prompt name and version and the sanitized inputs
   (:func:`compute_input_hash`). Every response, the dev fallback's included, carries it.
