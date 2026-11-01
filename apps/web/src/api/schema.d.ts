@@ -4203,6 +4203,12 @@ export interface components {
             slug: string;
         };
         /**
+         * PartialFetchReason
+         * @description Why a run did not read everything its sources held (``app.connectors.fetch_limits``).
+         * @enum {string}
+         */
+        PartialFetchReason: "source_failed" | "fetch_limit_reached";
+        /**
          * PasswordResetConfirmRequest
          * @description Set a new password with a reset token carried in the body, never in a URL.
          *
@@ -4418,7 +4424,13 @@ export interface components {
          * @description Why, in a closed customer-safe code (null where the outcome says it all).
          * @enum {string}
          */
-        RunOutcomeReason: "paused_during_run" | "another_run_active" | "another_run_took_over" | "worker_lost" | "scout_changed" | "scout_removed" | "earlier_operation_timed_out" | "too_many_signals" | "retries_exhausted" | "worker_stopped_responding" | "internal";
+        RunOutcomeReason: "paused_during_run" | "another_run_active" | "another_run_took_over" | "worker_lost" | "scout_changed" | "scout_removed" | "earlier_operation_timed_out" | "earlier_operation_unresolved" | "too_many_signals" | "retries_exhausted" | "worker_stopped_responding" | "internal";
+        /**
+         * RunRefusalReason
+         * @description Why a run was refused before analysis (P6-PLAT-1 strategy B).
+         * @enum {string}
+         */
+        RunRefusalReason: "signal_volume_above_bound";
         /**
          * RunStats
          * @description Aggregate per-run counts, sourced verbatim from the durable job's
@@ -4688,6 +4700,8 @@ export interface components {
             product_profile_id: string | null;
             /** Resolved Market */
             resolved_market: string | null;
+            /** @description The latest recorded run's outcome (PROPOSED, Q1 (a+)): what ran, what did not and one next action, lifted from stats. Null when the stats record none (no result yet, or a completed run recorded before per-source fetch facts existed). */
+            run_outcome?: components["schemas"]["ScoutRunOutcome"] | null;
             /** Source Types */
             source_types: string[];
             /** Stats */
@@ -4727,6 +4741,50 @@ export interface components {
             /** Source Types */
             source_types?: components["schemas"]["SourceType"][] | null;
         };
+        /**
+         * ScoutRunNextAction
+         * @description The one next step a customer can take in the product today.
+         *
+         *     ``narrow_request``: edit the Scout to use fewer source types or keywords, then run it again
+         *     (a refusal). ``run_again_later``: run the Scout again later (a source failed).
+         *     ``no_action``: nothing the customer can do changes the result (only a fetch limit clipped a
+         *     source: no setting raises it, and a re-run reads the same limit).
+         * @enum {string}
+         */
+        ScoutRunNextAction: "narrow_request" | "run_again_later" | "no_action";
+        /**
+         * ScoutRunOutcome
+         * @description The latest recorded run's outcome (Q1 (a+), W21 FU-Q1-1, PROPOSED).
+         *
+         *     Lifted read-only from ``stats``, which hold the result of the latest run that completed or
+         *     was refused at the bound (a cancelled, stopped, skipped or otherwise failed run writes no
+         *     stats; its outcome is on the job). **What ran:** ``sources`` (every consulted source, ``[]``
+         *     when none covered the market, ``null`` when the run recorded no per-source facts) and the
+         *     counts in ``stats`` (``RunStats`` keys). **What did not:** ``refusal_reason`` and ``bound``
+         *     for a refusal, ``partial_reasons`` and the clipped or failed ``sources``. **One next
+         *     action:** ``next_action`` (``null`` for a complete run).
+         */
+        ScoutRunOutcome: {
+            /** Bound */
+            bound: number | null;
+            kind: components["schemas"]["ScoutRunOutcomeKind"];
+            next_action: components["schemas"]["ScoutRunNextAction"] | null;
+            /** Partial Reasons */
+            partial_reasons: components["schemas"]["PartialFetchReason"][];
+            refusal_reason: components["schemas"]["RunRefusalReason"] | null;
+            /** Sources */
+            sources: components["schemas"]["ScoutRunSource"][] | null;
+        };
+        /**
+         * ScoutRunOutcomeKind
+         * @description How completely the latest recorded run read its sources.
+         *
+         *     ``complete``: the run completed and every source it consulted was read in full.
+         *     ``partial``: the run completed, but at least one source was clipped by its fetch limit or
+         *     failed. ``refused``: the run was refused at the per-run bound before anything was analysed.
+         * @enum {string}
+         */
+        ScoutRunOutcomeKind: "complete" | "partial" | "refused";
         /** ScoutRunResult */
         ScoutRunResult: {
             /** Scout Request Id */
@@ -4737,6 +4795,31 @@ export interface components {
             };
             /** Status */
             status: string;
+        };
+        /**
+         * ScoutRunSource
+         * @description What one consulted source delivered in the run (one ``stats.fetch_limits`` entry).
+         *
+         *     ``fetched`` entries were read within the source's limit, ``eligible_seen`` of them matched the
+         *     Scout's keywords. ``clipped`` is true when the source held more than ``max_items`` (``null``:
+         *     the source declares no limit). ``failed`` is true when the source contributed nothing because
+         *     it failed; ``failure_reason`` is then its closed code (``null`` for a code this API does not
+         *     know, so the failure itself is never dropped). Counts and codes only.
+         */
+        ScoutRunSource: {
+            /** Clipped */
+            clipped: boolean;
+            /** Eligible Seen */
+            eligible_seen: number;
+            /** Failed */
+            failed: boolean;
+            failure_reason: components["schemas"]["SourceFailureReason"] | null;
+            /** Fetched */
+            fetched: number;
+            /** Max Items */
+            max_items: number | null;
+            /** Source Key */
+            source_key: string;
         };
         /**
          * ScoutScheduleCreate
@@ -4801,6 +4884,12 @@ export interface components {
             token_type: string;
             user: components["schemas"]["UserOut"];
         };
+        /**
+         * SourceFailureReason
+         * @description Why one source failed and contributed nothing (``app.connectors.fetch_limits``).
+         * @enum {string}
+         */
+        SourceFailureReason: "feed_too_large" | "xml_unsafe" | "xml_malformed" | "rate_limited" | "retries_exhausted" | "response_refused" | "egress_blocked" | "fetch_error";
         /** SourcePrefIn */
         SourcePrefIn: {
             /** Config */

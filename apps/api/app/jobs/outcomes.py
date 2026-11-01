@@ -2,10 +2,11 @@
 presentation, not a Q1 ruling).
 
 Derived read-only from what a ``scout_request.execute`` job already records: its ``status``, its
-``result_summary.outcome``, its ``last_error_code`` and an allow-list of ``last_error_summary``
-codes. The summary itself is never exposed; only the closed codes below are. Job lifecycle states
-keep their meaning: a ``succeeded`` job whose run was stopped or skipped is still ``succeeded``,
-but its outcome is never ``completed``.
+``result_summary.outcome`` (and, for a failure to admit an external operation, its
+``result_summary.admission_wait``; W21 FU-Q1-2, PROPOSED), its ``last_error_code`` and an
+allow-list of ``last_error_summary`` codes. The summary itself is never exposed; only the closed
+codes below are. Job lifecycle states keep their meaning: a ``succeeded`` job whose run was
+stopped or skipped is still ``succeeded``, but its outcome is never ``completed``.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any
 
+from app.jobs.admission import ADMISSION_WAIT_UNTIL_DEADLINE
 from app.jobs.status import JobErrorCode, JobStatus, JobType
 
 
@@ -38,7 +40,15 @@ class RunOutcomeReason(StrEnum):
     WORKER_LOST = "worker_lost"
     SCOUT_CHANGED = "scout_changed"
     SCOUT_REMOVED = "scout_removed"
+    #: The run waited for an earlier operation, and that operation's deadline passed while it did
+    #: (the job recorded ``admission_wait: until_deadline``).
     EARLIER_OPERATION_TIMED_OUT = "earlier_operation_timed_out"
+    #: An earlier operation had no confirmed outcome, so the run could not go on (W21 FU-Q1-2,
+    #: PROPOSED). Says nothing about a wait: it is every ``admission_unresolved`` failure that did
+    #: not record a wait that ended at the deadline - an immediate refusal (nothing waited), a wait
+    #: that ended with the earlier operation's unknown end, and a failure recorded before the wait
+    #: was recorded.
+    EARLIER_OPERATION_UNRESOLVED = "earlier_operation_unresolved"
     TOO_MANY_SIGNALS = "too_many_signals"
     RETRIES_EXHAUSTED = "retries_exhausted"
     WORKER_STOPPED_RESPONDING = "worker_stopped_responding"
@@ -63,9 +73,19 @@ _SUCCEEDED: dict[str | None, tuple[RunOutcome, RunOutcomeReason | None]] = {
     "request_gone": (_O.STOPPED, _R.SCOUT_REMOVED),
 }
 
+#: The ``last_error_summary`` of a run whose external operation could not be admitted (wait
+#: expiry, D-25: accepted as a failed run). Its reason depends on the recorded wait, below.
+_ADMISSION_UNRESOLVED = "admission_unresolved"
+
+#: ``result_summary.admission_wait`` (``app.jobs.admission.ADMISSION_WAIT_*``, recorded by the
+#: scout handler on that failure; W21 FU-Q1-2, PROPOSED) that alone means "waited until the
+#: deadline". Anything else - ``none`` (nothing waited), ``until_unknown_end``, or no record - is
+#: never worded as a wait that timed out.
+_WAITED_UNTIL_DEADLINE = ADMISSION_WAIT_UNTIL_DEADLINE
+
 #: Allow-listed ``last_error_summary`` codes of a final failure -> reason.
 _FAILURE_SUMMARIES: dict[str, RunOutcomeReason] = {
-    "admission_unresolved": _R.EARLIER_OPERATION_TIMED_OUT,
+    _ADMISSION_UNRESOLVED: _R.EARLIER_OPERATION_UNRESOLVED,
     "signal_volume_above_bound": _R.TOO_MANY_SIGNALS,
     "claim_identity_incomplete": _R.INTERNAL,
     "after_rollback_write_failed": _R.INTERNAL,
@@ -111,6 +131,10 @@ def run_outcome(
         # An outcome this table does not know is never claimed as completed.
         return _SUCCEEDED.get(recorded, (_O.STOPPED, _R.INTERNAL))
     if status in (JobStatus.FAILED.value, JobStatus.DEAD_LETTERED.value):
+        if last_error_summary == _ADMISSION_UNRESOLVED:
+            summary = result_summary if isinstance(result_summary, dict) else {}
+            if summary.get("admission_wait") == _WAITED_UNTIL_DEADLINE:
+                return _O.FAILED, _R.EARLIER_OPERATION_TIMED_OUT
         if last_error_summary in _FAILURE_SUMMARIES:
             return _O.FAILED, _FAILURE_SUMMARIES[last_error_summary]
         if status == JobStatus.DEAD_LETTERED.value:

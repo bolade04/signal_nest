@@ -18,7 +18,7 @@ import { canEditWorkspace, useActorRole } from '@/lib/roles';
 import { formatStat, statValue } from '@/lib/scout-stats';
 import { isExecutionInProgress } from '@/lib/scout-execution';
 import { editAvailability } from '@/lib/scout-actions';
-import { partialFetchNote, zeroResult } from '@/lib/zero-result';
+import { zeroResult } from '@/lib/zero-result';
 import { SCOUT_IN_FLIGHT } from '@/lib/scout-status';
 import { moveFocusTo } from '@/lib/focus';
 import { pollingOptions, useStatusPolling } from '@/lib/status-polling';
@@ -28,6 +28,7 @@ import { OpportunityCardView } from './opportunities/OpportunityCardView';
 import { jobFilters } from './scouts/jobFilters';
 import { JobsPanel } from './scouts/JobsPanel';
 import { RunNowButton } from './scouts/RunNowButton';
+import { RunResultPanel } from './scouts/RunResultPanel';
 import { ScoutEditDialog } from './scouts/ScoutEditDialog';
 import { ScoutExecutionNotice } from './scouts/ScoutExecutionNotice';
 import { SchedulePanel } from './scouts/SchedulePanel';
@@ -127,7 +128,6 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
   const edit = editAvailability(r);
   // W16 §E (PROPOSED): why the latest completed run produced no new card, from what it recorded.
   const empty = zeroResult(r);
-  const partial = partialFetchNote(r.stats);
 
   return (
     <div className="space-y-6">
@@ -186,13 +186,16 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
 
       <ScoutExecutionNotice execution={r.execution} status={r.status} />
 
+      {/* W21 FU-Q1-1 (PROPOSED): what the latest recorded run read, what it did not, one next
+          step; from the typed `run_outcome`. It replaces the zero-result panel's partial note. */}
+      <RunResultPanel request={r} />
+
       {empty ? (
         <div role="status" data-zero-result={empty.code} className="rounded-md border border-border bg-muted/40 px-4 py-3 text-sm">
           <p className="flex items-center gap-1.5 font-medium">
             <Info className="size-4 shrink-0" aria-hidden="true" /> {empty.title}
           </p>
           <p className="mt-1 text-muted-foreground">{empty.body}</p>
-          {partial ? <p className="mt-1 text-muted-foreground">{partial}</p> : null}
         </div>
       ) : null}
 

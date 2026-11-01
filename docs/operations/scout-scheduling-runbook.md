@@ -255,6 +255,11 @@ Source: `apps/api/app/scouting_requests/routes.py`.
     to that row's own deadline (fetch: 20 s + lease; model: 3 x 30 s + lease). It never
     waits for a row with an unknown end. **Wait expiry:** the job fails (`NON_RETRYABLE`,
     `admission_unresolved`), the request ends `failed`, the admission stays unresolved.
+    The failed job records how it waited in its `result_summary` (W21 FU-Q1-2, PROPOSED):
+    `{"admission_wait": "none"}` when it was refused at the first look (the blocking row
+    already had an unknown end or a passed deadline: nothing waited), `"until_deadline"` when
+    it waited and the row's deadline passed, `"until_unknown_end"` when it waited and the row
+    recorded an unknown end. A closed code only; it changes no end state.
   - **Persisted deadlines (D-25 recovery, PROPOSED).** Each admission stores its deadline
     (`deadline_at`) and the basis it was computed from (`deadline_rule = client_plus_lease`,
     the admitting worker's client deadline for the operation and its lease, in seconds),
@@ -342,10 +347,23 @@ Source: `apps/api/app/scouting_requests/routes.py`.
       run of the Scout was in progress); `stopped` (`stopped_owner_superseded`,
       `stopped_lease_lost`, `status_changed_during_run`, `request_gone`, or an unknown
       outcome); `cancelled`; `failed` with `earlier_operation_timed_out`
-      (`admission_unresolved`), `too_many_signals`, `retries_exhausted` (dead-lettered
+      (`admission_unresolved` with `admission_wait: until_deadline` only),
+      `earlier_operation_unresolved` (every other `admission_unresolved`: refused at once,
+      waited until an unknown end, or recorded before the wait was recorded; W21 FU-Q1-2,
+      PROPOSED), `too_many_signals`, `retries_exhausted` (dead-lettered
       transient), `worker_stopped_responding` (dead-lettered timeout) or `internal`. A
       succeeded job whose run stopped or was skipped is never shown as Completed; job
       lifecycle states are unchanged and the raw codes stay visible as secondary text.
+    - *Latest run result (W21 FU-Q1-1, Q1 (a+), PROPOSED).* `ScoutRequestOut.run_outcome`
+      lifts what the latest recorded run (the latest run that completed or was refused at the
+      bound) wrote to `stats` into a typed outcome: `kind` (`complete`, `partial`, `refused`);
+      `sources`, every consulted source with its fetched count, clip and failure (a closed
+      failure code); `partial_reasons`; `refusal_reason` and `bound`; and one `next_action`:
+      `narrow_request` (a refusal: edit the Scout to fewer source types or keywords),
+      `run_again_later` (a source failed) or `no_action` (only a fetch limit clipped a source).
+      It is null when the stats record none (no result yet, or a completed run recorded before
+      the per-source facts existed). The Scout page shows it as "Latest run result"; its wording
+      is PROPOSED and awaits a copy owner.
     - *Markets.* For a Scout tied to a location, the sources see its market text read in the
       location's country ("Lagos, Lagos" of a Lagos, NG location → "Lagos, Lagos, NG", served
       by the "Lagos, NG" sample market). Text that names a country is unchanged (an explicit

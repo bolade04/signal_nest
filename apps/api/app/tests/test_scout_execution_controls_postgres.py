@@ -342,6 +342,9 @@ def test_a_model_timeout_blocks_the_scout_until_reconciliation(world, monkeypatc
     end = _end_state(w)
     assert end.job_status == JobStatus.FAILED.value
     assert end.job_error == ("non_retryable", "admission_unresolved")
+    # W21 FU-Q1-2 (PROPOSED): the retry was refused at once (an unknown end, nothing to wait
+    # for), and the failed job says so; it is never worded as a wait that timed out.
+    assert end.job_summary == {"admission_wait": "none"}
     assert end.status == "failed" and len(provider.calls) == 1
     assert _unresolved(w) == 1
     with w.factory() as s:
@@ -401,6 +404,7 @@ def test_a_fetch_read_timeout_blocks_the_scout(world, monkeypatch):
     end = _end_state(w)
     assert len(fetches) == 1  # the retry was not admitted
     assert end.job_error == ("non_retryable", "admission_unresolved")
+    assert end.job_summary == {"admission_wait": "none"}  # W21 FU-Q1-2: refused at once
     assert _unresolved(w) == 1
 
 
@@ -546,5 +550,10 @@ def test_a_wait_behind_an_outstanding_admission_expires_definitely(world, monkey
     zombie.join_ok()
     assert expired.job_status == JobStatus.FAILED.value
     assert expired.job_error == ("non_retryable", "admission_unresolved")
+    # W21 FU-Q1-2 (PROPOSED): the wait is recorded on the failed job. Whether this run reached
+    # its admission before the 0.2 s deadline (and so waited until it) depends on the host's
+    # speed, so either record is correct here; the waiting loop itself is pinned with stubs in
+    # ``test_run_outcome_guidance_w21``. It never ends with an unknown end in this case.
+    assert expired.job_summary in ({"admission_wait": "until_deadline"}, {"admission_wait": "none"})
     assert expired.status == "failed" and owner is None
     assert still_unresolved == 1 and len(provider.calls) == 1
