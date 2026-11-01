@@ -55,9 +55,13 @@ contains no id, name or e-mail address, but it is the same for every call of one
 until `SECRET_KEY` is rotated (`metering.py:30-34`). **No** account, organization or workspace
 identifier itself, and **no** email or name of an account holder, is sent. Authentication is
 the `LLM_API_KEY` secret. The client stores no cookie a reply sets, so none is sent with a
-later call (`providers_real.py:236-247`, `:269`). A model missing from the price table
-(`LLM_PRICES_USD_PER_MTOK`, `config.py:520-531`) is never called
-(`apps/api/app/llm/bound.py:219`); the default table lists `claude-fable-5-1`, so the code does
+later call (`providers_real.py:236-247`, `:269`). A metered call — every pipeline call — to a
+model missing from the price table (`LLM_PRICES_USD_PER_MTOK`, `config.py:520-531`) is refused
+before anything is sent (`apps/api/app/llm/metering.py:491-493`,
+`apps/api/app/llm/bound.py:217-219`). The E6 probe is not metered and has no such check
+(`metering.py:50-51`, `live_probe.py:101`, `:113-118`): it sends its synthetic text to the
+configured model and, by design, one request naming a model that does not exist
+(`live_probe.py:48`, `:125-129`). The default table lists `claude-fable-5-1`, so the code does
 not prevent selecting a model of the "Covered Models" family named in section 2 (see L-7).
 
 A transient failure (timeout, 429, 5xx, connection error) is retried with the same request,
@@ -117,9 +121,11 @@ otherwise redacted.
 **Defaults that keep data local.** The deterministic mock provider is the default
 (`LLM_PROVIDER=mock`, `config.py:489`) and is refused in staging and production by
 configuration validation (`config.py:753-759`). The API test session removes LLM provider
-settings from the environment before the application is imported, and refuses every
-connection to a non-loopback address (`apps/api/app/tests/conftest.py:23-27`, `:53-54`;
-`apps/api/app/tests/_offline_guard.py:1-12`). The OpenAI adapter also exists; it is not the
+settings from the environment before the application is imported, and installs a socket-layer
+guard that refuses connections and name lookups for non-loopback hosts and fails any test that
+attempted one (`apps/api/app/tests/conftest.py:23-27`, `:68-70`, `:97-100`;
+`apps/api/app/tests/_offline_guard.py:1-18`); the guard documents the in-process paths it does
+not block (`_offline_guard.py:20-29`). The OpenAI adapter also exists; it is not the
 selected provider and is outside this draft.
 
 **Corrections made by the 2026-11-01 re-read** (first draft: `3b0d9e36`). What reaches a
@@ -182,8 +188,10 @@ does not settle the point for SignalNest's account.
    *(Fact correction, 2026-11-01 re-read: at `102393fa` the prompts also carry tenant business
    context — the workspace's audience labels and the Scout's market name, plus a fixed
    positioning sentence chosen partly by the business's industry — and each request carries an
-   opaque per-workspace reference, not an identifier; see section 1. This
-   recommendation is unchanged, and whether the tasks need that content is not assessed here.)*
+   opaque per-workspace reference — a stable pseudonym derived from the workspace id, not the id
+   itself (`metering.py:30-34`); see section 1. Whether it counts as a tenant identifier for this
+   recommendation is not assessed here. This recommendation is unchanged, and whether the tasks
+   need that content is not assessed here.)*
 2. Treat Anthropic as a **sub-processor** of SignalNest for any customer data that reaches a
    prompt, under the Commercial Terms and the incorporated DPA, and disclose it as such.
 3. Accept the provider's standard retention (up to 30 days; longer only for flagged content or
