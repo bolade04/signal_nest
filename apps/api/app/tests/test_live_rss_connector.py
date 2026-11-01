@@ -20,7 +20,12 @@ from pydantic import ValidationError
 from app.connectors.base import FailureKind, FetchScope
 from app.connectors.content import safe_entry_url, sanitize_text
 from app.connectors.egress import SafeFeedFetcher
-from app.connectors.feedcache import FeedCache
+from app.connectors.feedcache import (
+    MAX_COOL_DOWN_SECONDS,
+    MAX_FAILURE_BACKOFF_DOUBLINGS,
+    FeedCache,
+    failure_hold_off,
+)
 from app.connectors.live import LiveRssConnector, SourceTarget, live_targets_for
 from app.connectors.replay import CorpusError, capture_source, load_corpus, replay_targets
 from app.connectors.retry import ConnectorFetchError
@@ -168,15 +173,19 @@ class Clock:
 
 
 class Wire:
-    """Per-host scripted answers; records every request."""
+    """Per-host scripted answers (a response, or a transport error to raise); records
+    every request."""
 
-    def __init__(self, answers: dict[str, list[httpx.Response]]) -> None:
+    def __init__(self, answers: dict[str, list[httpx.Response | Exception]]) -> None:
         self.answers = answers
         self.requests: list[httpx.Request] = []
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
-        return self.answers[request.headers["host"]].pop(0)
+        answer = self.answers[request.headers["host"]].pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
 
 
 def feed_response(body: bytes = RSS, **headers: str) -> httpx.Response:
@@ -263,19 +272,169 @@ def test_a_source_record_can_only_raise_the_interval() -> None:
     assert len(wire.requests) == 1
 
 
-def test_429_starts_a_cool_down_during_which_the_source_is_not_contacted() -> None:
+@pytest.mark.parametrize(
+    ("retry_after", "hold_off"),
+    [("1200", 1200), ("600", 900), ("0", 900), (None, 900)],
+    ids=[
+        "retry-after-longer-than-interval",
+        "retry-after-shorter-than-interval",
+        "retry-after-zero",
+        "no-retry-after",
+    ],
+)
+def test_429_starts_a_cool_down_during_which_the_source_is_not_contacted(
+    retry_after, hold_off
+) -> None:
+    """A 429 is never retried and always starts a cool-down. A ``Retry-After`` can only
+    lengthen it: the politeness interval (900 s here) is the floor (#255 r2-MINOR-1), so
+    a 429 without one, or with a shorter one, still holds the source off an interval."""
     src, clock = record(), Clock()
-    wire = Wire({src.host: [httpx.Response(429, headers={"retry-after": "600"}), feed_response()]})
-    conn = connector([target(src)], wire, clock)
+    headers = {"retry-after": retry_after} if retry_after is not None else {}
+    wire = Wire({src.host: [httpx.Response(429, headers=headers), feed_response()]})
+    conn = connector([target(src)], wire, clock, max_attempts=3)
     first = conn.collect(SCOPE)
     assert [f.kind for f in first.failures] == [FailureKind.RATE_LIMITED]
     assert len(wire.requests) == 1  # never retried
-    clock.t += 300
+    clock.t += hold_off - 1
     second = conn.collect(SCOPE)
     assert [f.kind for f in second.failures] == [FailureKind.RATE_LIMITED]
+    assert second.reports[0].failure_reason == "rate_limited"
     assert len(wire.requests) == 1  # still cooling down
-    clock.t += 301
+    clock.t += 1
     assert conn.collect(SCOPE).failures == [] and len(wire.requests) == 2
+
+
+#: Failures without a Retry-After (#255 review r2-MINOR-1): what the source answers, the
+#: kind it is classified as, and how many requests one fetch costs at ``max_attempts=3``
+#: (transient failures are retried within the fetch; permanent ones are not).
+_FAILING = {
+    "http-500": (lambda: httpx.Response(500), FailureKind.UPSTREAM_ERROR, 3),
+    "http-503": (lambda: httpx.Response(503), FailureKind.UPSTREAM_ERROR, 3),
+    "timeout": (lambda: httpx.ReadTimeout("slow source"), FailureKind.TIMEOUT, 3),
+    "connection-failed": (lambda: httpx.ConnectError("refused"), FailureKind.NETWORK, 3),
+    "http-404": (lambda: httpx.Response(404), FailureKind.HTTP_CLIENT_ERROR, 1),
+    "http-429": (lambda: httpx.Response(429), FailureKind.RATE_LIMITED, 1),
+    "not-a-feed": (
+        lambda: httpx.Response(200, content=b"<html/>", headers={"content-type": "text/html"}),
+        FailureKind.UNSAFE_CONTENT,
+        1,
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(_FAILING))
+def test_a_failing_source_is_contacted_at_most_once_per_interval(case) -> None:
+    """r2-MINOR-1: once a fetch has spent its bounded retries, the source cools down for
+    its politeness interval, whatever the failure. Scout runs inside the interval cost the
+    publisher nothing and report the same closed failure reason; after it, exactly one
+    new fetch."""
+    answer, kind, per_fetch = _FAILING[case]
+    src, clock = record(), Clock()
+    wire = Wire({src.host: [answer() for _ in range(2 * per_fetch)]})
+    conn = connector([target(src)], wire, clock, max_attempts=3)
+    first = conn.collect(SCOPE)
+    assert [f.kind for f in first.failures] == [kind]
+    assert conn.failed_sources == [src.source_key]
+    assert len(wire.requests) == per_fetch
+    for step in (1, 1, 300, 597):  # four more runs, the last 899 s after the failure
+        clock.t += step
+        again = conn.collect(SCOPE)
+        assert [f.kind for f in again.failures] == [kind]
+        assert again.reports[0].failed
+        assert again.reports[0].failure_reason == first.reports[0].failure_reason
+        assert conn.failed_sources == [src.source_key]
+    assert len(wire.requests) == per_fetch  # not contacted inside the interval
+    clock.t += 1  # the interval has passed: one new fetch, no more
+    conn.collect(SCOPE)
+    assert len(wire.requests) == 2 * per_fetch
+    conn.collect(SCOPE)
+    assert len(wire.requests) == 2 * per_fetch
+
+
+def _request_times(conn, wire: Wire, clock: Clock, *, minutes: int) -> tuple[list[int], list]:
+    """Run ``conn`` once a minute; the seconds (from the start) at which the source was
+    contacted, and each run's result."""
+    start, times, results = clock.t, [], []
+    for _ in range(minutes):
+        before = len(wire.requests)
+        results.append(conn.collect(SCOPE))
+        if len(wire.requests) > before:
+            times.append(round(clock.t - start))
+        clock.t += 60
+    return times, results
+
+
+def test_the_failure_cool_down_backs_off_boundedly_and_a_good_read_resets_it() -> None:
+    """Bounded back-off: each consecutive failed fetch doubles the hold-off (900, 1800,
+    3600 s), never beyond four intervals; a good read ends the streak, and the next
+    failure holds off one interval again. While a held good body exists it is served."""
+    src, clock = record(), Clock()
+    fail = httpx.Response(500)
+    answers = [fail] * 4 + [feed_response()] + [fail] * 2 + [feed_response()]
+    wire = Wire({src.host: answers})
+    cache = FeedCache(clock=clock)
+    conn = connector([target(src)], wire, clock, cache=cache, max_attempts=1)
+    times, results = _request_times(conn, wire, clock, minutes=240)
+    assert times == [0, 900, 2700, 6300, 9900, 10800, 11700, 13500]
+    gaps = [b - a for a, b in zip(times, times[1:], strict=False)]
+    assert gaps == [900, 1800, 3600, 3600, 900, 900, 1800]
+    assert cache.consecutive_failures(src.source_key) == 0  # the last read was good
+    # Before the first good read every run fails; afterwards only the runs that met a
+    # failure do - the others are served the held body without a request.
+    by_second = {i * 60: r for i, r in enumerate(results)}
+    assert all(by_second[t].failures for t in range(0, 9900, 60))
+    failing_after = [t for t in range(9900, 240 * 60, 60) if by_second[t].failures]
+    assert failing_after == [10800, 11700]
+    assert by_second[10860].signals and by_second[11760].signals
+
+
+def test_a_failed_refresh_keeps_serving_the_last_good_body_and_holds_off() -> None:
+    """The held body is served during a failure cool-down, as during a parse hold-off."""
+    src, clock = record(), Clock()
+    wire = Wire({src.host: [feed_response(etag='"e1"')] + [httpx.Response(502)] * 3})
+    conn = connector([target(src)], wire, clock, max_attempts=3)
+    good = conn.collect(SCOPE).signals
+    clock.t += 901
+    failed = conn.collect(SCOPE)  # this run met the failure and records it
+    assert [f.kind for f in failed.failures] == [FailureKind.UPSTREAM_ERROR]
+    assert len(wire.requests) == 4
+    clock.t += 1
+    held = conn.collect(SCOPE)
+    assert held.failures == [] and len(wire.requests) == 4  # no request during the hold
+    assert [s.content for s in held.signals] == [s.content for s in good]
+
+
+def test_a_503_with_retry_after_is_not_retried_and_holds_off_at_least_an_interval() -> None:
+    src, clock = record(), Clock()
+    wire = Wire({src.host: [httpx.Response(503, headers={"retry-after": "60"}), feed_response()]})
+    conn = connector([target(src)], wire, clock, max_attempts=3)
+    assert [f.kind for f in conn.collect(SCOPE).failures] == [FailureKind.UPSTREAM_ERROR]
+    assert len(wire.requests) == 1
+    clock.t += 899
+    cooling = conn.collect(SCOPE)
+    assert cooling.reports[0].failure_reason == "rate_limited"
+    assert len(wire.requests) == 1
+    clock.t += 1
+    assert conn.collect(SCOPE).failures == [] and len(wire.requests) == 2
+
+
+def test_the_hold_off_is_bounded_and_never_below_the_interval() -> None:
+    assert [failure_hold_off(900, n) for n in range(1, 7)] == [900, 1800, 3600, 3600, 3600, 3600]
+    assert MAX_FAILURE_BACKOFF_DOUBLINGS == 2
+    assert [failure_hold_off(30000, n) for n in (1, 2, 3)] == [30000, 60000, 86400]
+    assert [failure_hold_off(100000, n) for n in (1, 5)] == [100000, 100000]
+    clock = Clock()
+    cache = FeedCache(clock=clock)
+    # A Retry-After only lengthens the hold-off, and is honoured for at most a day.
+    assert cache.fetch_failed("k", 900, retry_after_seconds=60) == 900
+    assert cache.fetch_failed("k", 900, retry_after_seconds=7200) == 7200
+    assert cache.fetch_failed("k", 900, retry_after_seconds=10**9) == MAX_COOL_DOWN_SECONDS
+    assert cache.consecutive_failures("k") == 3
+    cache.forget("k")  # a takedown drops the streak with the rest of the entry
+    assert cache.consecutive_failures("k") == 0 and not cache.cooling("k")
+    assert cache.fetch_failed("k", 900) == 900
+    cache.clear()
+    assert cache.consecutive_failures("k") == 0 and not cache.cooling("k")
 
 
 def test_transient_failures_are_retried_and_permanent_ones_are_not() -> None:

@@ -64,11 +64,30 @@ sources together would index more than N_max = 100 signals is refused
 * Ambient proxy variables are ignored.
 * User-Agent `SignalNestBot/<version> (+<CONNECTOR_EGRESS_CONTACT_URL>)`; the contact URL
   is required (https) whenever live egress is enabled.
-* Politeness: one fetch per source per `CONNECTOR_RSS_MIN_FETCH_INTERVAL_SECONDS` (default
-  900; a source record may only raise it) per process; conditional `If-None-Match` /
-  `If-Modified-Since` with the body reused on `304`; a `429`/`503` `Retry-After` starts a
-  cool-down (capped at a day). Transient failures retry with backoff; `429`, permanent
-  `4xx`, guard refusals and unsafe content never retry.
+* Politeness: at most one fetch per source per `CONNECTOR_RSS_MIN_FETCH_INTERVAL_SECONDS`
+  (default 900; a source record may only raise it) per process, **whether the source
+  answers or fails**; conditional `If-None-Match` / `If-Modified-Since` with the body reused
+  on `304`.
+  * Within one fetch, transient failures (a timeout, a connection failure, a `5xx` without
+    `Retry-After`) are retried with a short backoff, `CONNECTOR_RSS_MAX_ATTEMPTS` requests
+    in all (default 3). A `429`, a permanent `4xx` such as `404`, any answer carrying
+    `Retry-After`, a guard refusal, a response that is not a feed and unsafe content are
+    never retried.
+  * **Every failed fetch then starts a cool-down** (#255 review r2-MINOR-1), whatever the
+    failure, including an unreadable body. The source is not contacted for one politeness
+    interval after a failure; each further consecutive failure doubles the hold-off, up to
+    four intervals (one hour at the default interval; never beyond a day unless the
+    source's own interval is longer). A `Retry-After` on a `429` or `503` (honoured up to a
+    day) can only lengthen the hold-off, never shorten it below the interval. A good read
+    or a `304` ends the streak; a takedown drops it with the rest of the source's cache
+    entry.
+  * While a source cools down, its last good body, if any, is served without a request.
+    Without one, each run reports the source failed with the same closed
+    `failure_reason` as the run that met the failure (`rate_limited` during a
+    `Retry-After` hold-off).
+  * So a failing publisher receives at most `CONNECTOR_RSS_MAX_ATTEMPTS` requests per
+    interval from each process, however many scout runs its market has. A source that
+    recovers is read again when its current hold-off ends (at most four intervals later).
 * Parsing: size cap, DOCTYPE/entity refusal and `defusedxml`; RSS 2.0, RSS 1.0 and Atom.
   Text is reduced to bounded plain text (markup, script/style bodies and control characters
   removed; instruction-override phrases bracketed as quoted data); only plain `http(s)`
@@ -78,8 +97,8 @@ sources together would index more than N_max = 100 signals is refused
 * Isolation: each source is read on its own. Any failure while fetching, parsing or
   turning its items into signals is recorded for that source; the other sources of the run
   still deliver. A body is cached only after it parsed: an unreadable response is never
-  stored, starts a hold-off of one politeness interval (no request meanwhile; a previously
-  cached good body keeps being served), and is fetched again only after it.
+  stored and starts the same cool-down as any other failed fetch (above): no request
+  meanwhile, and a previously cached good body keeps being served.
 
 ## 3. Onboarding a source (after the operator's decision)
 
@@ -204,8 +223,13 @@ data:
 
 ## 6. Known limits
 
-* Politeness, conditional-request validators and cool-downs are per process (in memory);
-  several workers each keep their own.
+* Politeness, conditional-request validators and cool-downs (with each source's run of
+  consecutive failures) are per process (in memory); several workers each keep their own,
+  and a restarted process starts without them, so its first run may contact a failing
+  source again.
+* While a held good body is served during a cool-down, the run counts the source as read
+  (`sources_failed` does not include it). Only the run that met the failure reports it,
+  and the `connector.source_failed` log event records it.
 * `robots.txt` is recorded per source at onboarding, not evaluated at fetch time.
 * No connector metrics are exported; outcomes are structured log events
   (`connector.source_read`, `connector.source_failed`, `connector.source_taken_down`).

@@ -8,10 +8,17 @@ One entry per source key holds the last good feed body with its ``ETag`` /
 * otherwise the request is conditional, and a ``304 Not Modified`` reuses the cached
   body — validators are only ever sent while their body is held, so a 304 can always
   be answered;
-* a ``429`` / ``503`` with ``Retry-After`` starts a cool-down during which the source
-  is not contacted;
-* a body the connector cannot read is never stored, and starts a cool-down of one
-  politeness interval, so an unreadable feed is neither re-served nor re-fetched on
+* every failed fetch - once its bounded retries are spent, whatever the failure: a
+  ``5xx``, a timeout or connection failure, a ``404`` or other ``4xx``, a ``429`` with or
+  without ``Retry-After``, a refused response, or a body the connector cannot read -
+  starts a cool-down (:meth:`FeedCache.fetch_failed`) during which the source is not
+  contacted. It lasts one politeness interval and doubles with each further consecutive
+  failure, up to :data:`MAX_FAILURE_BACKOFF_DOUBLINGS` doublings (bounded back-off); a
+  ``Retry-After`` can only lengthen it. A good read or a ``304`` ends the streak. So a
+  failing publisher costs at most one fetch (``connector_rss_max_attempts`` requests)
+  per interval, never one per scout run (#255 review r2-MINOR-1);
+* while a source cools down, its last good body (if any) is served; a body the
+  connector cannot read is never stored, so it is neither re-served nor re-fetched on
   every run.
 
 The cache is process-local and bounded; each worker process is polite on its own.
@@ -34,8 +41,24 @@ from datetime import datetime
 from app.connectors.base import FailureKind
 from app.connectors.egress import FeedResponse, Validators
 
-#: Longest cool-down honoured from a source's Retry-After (a day).
+#: Longest cool-down honoured from a source's Retry-After, and the ceiling of the failure
+#: back-off unless the source's own interval is longer (a day).
 MAX_COOL_DOWN_SECONDS = 86400.0
+
+#: Bounded back-off after failed fetches: the first failure holds a source off for one
+#: politeness interval, and each further consecutive failure doubles that, at most this
+#: many times (2 -> at most four intervals; one hour at the default 900 s interval).
+MAX_FAILURE_BACKOFF_DOUBLINGS = 2
+
+
+def failure_hold_off(interval_seconds: float, consecutive_failures: int) -> float:
+    """How long a source is not contacted after its ``consecutive_failures``-th failed
+    fetch in a row: one politeness interval, doubled per further consecutive failure up to
+    :data:`MAX_FAILURE_BACKOFF_DOUBLINGS` times, and never beyond a day unless the
+    interval itself is longer - never shorter than one interval."""
+    interval = max(interval_seconds, 0.0)
+    doublings = min(max(consecutive_failures, 1) - 1, MAX_FAILURE_BACKOFF_DOUBLINGS)
+    return max(interval, min(interval * (1 << doublings), MAX_COOL_DOWN_SECONDS))
 
 
 @dataclass(frozen=True)
@@ -56,6 +79,8 @@ class FeedCache:
         self._feeds: OrderedDict[str, CachedFeed] = OrderedDict()
         self._cool_until: dict[str, float] = {}
         self._cool_reason: dict[str, tuple[FailureKind, str]] = {}
+        #: Consecutive failed fetches per source (reset by a good read or a 304).
+        self._failures: dict[str, int] = {}
         self._max = max_entries
         self._clock = clock
         self._lock = threading.Lock()
@@ -94,6 +119,7 @@ class FeedCache:
                 self._feeds.popitem(last=False)
             self._cool_until.pop(key, None)
             self._cool_reason.pop(key, None)
+            self._failures.pop(key, None)
         return feed
 
     def revalidated(self, key: str, response: FeedResponse) -> CachedFeed | None:
@@ -113,20 +139,38 @@ class FeedCache:
             )
             self._feeds[key] = feed
             self._feeds.move_to_end(key)
+            self._failures.pop(key, None)
             return feed
 
-    def cool_down(
+    def fetch_failed(
         self,
         key: str,
-        seconds: float,
+        interval_seconds: float,
         *,
+        retry_after_seconds: float | None = None,
         kind: FailureKind = FailureKind.RATE_LIMITED,
         detail: str = "source is cooling down",
-    ) -> None:
-        """Do not contact ``key`` for ``seconds``; ``kind``/``detail`` say why."""
+    ) -> float:
+        """Record a failed fetch of ``key`` and start its cool-down; return its length.
+
+        The cool-down is :func:`failure_hold_off` of the source's politeness interval and
+        its consecutive failures; a ``Retry-After`` (capped at a day) can only lengthen
+        it. ``kind``/``detail`` are what a run reports while the source cools down and no
+        good body is held."""
         with self._lock:
-            self._cool_until[key] = self._clock() + min(max(seconds, 0.0), MAX_COOL_DOWN_SECONDS)
+            failures = self._failures.get(key, 0) + 1
+            self._failures[key] = failures
+            seconds = failure_hold_off(interval_seconds, failures)
+            if retry_after_seconds is not None:
+                asked = min(max(retry_after_seconds, 0.0), MAX_COOL_DOWN_SECONDS)
+                seconds = max(seconds, asked)
+            self._cool_until[key] = self._clock() + seconds
             self._cool_reason[key] = (kind, detail)
+            return seconds
+
+    def consecutive_failures(self, key: str) -> int:
+        with self._lock:
+            return self._failures.get(key, 0)
 
     def cooling(self, key: str) -> bool:
         with self._lock:
@@ -142,12 +186,14 @@ class FeedCache:
             self._feeds.clear()
             self._cool_until.clear()
             self._cool_reason.clear()
+            self._failures.clear()
 
     def forget(self, key: str) -> None:
         with self._lock:
             self._feeds.pop(key, None)
             self._cool_until.pop(key, None)
             self._cool_reason.pop(key, None)
+            self._failures.pop(key, None)
 
 
 #: The process-wide cache used by the live connector.
