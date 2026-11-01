@@ -1323,6 +1323,11 @@ class CreativeRows:
     draft_id: str
 
 
+#: The creative probes' approved brief takes a version of its own, so it never collides with
+#: the approval probes' briefs on the same opportunity (one brief per version).
+CREATIVE_BRIEF_VERSION = 7
+
+
 @pytest.fixture(scope="module")
 def creative_rows(world: World) -> dict[str, CreativeRows]:
     """Per tenant: an approved brief on a real evidence chain, and one draft with its review,
@@ -1355,16 +1360,17 @@ def creative_rows(world: World) -> dict[str, CreativeRows]:
             scoped = {"organization_id": t.org_id, "workspace_id": t.ws_id}
             s.add(RecommendationBrief(
                 id=f"{k}brief", opportunity_id=t.opportunity_id,
-                intelligence_record_id=f"{k}intel", brief_version=1, analysis_version="1",
-                scoring_version="1", prompt_name="explain_opportunity", prompt_version="1.2.0",
-                model_identifier="mock-1", input_hash="0" * 64, is_simulated=True,
-                created_by=t.marketer_id, created_by_snapshot=snapshot, summary="s",
-                rationale="r", recommended_actions=[], suggested_angles=[], risk_notes=[],
-                evidence_refs=[], **scoped,
+                intelligence_record_id=f"{k}intel", brief_version=CREATIVE_BRIEF_VERSION,
+                analysis_version="1", scoring_version="1", prompt_name="explain_opportunity",
+                prompt_version="1.2.0", model_identifier="mock-1", input_hash="0" * 64,
+                is_simulated=True, created_by=t.marketer_id, created_by_snapshot=snapshot,
+                summary="s", rationale="r", recommended_actions=[], suggested_angles=[],
+                risk_notes=[], evidence_refs=[], **scoped,
             ))
             s.flush()
             s.add(Approval(
-                subject_type="recommendation_brief", subject_id=f"{k}brief", subject_version=1,
+                subject_type="recommendation_brief", subject_id=f"{k}brief",
+                subject_version=CREATIVE_BRIEF_VERSION,
                 brief_id=f"{k}brief", decision="approved", decision_seq=1,
                 decided_by=t.owner_id, decided_by_snapshot=snapshot, decided_role="reviewer",
                 is_simulated=False, **scoped,
@@ -1375,7 +1381,9 @@ def creative_rows(world: World) -> dict[str, CreativeRows]:
                 prompt_name="generate_creative", prompt_version="1.0.0",
                 model_identifier="mock-1", input_hash="0" * 64, is_simulated=True,
                 input_tokens=1, output_tokens=1, estimated_cost_usd=0,
-                created_by=t.marketer_id, created_by_snapshot=snapshot, **scoped,
+                # The owner authors the draft, so the marketer made REVIEWER for a decision
+                # probe (_AsReviewer) is not its author.
+                created_by=t.owner_id, created_by_snapshot=snapshot, **scoped,
             ))
             s.flush()
             s.add(ContentReview(
@@ -1474,6 +1482,43 @@ class TestCreativeDrafts:
         with world.witness.begin() as conn:  # leave the shared world as it was
             conn.execute(Job.__table__.delete().where(Job.__table__.c.id == job["id"]))
         assert world.count(Job) == jobs_before
+
+
+class TestCreativeDraftDecisions:
+    """The 5B decision routes on a draft (W21 P5C): a foreign draft id is the same 404 as a
+    missing one under the caller's workspace, the foreign workspace path is the membership
+    403, nothing is written for the foreign draft; the caller's own draft is decided."""
+
+    def test_decide_and_history_with_foreign_draft_id_404_unchanged(
+        self, world: World, pov: Pov, creative_rows, creative_on
+    ):
+        a, b = pov.a, pov.b
+        mine, theirs = creative_rows[a.key], creative_rows[b.key]
+        body = {"decision": "approved", "subject_version": 1}
+
+        def path(t: Tenant, draft_id: str) -> str:
+            return f"/workspaces/{t.ws_id}/drafts/{draft_id}/approvals"
+
+        before_b = [r for r in _rows(world, Approval) if r["subject_id"] == theirs.draft_id]
+        with _AsReviewer(pov) as reviewer:
+            _assert_404(world.send("POST", API + path(a, theirs.draft_id), reviewer, body),
+                        "Draft not found in this workspace.")  # fmt: skip
+            _assert_404(pov.send("GET", path(a, theirs.draft_id)),
+                        "Draft not found in this workspace.")  # fmt: skip
+            _assert_membership_403(
+                world.send("POST", API + path(b, theirs.draft_id), reviewer, body)
+            )
+            _assert_membership_403(pov.send("GET", path(b, theirs.draft_id)))
+            after_b = [r for r in _rows(world, Approval) if r["subject_id"] == theirs.draft_id]
+            assert after_b == before_b
+            own = world.send("POST", API + path(a, mine.draft_id), reviewer, body)
+            assert own.status_code == 201, own.text
+            assert (own.json()["workspace_id"], own.json()["subject_type"]) == (
+                a.ws_id, "creative_draft"
+            )
+        history = pov.send("GET", path(a, mine.draft_id))
+        assert history.status_code == 200
+        assert own.json()["id"] in {i["id"] for i in history.json()["items"]}
 
 
 # --------------------------------------------------------------------------- #
@@ -2070,6 +2115,12 @@ COVERAGE: dict[tuple[str, str], tuple[str, ...]] = {
         "TestCreativeDrafts::test_generate_with_foreign_brief_or_parent_404_and_nothing_enqueued",
     ),
     ("GET", f"{W}/drafts/{{draft_id}}"): ("TestCreativeDrafts::test_capability_and_draft_reads",),
+    ("POST", f"{W}/drafts/{{draft_id}}/approvals"): (
+        "TestCreativeDraftDecisions::test_decide_and_history_with_foreign_draft_id_404_unchanged",
+    ),
+    ("GET", f"{W}/drafts/{{draft_id}}/approvals"): (
+        "TestCreativeDraftDecisions::test_decide_and_history_with_foreign_draft_id_404_unchanged",
+    ),
     ("GET", f"{W}/opportunities/{{opportunity_id}}/feedback"): (
         "TestOpportunities::test_feedback_capability_and_feedback_routes",
     ),
@@ -2222,8 +2273,9 @@ class TestCoverageCompleteness:
         # brief-capability reflection); 90 -> 93: Phase 5B (W21 P5B) +3 (decide on a brief,
         # its decision history, the approval queue); the equalities above prove no other
         # operation came or went. 93 -> 97 (W21 P5C): the creative-capability reflection,
-        # list/generate a brief's drafts and fetch one draft (TestCreativeDrafts).
-        assert len(served) == 97
+        # list/generate a brief's drafts and fetch one draft (TestCreativeDrafts); 97 -> 99:
+        # decide on a draft and its decision history (TestCreativeDraftDecisions).
+        assert len(served) == 99
 
     def test_every_named_proof_exists(self):
         here = _tests_defined_in(Path(__file__))

@@ -367,6 +367,21 @@ E7_POLICY: tuple[Policy, ...] = (
     _row(
         "GET", f"{_W}/approval-queue", "workspace", APPROVERS, WS_EXACT, _dark_503(APPROVALS_DARK)
     ),
+    # --- role-gated, workspace scope, exact set -- Phase 5C draft decisions (W21 P5C) ---------
+    # The 5B decision rules on a draft version, dark behind creative_generation: the reviewer
+    # decides (POST: body validation first), every role but viewer reads the history (503).
+    _row(
+        "POST", f"{_W}/drafts/{{draft_id}}/approvals", "workspace", APPROVERS, WS_EXACT,
+        _body_422(),
+    ),
+    _row(
+        "GET",
+        f"{_W}/drafts/{{draft_id}}/approvals",
+        "workspace",
+        APPROVAL_HISTORY_READERS,
+        WS_EXACT,
+        _dark_503(CREATIVE_DARK),
+    ),
     # --- role-gated, organization scope, exact set ------------------------------------------
     _row("POST", f"{_O}/workspaces", "organization", ORG_ADMINS, ORG_EXACT, _body_422()),
     _row("POST", f"{_O}/invitations", "organization", ORG_ADMINS, ORG_EXACT, _body_422()),
@@ -653,7 +668,8 @@ class TestPolicyTableCompleteness:
             # W21 P5C on the I-5AB + CF-2 base (62 / 28): +1 role-gated (POST
             # .../briefs/{brief_id}/drafts), +3 workspace membership (the two draft reads and
             # the creative-capability reflection). Recomputed from the served routes.
-            "role_gated": 63,
+            # +2 W21 P5C draft decisions (POST and GET .../drafts/{draft_id}/approvals).
+            "role_gated": 65,
             MEMBER_WS: 31,
             MEMBER_ORG: 1,
             "operator": OPERATOR_ROUTE_COUNT,
@@ -669,7 +685,8 @@ class TestPolicyTableCompleteness:
             RANK_FLOOR: 47,
             # 1 at CF-1 (audit-logs); +3 Phase 5B (approvals); +3 W21 CF-2 (claims writes).
             # Both sides moved this pin from 1 to 4, so git kept one 4: the union is 7.
-            WS_EXACT: 7,
+            # +2 W21 P5C (the draft decision POST and its history GET).
+            WS_EXACT: 9,
             ORG_EXACT: 9,
             # 25 at N; +3 Phase 5A (brief reads, brief-capability); +3 W21 P5C (draft reads,
             # creative-capability).
@@ -713,7 +730,9 @@ class TestPolicyTableCompleteness:
         # 134 -> 138 (W21 P5C): POST and GET /workspaces/{workspace_id}/briefs/{brief_id}/drafts,
         # GET /workspaces/{workspace_id}/drafts/{draft_id} and GET .../creative-capability:
         # one RANK_FLOOR row and three MEMBER_WS rows above, all customer operations.
-        assert len(served) == 138
+        # 138 -> 140 (W21 P5C draft decisions): POST and GET
+        # /workspaces/{workspace_id}/drafts/{draft_id}/approvals, two WS_EXACT rows above.
+        assert len(served) == 140
 
     def test_one_row_per_route(self):
         keys = [p.key for p in E7_POLICY]
@@ -721,7 +740,7 @@ class TestPolicyTableCompleteness:
 
     def test_rows_are_machine_readable_and_partition_the_roles(self):
         rows = json.loads(json.dumps([asdict(p) for p in E7_POLICY]))
-        assert len(rows) == 97  # 93 on the I-5AB + CF-2 base; +4 W21 P5C (the draft routes)
+        assert len(rows) == 99  # 93 on the I-5AB + CF-2 base; +6 W21 P5C (the draft routes)
         for row in rows:
             assert set(row) == {"method", "path", "scope", "allowed", "denied", "category", "probe"}
             assert set(row["allowed"]) | set(row["denied"]) == set(ALL_ROLES)

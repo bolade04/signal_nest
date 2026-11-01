@@ -1538,6 +1538,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/drafts/{draft_id}/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A draft version's decisions, newest first
+         * @description The draft version's append-only decisions, newest ``decision_seq`` first: the first
+         *     item, when present, is the controlling decision. Read-only.
+         */
+        get: operations["list_draft_approvals_api_v1_workspaces__workspace_id__drafts__draft_id__approvals_get"];
+        put?: never;
+        /**
+         * Record a decision on one draft version (reviewer only)
+         * @description Record one append-only decision (approve / reject / revoke) on the draft's exact
+         *     version. Reviewer only; never the draft's author; ``subject_version`` must be the draft's
+         *     version (409 otherwise); ``revoked`` only withdraws a controlling approval; an approval
+         *     is refused (409 ``approval_review_blocked``) while the draft's content review does not
+         *     allow it.
+         */
+        post: operations["decide_on_draft_api_v1_workspaces__workspace_id__drafts__draft_id__approvals_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/feedback-capability": {
         parameters: {
             query?: never;
@@ -8730,6 +8759,81 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CreativeDraftOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_draft_approvals_api_v1_workspaces__workspace_id__drafts__draft_id__approvals_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalHistoryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_on_draft_api_v1_workspaces__workspace_id__drafts__draft_id__approvals_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApprovalDecisionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalOut"];
                 };
             };
             /** @description Validation Error */

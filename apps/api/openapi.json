@@ -14977,6 +14977,173 @@
         ]
       }
     },
+    "/api/v1/workspaces/{workspace_id}/drafts/{draft_id}/approvals": {
+      "get": {
+        "description": "The draft version's append-only decisions, newest ``decision_seq`` first: the first\nitem, when present, is the controlling decision. Read-only.",
+        "operationId": "list_draft_approvals_api_v1_workspaces__workspace_id__drafts__draft_id__approvals_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true,
+            "schema": {
+              "title": "Draft Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalHistoryOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "A draft version's decisions, newest first",
+        "tags": [
+          "creative-drafts"
+        ]
+      },
+      "post": {
+        "description": "Record one append-only decision (approve / reject / revoke) on the draft's exact\nversion. Reviewer only; never the draft's author; ``subject_version`` must be the draft's\nversion (409 otherwise); ``revoked`` only withdraws a controlling approval; an approval\nis refused (409 ``approval_review_blocked``) while the draft's content review does not\nallow it.",
+        "operationId": "decide_on_draft_api_v1_workspaces__workspace_id__drafts__draft_id__approvals_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true,
+            "schema": {
+              "title": "Draft Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalDecisionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Record a decision on one draft version (reviewer only)",
+        "tags": [
+          "creative-drafts"
+        ]
+      }
+    },
     "/api/v1/workspaces/{workspace_id}/feedback-capability": {
       "get": {
         "description": "Customer-facing, workspace-effective feedback availability (P6-UI-005).\n\nScoped to the workspace, not an opportunity: the resolver's decision domain is\n``(capability, workspace)``, so an opportunity segment would advertise a dimension\nthe decision cannot express.\n\nEditor-gated to match the feedback routes' usable audience. A viewer cannot submit\nor read feedback, so reflecting its availability to them would disclose tenant\ngovernance state for a feature they could not use.\n\nAdvisory only. ``GET``/``POST`` feedback re-decide independently and answer 503 when\nunavailable; that remains the enforcement boundary, and this route weakens nothing.",

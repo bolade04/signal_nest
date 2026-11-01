@@ -56,6 +56,20 @@ note or any identity value beyond the actor column, which erasure already clears
 
 **Append-only.** Nothing here updates or deletes an approval, a brief or an audit row,
 through the ORM or otherwise; the only writes are inserts.
+
+**Creative drafts (Project Phase 5C, W21 lane P5C) — a disclosed plan deviation.** The 5C plan
+assigns this file to 5C-W1 with a "sole change: blocked-review precondition" (5c:173). The 5B
+service decided on briefs only, so that precondition had no write path to guard; by
+coordinator ruling (W21 hand-back r1, item 1) this module also gains
+:func:`record_draft_decision`, the brief decision's twin for ``subject_type =
+creative_draft`` (``draft_id`` set, CF-2's ``ck_approval_draft_subject``): the same order of
+checks, the exact ``draft_version`` (stale 409), the revoke rule, ``decision_seq`` read under
+the draft row's lock, the audit row in the same transaction, inserts only. The precondition is
+:func:`app.creative.service.draft_approval_refusal`: an ``approved`` decision is refused with
+409 ``approval_review_blocked`` while it gives a reason; rejecting or revoking is never blocked
+by the review. :func:`list_draft_decisions` reads a draft version's decisions. Drafts are not in
+the approval queue (an I-5C follow-up). The only edit to an existing function is
+``_next_decision_seq``, which now takes the subject type (``_insert_decision`` passes it).
 """
 
 from __future__ import annotations
@@ -82,6 +96,8 @@ from app.core.errors import (
     ValidationDomainError,
 )
 from app.core.logging import get_logger, log_event
+from app.creative.models import CreativeDraft
+from app.creative.service import draft_approval_refusal
 
 logger = get_logger("signalnest.approvals")
 
@@ -231,11 +247,13 @@ def _lock_subject(db: Session, brief_id: str) -> int:
     return int(row.brief_version)
 
 
-def _next_decision_seq(db: Session, *, subject_id: str, subject_version: int) -> int:
+def _next_decision_seq(
+    db: Session, *, subject_id: str, subject_version: int, subject_type: str = BRIEF_SUBJECT
+) -> int:
     """``max(decision_seq) + 1`` for the subject version (1 for the first decision)."""
     current = db.scalar(
         select(func.max(Approval.decision_seq)).where(
-            _subject_filter(BRIEF_SUBJECT, subject_id, subject_version)
+            _subject_filter(subject_type, subject_id, subject_version)
         )
     )
     return int(current or 0) + 1
@@ -262,7 +280,10 @@ def _insert_decision(db: Session, *, values: dict) -> Approval:
     other integrity failure is re-raised.
     """
     seq = _next_decision_seq(
-        db, subject_id=values["subject_id"], subject_version=values["subject_version"]
+        db,
+        subject_id=values["subject_id"],
+        subject_version=values["subject_version"],
+        subject_type=values["subject_type"],
     )
     approval = Approval(**values, decision_seq=seq)
     db.add(approval)
@@ -459,7 +480,195 @@ def list_awaiting_decision(
     return BriefQueuePage(items=rows, total=total, limit=limit, offset=offset)
 
 
+# --------------------------------------------------------------------------- #
+# Creative drafts (Project Phase 5C)
+# --------------------------------------------------------------------------- #
+#: The subject type of a decision on one generated draft version (CF-2).
+DRAFT_SUBJECT = ApprovalSubjectType.CREATIVE_DRAFT.value
+#: The audit ``entity_type`` of a decision on a draft: the draft whose state changes.
+DRAFT_AUDIT_ENTITY_TYPE = "creative_draft"
+
+DRAFT_NOT_FOUND = "Draft not found in this workspace."
+AUTHOR_CANNOT_DECIDE_DRAFT = "The author of a draft cannot decide on it."
+STALE_DRAFT_VERSION = "The draft version you decided on is not this draft's version."
+NOTHING_TO_REVOKE_DRAFT = "Only an approved draft can be revoked."
+REVIEW_BLOCKS_APPROVAL = "approval_review_blocked"
+#: Why an approval is refused, per ``draft_approval_refusal`` reason (no draft text, no
+#: claim text: a static sentence per reason).
+REVIEW_REFUSALS = {
+    "review_missing": "This draft has no content review yet, so it cannot be approved.",
+    "review_blocked": (
+        "This draft's content review blocked it, so it cannot be approved. Generate a "
+        "revised version."
+    ),
+    "review_not_passed": (
+        "A required disclaimer is missing from this draft, so it cannot be approved."
+    ),
+    "blocked_claim": (
+        "This draft contains a claim the claims library now blocks, so it cannot be "
+        "approved."
+    ),
+}
+
+
+def is_draft_author(draft: CreativeDraft, user_id: str) -> bool:
+    """Whether ``user_id`` generated ``draft`` (the live FK, or the snapshot's leading id
+    once the FK is nulled) — exact id, as :func:`is_brief_author`."""
+    if draft.created_by is not None and draft.created_by == user_id:
+        return True
+    leading = (draft.created_by_snapshot or "").split(" ", 1)[0]
+    return bool(leading) and leading == user_id
+
+
+def draft_lock_select(draft_id: str) -> Select:
+    """``SELECT id, draft_version … FOR UPDATE`` on the draft row: the per-subject
+    serializer for a draft's ``decision_seq`` (the brief's ``subject_lock_select``)."""
+    return (
+        select(CreativeDraft.id, CreativeDraft.draft_version)
+        .where(CreativeDraft.id == draft_id)
+        .with_for_update()
+    )
+
+
+def _lock_draft(db: Session, draft_id: str) -> int:
+    row = db.execute(draft_lock_select(draft_id)).first()
+    if row is None:
+        raise NotFoundError(DRAFT_NOT_FOUND)
+    return int(row.draft_version)
+
+
+def record_draft_decision(
+    db: Session,
+    *,
+    ctx: TenantContext,
+    draft: CreativeDraft,
+    decision: ApprovalDecision,
+    subject_version: int,
+    reason_code: ApprovalReason | None = None,
+    note: str | None = None,
+) -> Approval:
+    """Append one decision on ``draft``'s exact version, with its audit row; flush only.
+
+    The brief decision's checks in the same order (approver role 403, tenant scope 404,
+    author 403, reason polarity 422; under the draft row's lock: existence 404, exact
+    version 409, the revoke rule 409), then the 5C precondition: an ``approved`` decision is
+    refused (409 ``approval_review_blocked``, nothing written) while
+    :func:`app.creative.service.draft_approval_refusal` gives a reason.
+    """
+    decision = ApprovalDecision(decision)
+    role = Role(ctx.role)
+    if role not in APPROVER_ROLES:
+        raise PermissionDeniedError(f"Role '{role.value}' is not permitted for this action.")
+    if draft.workspace_id != ctx.workspace.id or draft.organization_id != ctx.organization.id:
+        raise NotFoundError(DRAFT_NOT_FOUND)
+    if is_draft_author(draft, ctx.user.id):
+        raise PermissionDeniedError(AUTHOR_CANNOT_DECIDE_DRAFT, code="approval_author_conflict")
+    reason = None if reason_code is None else ApprovalReason(reason_code)
+    if not reason_allowed(decision, reason):
+        raise ValidationDomainError(REASON_MISMATCH)
+
+    version = _lock_draft(db, draft.id)
+    if subject_version != version:
+        raise ConflictError(STALE_DRAFT_VERSION, code="approval_stale_version")
+    latest = controlling_decision(
+        db, subject_type=DRAFT_SUBJECT, subject_id=draft.id, subject_version=draft.draft_version
+    )
+    if decision is ApprovalDecision.REVOKED and (
+        latest is None or latest.decision != ApprovalDecision.APPROVED.value
+    ):
+        raise ConflictError(NOTHING_TO_REVOKE_DRAFT, code="approval_nothing_to_revoke")
+    if decision is ApprovalDecision.APPROVED:
+        refusal = draft_approval_refusal(db, draft)
+        if refusal is not None:
+            log_event(
+                logger,
+                "approval_refused_by_review",
+                outcome="refused",
+                workspace_id=ctx.workspace.id,
+                reason=refusal,
+            )
+            raise ConflictError(REVIEW_REFUSALS[refusal], code=REVIEW_BLOCKS_APPROVAL)
+
+    approval = _insert_decision(
+        db,
+        values={
+            "organization_id": ctx.organization.id,
+            "workspace_id": ctx.workspace.id,
+            "subject_type": DRAFT_SUBJECT,
+            "subject_id": draft.id,
+            "subject_version": draft.draft_version,
+            "draft_id": draft.id,
+            "decision": decision.value,
+            "reason_code": None if reason is None else reason.value,
+            "note": note,
+            "decided_by": ctx.user.id,
+            "decided_by_snapshot": actor_snapshot(
+                user_id=ctx.user.id, full_name=ctx.user.full_name, email=ctx.user.email
+            ),
+            "decided_role": role.value,
+            "is_simulated": bool(draft.is_simulated),
+        },
+    )
+    record_audit(
+        db,
+        organization_id=ctx.organization.id,
+        workspace_id=ctx.workspace.id,
+        actor_user_id=ctx.user.id,
+        action=APPROVAL_DECISION_ACTIONS[decision],
+        entity_type=DRAFT_AUDIT_ENTITY_TYPE,
+        entity_id=draft.id,
+        previous_state=None
+        if latest is None
+        else {"decision": latest.decision, "decision_seq": latest.decision_seq},
+        new_state={
+            "approval_id": approval.id,
+            "decision": approval.decision,
+            "decision_seq": approval.decision_seq,
+            "subject_type": approval.subject_type,
+            "subject_version": approval.subject_version,
+            "reason_code": approval.reason_code,
+        },
+    )
+    log_event(
+        logger,
+        "approval_decision_recorded",
+        outcome="success",
+        workspace_id=ctx.workspace.id,
+        decision=approval.decision,
+        decision_seq=approval.decision_seq,
+    )
+    return approval
+
+
+def list_draft_decisions(
+    db: Session, *, draft: CreativeDraft, limit: int = DEFAULT_LIMIT, offset: int = 0
+) -> ApprovalPage:
+    """The draft version's decisions, newest ``decision_seq`` first. Read-only."""
+    limit, offset = _clamp(limit, offset)
+    base = select(Approval).where(
+        Approval.workspace_id == draft.workspace_id,
+        _subject_filter(DRAFT_SUBJECT, draft.id, draft.draft_version),
+    )
+    total = int(db.scalar(select(func.count()).select_from(base.subquery())) or 0)
+    rows = tuple(
+        db.execute(
+            base.order_by(Approval.decision_seq.desc(), Approval.id.desc())
+            .limit(limit)
+            .offset(offset)
+        ).scalars()
+    )
+    return ApprovalPage(items=rows, total=total, limit=limit, offset=offset)
+
+
 __all__ = [
+    "AUTHOR_CANNOT_DECIDE_DRAFT",
+    "DRAFT_AUDIT_ENTITY_TYPE",
+    "DRAFT_NOT_FOUND",
+    "DRAFT_SUBJECT",
+    "NOTHING_TO_REVOKE_DRAFT",
+    "REVIEW_BLOCKS_APPROVAL",
+    "REVIEW_REFUSALS",
+    "STALE_DRAFT_VERSION",
     "AUDIT_ENTITY_TYPE",
     "AUTHOR_CANNOT_DECIDE",
     "BRIEF_NOT_FOUND",
@@ -470,6 +679,10 @@ __all__ = [
     "ApprovalPage",
     "BriefQueuePage",
     "controlling_decision",
+    "draft_lock_select",
+    "is_draft_author",
+    "list_draft_decisions",
+    "record_draft_decision",
     "get_scoped_brief",
     "is_approved",
     "is_brief_author",

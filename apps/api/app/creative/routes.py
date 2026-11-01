@@ -6,6 +6,12 @@ Three draft endpoints, all capability-gated (Phase 5C plan §2):
     GET  /api/v1/workspaces/{workspace_id}/briefs/{brief_id}/drafts   list a brief's drafts
     GET  /api/v1/workspaces/{workspace_id}/drafts/{draft_id}          fetch one draft
 
+two 5B decision endpoints on one draft version (Project Phase 5C exit criteria 3 and 6;
+coordinator ruling on hand-back r1), capability-gated the same way:
+
+    POST /api/v1/workspaces/{workspace_id}/drafts/{draft_id}/approvals    reviewer only
+    GET  /api/v1/workspaces/{workspace_id}/drafts/{draft_id}/approvals    every role but viewer
+
 and one workspace-scoped reflection, deliberately *not* capability-gated (it reports the
 capability decision; the feedback- and brief-capability precedent):
 
@@ -31,9 +37,16 @@ capability decision; the feedback- and brief-capability precedent):
   job is queued or running answers the same job. The draft — never updated; a revision is a new
   version — carries its content review.
 
+* **Decisions on a draft** (``app.approvals.service.record_draft_decision``): the brief
+  decision's rules — reviewer only (exact), never the draft's author, the exact
+  ``draft_version`` (stale 409), revoke only while approved — plus the 5C precondition: an
+  approval is refused 409 ``approval_review_blocked`` while the draft's content review does not
+  allow it. The history is readable by every role but viewer (the brief history's set).
+
 Transaction ownership follows the house rule (the request-scoped ``get_db`` commits), with
-one exception: ``POST`` commits its job before answering 202, as the scout-run route does, so
-the job it names exists when the client polls it.
+one exception: the two ``POST`` routes commit before answering (the generation job before its
+202, a decision and its audit row before its 201), as the scout-run route does, so what the
+answer names exists when the client reads it (the O9 audit; I-O9-1).
 """
 
 from __future__ import annotations
@@ -43,7 +56,16 @@ import logging
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.auth.dependencies import TenantContext, get_tenant_context, require_role
+from app.approvals.policy import require_approver
+from app.approvals.routes import APPROVAL_HISTORY_READERS
+from app.approvals.schemas import ApprovalDecisionCreate, ApprovalHistoryOut, ApprovalOut
+from app.approvals.service import list_draft_decisions, record_draft_decision
+from app.auth.dependencies import (
+    TenantContext,
+    get_tenant_context,
+    require_exact_roles,
+    require_role,
+)
 from app.capabilities.registry import Capability
 from app.core.config import get_settings
 from app.core.enums import Role
@@ -207,6 +229,72 @@ def get_draft(
     _require_creative_feature(db, ctx)
     draft = get_scoped_draft(db, workspace_id, draft_id)
     return draft_out(draft, reviews_by_draft(db, [draft]).get(draft.id))
+
+
+#: A draft's decision history: the brief history's readers (every role but viewer).
+require_draft_history_reader = require_exact_roles(*APPROVAL_HISTORY_READERS)
+
+_DRAFT_APPROVALS = "/workspaces/{workspace_id}/drafts/{draft_id}/approvals"
+
+
+@router.post(
+    _DRAFT_APPROVALS,
+    response_model=ApprovalOut,
+    status_code=201,
+    summary="Record a decision on one draft version (reviewer only)",
+)
+def decide_on_draft(
+    workspace_id: str,
+    draft_id: str,
+    body: ApprovalDecisionCreate,
+    db: Session = Depends(get_db),
+    ctx: TenantContext = Depends(require_approver),
+) -> ApprovalOut:
+    """Record one append-only decision (approve / reject / revoke) on the draft's exact
+    version. Reviewer only; never the draft's author; ``subject_version`` must be the draft's
+    version (409 otherwise); ``revoked`` only withdraws a controlling approval; an approval
+    is refused (409 ``approval_review_blocked``) while the draft's content review does not
+    allow it."""
+    _require_creative_feature(db, ctx)
+    draft = get_scoped_draft(db, workspace_id, draft_id)
+    approval = record_draft_decision(
+        db,
+        ctx=ctx,
+        draft=draft,
+        decision=body.decision,
+        subject_version=body.subject_version,
+        reason_code=body.reason_code,
+        note=body.note,
+    )
+    out = ApprovalOut.model_validate(approval)
+    db.commit()  # the decision and its audit row exist before the 201 (I-O9-1)
+    return out
+
+
+@router.get(
+    _DRAFT_APPROVALS,
+    response_model=ApprovalHistoryOut,
+    summary="A draft version's decisions, newest first",
+)
+def list_draft_approvals(
+    workspace_id: str,
+    draft_id: str,
+    limit: int = Query(default=DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    ctx: TenantContext = Depends(require_draft_history_reader),
+) -> ApprovalHistoryOut:
+    """The draft version's append-only decisions, newest ``decision_seq`` first: the first
+    item, when present, is the controlling decision. Read-only."""
+    _require_creative_feature(db, ctx)
+    draft = get_scoped_draft(db, workspace_id, draft_id)
+    page = list_draft_decisions(db, draft=draft, limit=limit, offset=offset)
+    return ApprovalHistoryOut(
+        items=[ApprovalOut.model_validate(a) for a in page.items],
+        total=page.total,
+        limit=page.limit,
+        offset=page.offset,
+    )
 
 
 __all__ = ["router"]
