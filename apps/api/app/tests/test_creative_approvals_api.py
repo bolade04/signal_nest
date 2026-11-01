@@ -134,6 +134,21 @@ def test_a_claim_blocked_after_the_review_blocks_and_retiring_it_unblocks(world)
     assert _decide(world, ws, draft["id"]).status_code == 201
 
 
+def test_a_required_disclaimer_added_after_the_review_blocks_approval(world):
+    """O-4: the library's required disclaimers are re-read at approval, like its blocked
+    claims; rejecting stays allowed."""
+    ws = world.workspace("late disclaimer")
+    draft = _draft(world, ws)
+    world.claim("Licensed in Texas.", kind="required_disclaimer", ws=ws)
+    r = _decide(world, ws, draft["id"])
+    assert _error(r) == (409, "approval_review_blocked")
+    assert "disclaimer the claims library now requires" in r.json()["error"]["message"]
+    assert "Texas" not in r.text
+    assert world.count(Approval, draft_id=draft["id"]) == 0
+    rejected = _decide(world, ws, draft["id"], "rejected", reason_code="brand_or_compliance_risk")
+    assert rejected.status_code == 201, rejected.text
+
+
 # --------------------------------------------------------------------------- #
 # 5B semantics on drafts
 # --------------------------------------------------------------------------- #

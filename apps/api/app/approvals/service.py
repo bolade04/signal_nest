@@ -66,7 +66,8 @@ creative_draft`` (``draft_id`` set, CF-2's ``ck_approval_draft_subject``): the s
 checks, the exact ``draft_version`` (stale 409), the revoke rule, ``decision_seq`` read under
 the draft row's lock, the audit row in the same transaction, inserts only. The precondition is
 :func:`app.creative.service.draft_approval_refusal`: an ``approved`` decision is refused with
-409 ``approval_review_blocked`` while it gives a reason; rejecting or revoking is never blocked
+409 ``approval_review_blocked`` while it gives a reason (it re-reads the library's blocked
+claims and required disclaimers as they are *now*); rejecting or revoking is never blocked
 by the review. :func:`list_draft_decisions` reads a draft version's decisions. Drafts are not in
 the approval queue (an I-5C follow-up). The only edit to an existing function is
 ``_next_decision_seq``, which now takes the subject type (``_insert_decision`` passes it).
@@ -507,6 +508,10 @@ REVIEW_REFUSALS = {
     "blocked_claim": (
         "This draft contains a claim the claims library now blocks, so it cannot be "
         "approved."
+    ),
+    "disclaimer_missing": (
+        "This draft lacks a disclaimer the claims library now requires, so it cannot be "
+        "approved. Generate a revised version."
     ),
 }
 

@@ -660,6 +660,35 @@ def test_a_passed_draft_is_approvable_until_a_blocking_claim_is_added(world, ws)
     assert _refusal(world, draft["id"]) is None
 
 
+def test_a_required_disclaimer_added_to_the_library_after_the_review_is_re_checked(world, ws):
+    """O-4 (W21 review r1): the approval re-check reads the library's required disclaimers as
+    they are now, like its blocked claims; retiring the entry lifts it; an offer that starts
+    after the review is not re-read (its applicability is the generation's date and
+    location, so the stored review governs it)."""
+    brief_id = world.seed_brief(ws)
+    world.generated(brief_id, ws=ws)
+    [draft] = _drafts(world, brief_id)
+    assert _refusal(world, draft["id"]) is None
+    world.offer("Offer starts today.", ws=ws)  # after the review: not re-read
+    assert _refusal(world, draft["id"]) is None
+    entry = world.claim("Licensed\u00a0in TEXAS\uff0e", kind="required_disclaimer", ws=ws)
+    assert _refusal(world, draft["id"]) == "disclaimer_missing"
+    with world.witness.begin() as conn:  # retired by a steward: requires nothing again
+        conn.execute(
+            update(ClaimsLibraryEntry.__table__)
+            .where(ClaimsLibraryEntry.__table__.c.id == entry)
+            .values(retired_at=datetime.now(UTC))
+        )
+    assert _refusal(world, draft["id"]) is None
+    # A draft that carries the disclaimer in another form (folded on both sides) passes.
+    world.claim("Licensed in Texas.", kind="required_disclaimer", ws=ws)
+    world.generated(brief_id, ws=ws, parent_draft_id=draft["id"])
+    revised = _drafts(world, brief_id)[-1]
+    assert "Licensed in Texas." in revised["body"]
+    world.claim("licensed  IN texas\u3002", kind="required_disclaimer", ws=ws)
+    assert _refusal(world, revised["id"]) is None
+
+
 def test_a_blocked_or_unresolved_review_is_never_approvable(world):
     ws = world.workspace("approval blocked")
     claim = world.claim("weekend parking", ws=ws)

@@ -277,9 +277,12 @@ def draft_approval_refusal(db: Session, draft: CreativeDraft) -> str | None:
     The 5B approval service calls this when ``subject_type == creative_draft`` and refuses
     while it returns a reason. Refused when the draft has no review, when its review is
     blocked or names a blocked claim, when a required disclaimer is unresolved (the review
-    did not pass), or when the text contains a ``blocked`` claim that is active in the
-    workspace's library *now* (one added after the draft was reviewed). A retired claim
-    blocks nothing.
+    did not pass), when the text contains a ``blocked`` claim that is active in the
+    workspace's library *now* (one added after the draft was reviewed), or when it lacks a
+    ``required_disclaimer`` that is active in the library *now* — the same "library now"
+    re-check for both kinds (W21 review r1, O-4). An offer's disclaimer is not re-read: which
+    offers apply depends on the generation's date and location, so the stored review governs
+    it. A retired entry blocks nothing and requires nothing.
     """
     review = db.scalar(
         select(ContentReview).where(
@@ -294,9 +297,14 @@ def draft_approval_refusal(db: Session, draft: CreativeDraft) -> str | None:
     if not review.disclaimers_resolved or not review.passed:
         return "review_not_passed"
     text = fold(_draft_text(draft))
-    for entry in active_entries(load_library(db, draft.workspace_id)):
+    active = active_entries(load_library(db, draft.workspace_id))
+    for entry in active:
         if entry.kind == BLOCKED_KIND and contains_phrase(text, fold(entry.text)):
             return "blocked_claim"
+    for entry in active:
+        required = fold(entry.text)
+        if entry.kind == DISCLAIMER_KIND and required and not contains_phrase(text, required):
+            return "disclaimer_missing"
     return None
 
 
