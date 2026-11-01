@@ -26,8 +26,10 @@ What
   environment outranks the startup option (libpq sends it as a startup parameter of its own,
   which the server applies after ``options``), so a ``PGTZ`` other than ``UTC`` is refused,
   not silently obeyed. A refused connection fails the API's startup schema gate, the worker's
-  startup validation, the readiness probe and each CLI's first connection: a session that is
-  not in UTC is never used.
+  startup validation, the readiness probe and each CLI's first connection: a **new** session
+  that is not in UTC is never used. The check runs when a connection is opened; a
+  session-level ``SET TIME ZONE`` committed later would persist in the pool (no tracked code
+  issues one).
 
 Every engine that reads or writes application rows is built through here: the process
 engine (``app.db.session.build_engine``: the API, the worker and the operator CLIs that use

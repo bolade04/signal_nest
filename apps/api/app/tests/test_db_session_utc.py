@@ -25,7 +25,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import make_url
 
 from app.core.config import Settings
@@ -386,12 +386,20 @@ def test_a_session_the_pin_cannot_reach_is_refused(chicago_db, monkeypatch) -> N
         assert engine.pool.checkedout() == 0
         monkeypatch.setenv("PGTZ", "UTC")
         assert _show(engine) == ("UTC", "UTC")
+        # Every new connection is checked, not only the engine's first: with one held, the
+        # pool must open another, which the pin cannot reach.
+        with engine.connect() as held:
+            monkeypatch.setenv("PGTZ", CHICAGO)
+            with pytest.raises(SessionTimezoneError, match="'America/Chicago', not 'UTC'"):
+                engine.connect()
+            assert held.execute(text("show timezone")).scalar_one() == "UTC"
     finally:
         engine.dispose()
 
 
-def test_migrations_run_in_a_utc_session(chicago_db) -> None:
-    """``alembic upgrade head`` through the real env.py: every connection it opens is UTC."""
+def _alembic_upgrade(url: str, **extra_env: str) -> tuple[subprocess.CompletedProcess, list]:
+    """``alembic upgrade head`` through the real env.py in a child process; returns the result
+    and the ``TimeZone`` of every connection its pools opened."""
     code = (
         "from sqlalchemy import event\n"
         "from sqlalchemy.pool import Pool\n"
@@ -406,13 +414,34 @@ def test_migrations_run_in_a_utc_session(chicago_db) -> None:
         "    print('TZPIN-SEEN', ','.join(map(str, seen)))\n"
     )
     env = dict(os.environ)
-    env["DATABASE_URL"] = chicago_db
+    env["DATABASE_URL"] = url
     env.pop("SN_MIGRATION_MODE", None)
+    env.update(extra_env)
     result = subprocess.run(
         [sys.executable, "-c", code], cwd=API_DIR, env=env, capture_output=True, text=True
     )
-    assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-4000:]
     seen = [line for line in result.stdout.splitlines() if line.startswith("TZPIN-SEEN ")]
-    assert len(seen) == 1, result.stdout[-2000:]
-    zones = seen[0].removeprefix("TZPIN-SEEN ").split(",")
+    assert len(seen) == 1, result.stdout[-2000:] + result.stderr[-4000:]
+    return result, seen[0].removeprefix("TZPIN-SEEN ").split(",")
+
+
+def test_migrations_run_in_a_utc_session(chicago_db) -> None:
+    """``alembic upgrade head`` through the real env.py: every connection it opens is UTC."""
+    result, zones = _alembic_upgrade(chicago_db)
+    assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-4000:]
     assert zones and set(zones) == {"UTC"}, zones
+
+
+def test_migrations_refuse_a_session_the_pin_cannot_reach(chicago_db) -> None:
+    """The guard on Alembic's online engine: under ``PGTZ`` (which outranks the pin) the
+    migration is refused at connect, before any statement, and nothing is applied."""
+    result, _zones = _alembic_upgrade(chicago_db, PGTZ=CHICAGO)
+    assert result.returncode != 0, result.stdout[-2000:]
+    assert "SessionTimezoneError" in result.stderr, result.stderr[-4000:]
+    assert "'America/Chicago', not 'UTC'" in result.stderr, result.stderr[-4000:]
+    control = create_engine(chicago_db)
+    try:
+        with control.connect() as c:
+            assert not inspect(c).has_table("alembic_version")
+    finally:
+        control.dispose()

@@ -837,7 +837,7 @@ def test_minted_tokens_are_stamped_by_the_database_clock(
             row = s.get(model, issued.token_id)
         assert as_utc(row.created_at) == as_utc(row.updated_at) == t_db
         assert as_utc(row.expires_at) == t_db + ttl
-        assert as_utc(issued.expires_at) == t_db + ttl
+        assert issued.expires_at == t_db + ttl
 
 
 @_PG
