@@ -108,3 +108,16 @@ describe('Scout Request detail — counts in the header are singular only for on
     expect(h1.nextElementSibling?.textContent).toMatch(new RegExp(`^${text} · `));
   });
 });
+
+describe('Scout Requests list — counts are singular only for one (W21 Q1 fix pass)', () => {
+  it.each([
+    [0, '0 opportunities · 0 signals'],
+    [1, '1 opportunity · 1 signal'],
+    [2, '2 opportunities · 2 signals'],
+  ])('%i: the row reads "%s"', async (n, text) => {
+    seedList({ stats: { scanned: n, noise_filtered: 0, signals_analyzed: n, opportunities: n } });
+    const screen = renderApp(<App />, { route: '/scout-requests' });
+    const line = await screen.findByText(new RegExp(`^${text} · `));
+    expect(line.textContent).toMatch(new RegExp(`^${text} · last run `));
+  });
+});
