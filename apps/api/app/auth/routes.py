@@ -144,9 +144,8 @@ def login(body: LoginRequest, db: Session = Depends(get_db)) -> SessionOut:
     try:
         user = service.authenticate(db, email=body.email, password=body.password)
     except service.LoginFailedError as refused:
-        written = 0
         if refused.user_id is not None:
-            written = _audit_login(
+            _audit_login(
                 db,
                 user_id=refused.user_id,
                 action=AuditAction.AUTH_LOGIN_FAILED,
@@ -154,16 +153,12 @@ def login(body: LoginRequest, db: Session = Depends(get_db)) -> SessionOut:
                 context={"failure": refused.failure},
             )
             db.commit()
-        log_event(
-            logger,
-            "security.login",
-            outcome="failure",
-            failure=refused.failure,
-            user_id=refused.user_id,
-            audit_rows=written,
-        )
+            # ``security.*`` events carry only the allow-listed outcome and account id.
+            log_event(logger, "security.login", outcome="refused", user_id=refused.user_id)
+        else:
+            log_event(logger, "security.login", outcome="refused")
         raise
-    written = _audit_login(
+    _audit_login(
         db,
         user_id=user.id,
         action=AuditAction.AUTH_LOGIN_SUCCEEDED,
@@ -171,7 +166,7 @@ def login(body: LoginRequest, db: Session = Depends(get_db)) -> SessionOut:
         context={"method": "password"},
     )
     session = _fresh_session(db, user)
-    log_event(logger, "security.login", outcome="success", user_id=user.id, audit_rows=written)
+    log_event(logger, "security.login", outcome="success", user_id=user.id)
     return session
 
 
