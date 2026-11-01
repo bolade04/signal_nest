@@ -12,13 +12,16 @@ separate_infra``):**
   ``merge``), ORM ``update(AuditLog)`` / ``delete(AuditLog)`` statements, ``Query.update()``
   and ``Query.delete()``, ``bulk_update_mappings`` / ``bulk_save_objects`` updates and ORM
   upserts (``test_cf1_append_only_models.py``, ``test_cf1_append_only_bulk_paths.py``).
-* Not refused, by design: statements on ``AuditLog.__table__`` (Core) and raw SQL. The
+* Not refused, by design: statements and upserts on ``AuditLog.__table__`` (Core), ORM
+  statements executed on a bare ``Connection``, raw SQL, and the database's own
+  ``ON DELETE SET NULL`` on ``actor_user_id``. The
   sanctioned writers after insert are the privacy obligations in :mod:`app.privacy` — the
   erasure anonymisation (values naming an erased account or a deleted organization are
   cleared, the row is kept — O-6) and the time-based purge of the ``audit_logs`` retention
   class (duration undecided — O-5) — and the guarded, development-only demo reset
-  (``app.db.seed``). A static test pins that no other production module builds an UPDATE or
-  DELETE over the model or its table.
+  (``app.db.seed``). A static test (``test_cf1_append_only_bulk_paths.py``) pins that no
+  other production module builds an UPDATE, DELETE or upsert over the model or its table or
+  writes such SQL as a string; its limits are stated in :mod:`app.db.append_only`.
 * Database-level immutability (a restricted role or a trigger) is **not** in place: the
   runtime role owns the database. That is a separate infrastructure change (O-10).
 """

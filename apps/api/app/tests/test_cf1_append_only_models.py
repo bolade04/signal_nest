@@ -22,8 +22,8 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import pytest
-from sqlalchemy import create_engine, delete, select, update
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import String, create_engine, delete, select, update
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from app.approvals.models import Approval
 from app.audit.actions import AuditAction
@@ -31,7 +31,7 @@ from app.audit.models import AuditLog
 from app.audit.service import record_audit
 from app.briefs.models import RecommendationBrief
 from app.core.actor_snapshot import actor_snapshot
-from app.db.append_only import AppendOnlyViolation, is_append_only
+from app.db.append_only import AppendOnlyViolation, append_only, is_append_only, is_guarded
 from app.db.models import Base
 
 SNAPSHOT = actor_snapshot(user_id="u-author", full_name="Ada Author", email="ada@example.test")
@@ -244,3 +244,71 @@ def test_the_sanctioned_core_paths_still_reach_the_rows(session: Session) -> Non
     session.commit()
     assert _stored(session, RecommendationBrief, "brief-1")["created_by_snapshot"] == "[erased]"
     assert session.execute(select(Approval.__table__.c.id)).all() == []
+
+
+# --------------------------------------------------------------------------- #
+# A mapped subclass of a guarded model is guarded too (review r2 DATA-C4 a)
+# --------------------------------------------------------------------------- #
+class _PrivateBase(DeclarativeBase):
+    """A registry of this test's own, so the subclass never joins ``Base.registry``."""
+
+
+@append_only
+class _Parent(_PrivateBase):
+    __tablename__ = "cf1_subclass_probe"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16))
+    value: Mapped[str] = mapped_column(String(32))
+    __mapper_args__ = {"polymorphic_on": "kind", "polymorphic_identity": "parent"}
+
+
+class _Child(_Parent):
+    """Single-table subclass: not decorated itself; inherits the guard through its MRO."""
+
+    __mapper_args__ = {"polymorphic_identity": "child"}
+
+
+@pytest.fixture
+def child_session() -> Iterator[Session]:
+    engine = create_engine("sqlite://", future=True)
+    _PrivateBase.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False, future=True)
+    with factory() as s:
+        s.add(_Child(id="c1", value="original"))
+        s.commit()
+        yield s
+    engine.dispose()
+
+
+def _child_value(s: Session) -> str:
+    t = _PrivateBase.metadata.tables["cf1_subclass_probe"]
+    return s.execute(select(t.c.value).where(t.c.id == "c1")).scalar_one()
+
+
+def test_the_subclass_is_guarded_but_not_enumerated_as_decorated() -> None:
+    assert is_guarded(_Child) and is_guarded(_Parent)
+    assert is_append_only(_Parent) and not is_append_only(_Child)
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["flush update", "flush delete", "update(SubClass)", "delete(SubClass)",
+     "bulk_update_mappings(SubClass)"],
+)
+def test_every_orm_path_on_a_mapped_subclass_is_refused(child_session: Session, path) -> None:
+    s = child_session
+    with pytest.raises(AppendOnlyViolation):
+        if path == "flush update":
+            s.get(_Child, "c1").value = "changed"
+            s.commit()
+        elif path == "flush delete":
+            s.delete(s.get(_Child, "c1"))
+            s.commit()
+        elif path == "update(SubClass)":
+            s.execute(update(_Child).where(_Child.id == "c1").values(value="changed"))
+        elif path == "delete(SubClass)":
+            s.execute(delete(_Child).where(_Child.id == "c1"))
+        else:
+            s.bulk_update_mappings(_Child, [{"id": "c1", "value": "changed"}])
+    s.rollback()
+    assert _child_value(s) == "original"
