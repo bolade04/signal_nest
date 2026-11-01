@@ -191,11 +191,17 @@ export interface paths {
          *     * **Success:** one ``auth.login_succeeded`` row per organization of the account,
          *       committed in the same transaction as the new session (``_fresh_session``), so a
          *       session never exists without its audit rows and vice versa.
+         *     * **Lock order:** the success rows are written after the session row, not before it.
+         *       Each row references the account (``actor_user_id``), so its foreign-key check locks
+         *       the user row (``FOR KEY SHARE``). Until it opens its session, a sign-in that has
+         *       verified the password must hold no lock on that row, because a concurrent password
+         *       change locks it ``FOR UPDATE`` and must be able to complete in that window (U17-C03).
          *     * **Refusal:** the answer is the unchanged 401. When the address belongs to an account,
          *       one ``auth.login_failed`` row per organization of that account (no actor: the caller
-         *       is not authenticated) records the closed failure reason, and is committed before the
-         *       401 is raised (``get_db`` rolls back on an error, so it would otherwise be lost). An
-         *       address that belongs to no account has no organization to record against.
+         *       is not authenticated, so no user row is locked) records the closed failure reason,
+         *       and is committed before the 401 is raised (``get_db`` rolls back on an error, so it
+         *       would otherwise be lost). An address that belongs to no account has no organization
+         *       to record against.
          */
         post: operations["login_api_v1_auth_login_post"];
         delete?: never;
