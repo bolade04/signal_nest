@@ -4,20 +4,24 @@ The unit-of-work guard (``before_update`` / ``before_delete``) is covered by
 ``test_cf1_append_only_models.py``. This module covers every other ORM write path the review
 found open at ``30fc045c`` — ORM-enabled UPDATE/DELETE statements, ``Query.update/delete``,
 the legacy bulk API and an ORM upsert — plus, since FU-CF1-H1, an ORM insert carrying a
-statement prefix (SQLite ``OR REPLACE`` replaced a stored row through a session), for each
-append-only model (the three of CF-1 and, since CF-2, ``creative_drafts`` and
-``content_reviews``), and shows:
+statement prefix (SQLite ``OR REPLACE`` replaced a stored row through a session) and, since
+CF2-FIX2 (W21-REV-CF2-DATA r2 C3), ORM DML nested inside another statement (a data-modifying
+CTE, which PostgreSQL executes, selected from, in a scalar subquery or under ``INSERT … FROM
+SELECT``; a ``from_statement`` upsert or prefixed insert), for each append-only model (the
+three of CF-1 and, since CF-2, ``creative_drafts`` and ``content_reviews``), and shows:
 
 * each path raises :class:`~app.db.append_only.AppendOnlyViolation` and the stored row is
   byte-identical afterwards;
 * the sanctioned Core statements on the *table* (privacy anonymisation, the foreign-key walk)
-  still work under the guard, and an ORM INSERT (plain or ``ON CONFLICT DO NOTHING``) is not
-  refused; no guarded table declares a SQLite DDL conflict clause;
+  still work under the guard, a Core DML CTE on the table is not refused by it, and an ORM
+  INSERT (plain, ``ON CONFLICT DO NOTHING`` or a plain ``from_statement`` insert) is not
+  refused, while a nested one is; no guarded table declares a SQLite DDL conflict clause;
 * **static pin:** no production module outside ``app/privacy/`` builds an UPDATE or DELETE
   (function, attribute-call or method form, or ``Query``), an upsert or a prefixed insert
   over these models or their tables, writes a literal unqualified UPDATE [ONLY] / UPDATE OR
   <algorithm> / DELETE FROM [ONLY] / INSERT OR <algorithm> INTO / REPLACE INTO / INSERT …
-  DO UPDATE string on the guarded tables, calls the bulk API or calls ``delete_rows``,
+  DO UPDATE string on the guarded tables (bare, ``"…"``, ``[…]`` or backticks), calls the
+  bulk API or calls ``delete_rows``,
   following model import aliases and annotated, tuple, list and walrus aliases — with an
   in-test control per form and look-alikes that must pass. It is a backstop to the runtime
   guard; what it does not pin is listed on the production-scan test and in
@@ -40,9 +44,21 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
-from sqlalchemy import delete, insert, text, update
+from sqlalchemy import (
+    Column,
+    MetaData,
+    String,
+    Table,
+    delete,
+    insert,
+    literal_column,
+    select,
+    text,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import sessionmaker
 
 from app.approvals.models import Approval
@@ -227,6 +243,55 @@ def _insert_or_ignore(s, m, rid, w):
     s.execute(insert(m).prefix_with("OR IGNORE").values(**_changed_row(w, m, rid)))
 
 
+# CF2-FIX2 (W21-REV-CF2-DATA r2 C3): ORM DML nested inside another statement. PostgreSQL runs
+# a data-modifying CTE (WITH u AS (UPDATE ... RETURNING ...) SELECT ...), so before the nested
+# walk these changed or deleted guarded rows through a Session; SQLite has no DML in WITH and
+# refuses it itself, so there only the exception type shows the guard. The from_statement
+# forms changed rows on SQLite too: is_insert follows the inner statement, but the upsert and
+# prefix checks read the outer FromStatement.
+_SINK = Table("cf2fix2_sink", MetaData(), Column("id", String(64), primary_key=True))
+
+
+def _update_returning(m, rid):
+    return update(m).where(m.id == rid).values({FIELD[m]: "changed"}).returning(m.id)
+
+
+def _cte_update(s, m, rid, w):
+    s.execute(select(literal_column("1")).add_cte(_update_returning(m, rid).cte("u"))).all()
+
+
+def _cte_delete(s, m, rid, w):
+    cte = delete(m).where(m.id == rid).returning(m.id).cte("d")
+    s.execute(select(literal_column("1")).add_cte(cte)).all()
+
+
+def _select_from_update_cte(s, m, rid, w):
+    s.execute(select(_update_returning(m, rid).cte("u").c.id)).all()
+
+
+def _insert_from_select_of_update_cte(s, m, rid, w):
+    _SINK.create(w.engine, checkfirst=True)
+    cte = _update_returning(m, rid).cte("u")
+    s.execute(insert(_SINK).from_select(["id"], select(cte.c.id)))
+
+
+def _update_cte_in_scalar_subquery(s, m, rid, w):
+    cte = _update_returning(m, rid).cte("u")
+    s.execute(select(select(cte.c.id).scalar_subquery())).all()
+
+
+def _from_statement_upsert(s, m, rid, w):
+    upsert = _upsert(w)(m).values(**_stored(w, m, rid)).on_conflict_do_update(
+        index_elements=["id"], set_={FIELD[m]: "changed"}
+    )
+    s.execute(select(m).from_statement(upsert.returning(m))).all()
+
+
+def _from_statement_prefixed_insert(s, m, rid, w):
+    stmt = insert(m).prefix_with("OR REPLACE").values(**_changed_row(w, m, rid)).returning(m)
+    s.execute(select(m).from_statement(stmt)).all()
+
+
 PATHS: dict[str, Callable] = {
     "execute(update(Model).where(...))": _update_where,
     "execute(update(Model), [pk rows])": _update_by_pk,
@@ -244,6 +309,15 @@ PATHS: dict[str, Callable] = {
         _insert_or_replace_sqlite_only
     ),
     "insert(Model).prefix_with('OR IGNORE')": _insert_or_ignore,
+    "select(1).add_cte(update(Model)...cte())": _cte_update,
+    "select(1).add_cte(delete(Model)...cte())": _cte_delete,
+    "select(cte.c.id) from update(Model)...cte()": _select_from_update_cte,
+    "INSERT INTO sink FROM SELECT of update(Model)...cte()": _insert_from_select_of_update_cte,
+    "update(Model)...cte() in a scalar subquery": _update_cte_in_scalar_subquery,
+    "select(Model).from_statement(upsert)": _from_statement_upsert,
+    "select(Model).from_statement(insert.prefix_with('OR REPLACE'))": (
+        _from_statement_prefixed_insert
+    ),
 }
 
 
@@ -298,6 +372,49 @@ def test_orm_inserts_are_not_refused(world):
         s.commit()
     assert _stored(world, AuditLog, ids[AuditLog] + "-2") is not None
     assert _stored(world, AuditLog, ids[AuditLog]) == row
+    # select(Model).from_statement(plain insert): run as the outer insert, so not refused.
+    with factory() as s:
+        stmt = insert(AuditLog).values(
+            id=ids[AuditLog] + "-3", organization_id=ORG_A, action="auth.register", context={},
+        )
+        s.execute(select(AuditLog).from_statement(stmt.returning(AuditLog))).all()
+        s.commit()
+    assert _stored(world, AuditLog, ids[AuditLog] + "-3") is not None
+
+
+@pytest.mark.parametrize("model", GUARDED, ids=lambda m: m.__tablename__)
+def test_a_core_table_dml_cte_is_not_refused_by_the_guard(world, model):
+    """Control for the nested walk (CF2-FIX2): a CTE built on the *table* is Core, a sanctioned
+    path, and reaches the database. PostgreSQL runs it; SQLite has no DML in WITH and refuses
+    it itself (a driver error, not the guard)."""
+    rid = _seed(world)[model]
+    t = model.__table__
+    cte = update(t).where(t.c.id == rid).values({FIELD[model]: "core"}).returning(t.c.id)
+    stmt = select(literal_column("1")).add_cte(cte.cte("u"))
+    factory = sessionmaker(bind=world.engine, expire_on_commit=False, future=True)
+    with factory() as s:
+        if world.engine.dialect.name == "postgresql":
+            s.execute(stmt).all()
+            s.commit()
+            assert _stored(world, model, rid)[FIELD[model]] == "core"
+        else:
+            with pytest.raises(DBAPIError):
+                s.execute(stmt).all()
+
+
+@pytest.mark.parametrize("model", GUARDED, ids=lambda m: m.__tablename__)
+def test_a_nested_orm_insert_on_a_guarded_model_is_refused_too(world, model):
+    """Coordinator ruling (CF2-FIX2): any ORM DML on a guarded model nested inside another
+    statement is refused, a plain INSERT as a CTE included; nothing is written."""
+    rid = _seed(world)[model]
+    new = dict(_stored(world, model, rid), id=rid + "-cte")
+    stmt = select(insert(model).values(**new).returning(model.id).cte("i").c.id)
+    factory = sessionmaker(bind=world.engine, expire_on_commit=False, future=True)
+    with factory() as s:
+        with pytest.raises(AppendOnlyViolation):
+            s.execute(stmt).all()
+        s.rollback()
+    assert _stored(world, model, rid + "-cte") is None
 
 
 def test_no_guarded_table_declares_a_sqlite_conflict_clause():
