@@ -148,6 +148,28 @@ def _plan(mutate) -> dict:
     (lambda p: p["resource_changes"].append(
         _role_change("module.x.aws_iam_role.y", ["delete", "create"], None, unknown=True)),
      "unknown at plan time"),
+    # W21-REV-OPSPREP r1 MINOR-1: a malformed entry is refused, never skipped.
+    (lambda p: p["resource_changes"].append(
+        {"address": "module.x.aws_iam_role.no_actions", "mode": "managed", "type": "aws_iam_role",
+         "change": {"after": {"permissions_boundary": None}}}),
+     "module.x.aws_iam_role.no_actions: change/actions unreadable: refusing"),
+    (lambda p: p["resource_changes"].append(
+        {"address": "module.x.aws_iam_role.string_actions", "mode": "managed", "type": "aws_iam_role",
+         "change": {"actions": "create", "after": {"permissions_boundary": None}}}),
+     "module.x.aws_iam_role.string_actions: change/actions unreadable: refusing"),
+    (lambda p: p["resource_changes"].append(
+        {"address": "module.x.aws_iam_role.no_change", "mode": "managed", "type": "aws_iam_role"}),
+     "module.x.aws_iam_role.no_change: change/actions unreadable: refusing"),
+    (lambda p: p["resource_changes"].append("aws_iam_role.y"),
+     "resource_changes[3] is not an object: refusing an unreadable plan"),
+    (lambda p: p["resource_changes"].append(
+        {"address": "module.x.aws_iam_role.empty_actions", "mode": "managed", "type": "aws_iam_role",
+         "change": {"actions": [], "after": {}}}),
+     "module.x.aws_iam_role.empty_actions: change/actions unreadable: refusing"),
+    (lambda p: p["resource_changes"].append(
+        {"address": "module.x.aws_iam_role.odd_actions", "mode": "managed", "type": "aws_iam_role",
+         "change": {"actions": ["create", None], "after": {}}}),
+     "module.x.aws_iam_role.odd_actions: change/actions unreadable: refusing"),
 ])
 def test_each_plan_deviation_fails_closed(mutate, expect):
     result = bp.evaluate(_plan(mutate), GOOD_INVENTORY, EXPECTED)
@@ -269,9 +291,12 @@ def test_the_client_has_no_call_path_but_the_two_reads():
      "does not exist (NoSuchEntity)"),
     ((255, "", "An error occurred (AccessDenied) when calling the GetPolicy operation"),
      "existence cannot be established"),
-    ((0, "not json", ""), "not a single JSON object"),
-    ((0, "[]", ""), "not a JSON object"),
-    ((0, '{"Policy": {}, "Policy": {}}', ""), "not a single JSON object"),
+    ((0, "not json", ""), "(MalformedResponse (GetPolicy))"),
+    ((0, "[]", ""), "(MalformedResponse (GetPolicy))"),
+    ((0, '{"Policy": {}, "Policy": {}}', ""), "(MalformedResponse (GetPolicy))"),
+    ((255, "", "Unable to locate credentials. You can configure credentials by running aws configure."),
+     "(CliExit255 (GetPolicy))"),
+    ((-9, "", ""), "(CliSignal9 (GetPolicy))"),
 ])
 def test_a_failed_or_unusable_first_read_stops_before_the_second(response, expect):
     runner = RecordingRunner([response])
@@ -332,7 +357,7 @@ def test_main_live_path_uses_the_injected_client(tmp_path, monkeypatch, capsys):
                    client_factory=lambda profile: client) == 0
     assert [c[0] for c in client.calls] == ["iam:GetPolicy", "iam:GetPolicyVersion"]
     assert "PASS" in capsys.readouterr().out
-    failing = StubClient(fail={"iam:GetPolicy": "An error occurred (NoSuchEntity)"})
+    failing = StubClient(fail={"iam:GetPolicy": "NoSuchEntity (GetPolicy)"})
     assert bp.main(["--plan-json", str(plan), "--profile", "readonly"],
                    client_factory=lambda profile: failing) == 1
     assert "NoSuchEntity" in capsys.readouterr().out
@@ -386,3 +411,90 @@ def test_output_never_prints_an_account_id(tmp_path, capsys):
     assert bp.redact(f"arn:aws:iam::{account}:policy/p") == "arn:aws:iam::<account>:policy/p"
     digest = "a" + account + "b" * 51
     assert bp.redact(digest) == digest, "a digest that contains twelve digits is not an account id"
+
+
+# --- W21-REV-OPSPREP r1 MINOR-2: a failed read never prints the caller's identity -----------
+
+SSO_ROLE = "AWSReservedSSO_ReadOnly_0123456789abcdef"
+SESSION = "first.last@example.invalid"
+
+
+def _main_with_cli_stderr(tmp_path, monkeypatch, stderr_text, extra=()):
+    """Drive main() through the REAL client with a runner that fails the first read."""
+    plan = _write(tmp_path, "plan.json", GOOD_PLAN)
+    protected = dict(EXPECTED, anchor_tier=bp.PROTECTED_TIER)
+    monkeypatch.setattr(bp, "expected_identity", lambda digest=None: protected)
+    runner = RecordingRunner([(255, "", stderr_text)])
+    code = bp.main(["--plan-json", str(plan), "--profile", "readonly", *extra],
+                   client_factory=lambda profile: bp.AwsCliIamReader(profile, runner=runner))
+    return code, runner
+
+
+@pytest.mark.parametrize("extra", [[], ["--json"]])
+def test_an_access_denied_read_prints_only_its_code_and_operation(tmp_path, monkeypatch, capsys, extra):
+    account = signalnest_identity.ACCOUNT
+    denied = (f"An error occurred (AccessDenied) when calling the GetPolicy operation: User: "
+              f"arn:aws:sts::{account}:assumed-role/{SSO_ROLE}/{SESSION} is not authorized to "
+              f"perform: iam:GetPolicy on resource: policy {ARN} because no identity-based policy "
+              f"allows the iam:GetPolicy action")
+    code, runner = _main_with_cli_stderr(tmp_path, monkeypatch, denied, extra)
+    out = capsys.readouterr()
+    text = out.out + out.err
+    assert code == 1 and len(runner.commands) == 1
+    assert "AccessDenied (GetPolicy)" in text
+    for leaked in (SESSION, "0123456789abcdef", SSO_ROLE, "assumed-role", "@", account):
+        assert leaked not in text, leaked
+
+
+def test_an_account_id_straddling_a_400_character_cut_leaves_no_digits(tmp_path, monkeypatch, capsys):
+    account = signalnest_identity.ACCOUNT
+    lead = "An error occurred (AccessDenied) when calling the GetPolicy operation: "
+    arn_head = "arn:aws:iam::"
+    straddle = lead + "y" * (393 - len(lead) - len(arn_head)) + arn_head + account + ":policy/p more"
+    assert straddle.index(account) == 393  # its first 7 digits fall before a 400-character cut
+    code, _ = _main_with_cli_stderr(tmp_path, monkeypatch, straddle, ["--json"])
+    out = capsys.readouterr()
+    text = out.out + out.err
+    assert code == 1
+    for start in range(len(account) - 6):
+        assert account[start:start + 7] not in text, "a 7-digit run of the account survived"
+
+
+def test_the_client_itself_keeps_no_cli_text():
+    """The first layer: the inventory the client builds holds only "<Code> (<Operation>)".
+
+    evaluate_inventory() re-summarises as a second layer, so the printed output alone cannot
+    show that the client discards the CLI text; this pins the client on its own.
+    """
+    denied = (f"An error occurred (AccessDenied) when calling the GetPolicy operation: User: "
+              f"arn:aws:sts::{signalnest_identity.ACCOUNT}:assumed-role/{SSO_ROLE}/{SESSION} "
+              "is not authorized")
+    inventory = bp.collect(bp.AwsCliIamReader("readonly", runner=RecordingRunner([(255, "", denied)])), ARN)
+    assert inventory["errors"] == {"iam:GetPolicy": "AccessDenied (GetPolicy)"}
+
+
+@pytest.mark.parametrize("message,expect", [
+    ("AccessDenied (GetPolicy)", "AccessDenied (GetPolicy)"),
+    ("An error occurred (NoSuchEntity) when calling the GetPolicyVersion operation: x@y.example",
+     "NoSuchEntity (GetPolicyVersion)"),
+    (f"User: arn:aws:sts::{signalnest_identity.ACCOUNT}:assumed-role/{SSO_ROLE}/{SESSION} denied",
+     "unrecognised error text withheld"),
+    ("AccessDenied (GetPolicy) for " + SESSION, "unrecognised error text withheld"),
+    ("", "unrecognised error text withheld"),
+])
+def test_error_summary_admits_only_code_and_operation(message, expect):
+    assert bp.error_summary(message) == expect
+
+
+def test_a_fixture_carrying_raw_cli_text_cannot_leak_it(tmp_path, capsys):
+    account = signalnest_identity.ACCOUNT
+    raw = (f"An error occurred (AccessDenied) when calling the GetPolicy operation: User: "
+           f"arn:aws:sts::{account}:assumed-role/{SSO_ROLE}/{SESSION} is not authorized")
+    plan = _write(tmp_path, "plan.json", GOOD_PLAN)
+    bad = _write(tmp_path, "bad.json", {"policy": None, "policy_version": None,
+                                        "errors": {"iam:GetPolicy": raw, SESSION: "x"}})
+    assert bp.main(["--plan-json", str(plan), "--fixture", str(bad), "--json"]) == 1
+    text = capsys.readouterr().out
+    assert "AccessDenied (GetPolicy)" in text and "an unexpected error entry" in text
+    for leaked in (SESSION, "0123456789abcdef", "assumed-role", "@", account):
+        assert leaked not in text, leaked

@@ -32,8 +32,13 @@ client has exactly two public methods, each issuing one literal read.
 Fail-closed: exit 0 only when every check passes. Any finding, any read error or denial, a
 missing or duplicated key, an unparseable document or an undeclared anchor tier exits 1. A live
 run is refused unless SIGNALNEST_ANCHOR_TIER=TIER_2_PROTECTED, so the synthetic tier used by CI
-can never reach AWS. Output never prints a 12-digit account id. Unit tests never call AWS: they
-drive evaluate() and the injectable client with stubbed responses.
+can never reach AWS. Output redacts every 12-digit account id. A failed read is reported only as
+its AWS error code and operation, for example `AccessDenied (GetPolicy)`: the AWS CLI's error text
+names the caller (role, Identity Center role suffix, session name, usually an e-mail address), so
+none of it is kept or printed, and error text in any other form is withheld. A malformed plan
+entry (a non-object member, or an aws_iam_role whose change or actions cannot be read) is refused,
+never skipped. Unit tests never call AWS: they drive evaluate() and the injectable client with
+stubbed responses.
 
 What a PASS does NOT prove: that the apply principal's grants match; that the boundary is
 attached to any existing role; anything about P6-INF-10 (PassRole), the other Stage-A gates,
@@ -64,6 +69,14 @@ INVENTORY_READS = ("iam:GetPolicy", "iam:GetPolicyVersion")
 PROTECTED_TIER = "TIER_2_PROTECTED"
 _ACCOUNT_ID = re.compile(r"(?<![0-9A-Za-z])[0-9]{12}(?![0-9A-Za-z])")
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}")
+# A failed read is reported ONLY as "<AWS error code> (<operation>)". The AWS CLI's error text
+# names the caller (role ARN, Identity Center role suffix, session name: usually an e-mail
+# address), so none of it is kept. Both patterns admit only [A-Za-z0-9_.] in the code and
+# [A-Za-z0-9] in the operation, so neither can carry an identity.
+_CLI_ERROR = re.compile(r"An error occurred \(([A-Za-z0-9_.]{1,64})\) when calling the "
+                        r"([A-Za-z0-9]{1,64}) operation")
+_ERROR_SUMMARY = re.compile(r"[A-Za-z0-9_.]{1,64} \([A-Za-z0-9]{1,64}\)")
+_ERROR_KEY = re.compile(r"iam:[A-Za-z]{1,64}")
 
 
 class PrecheckInputError(RuntimeError):
@@ -71,12 +84,29 @@ class PrecheckInputError(RuntimeError):
 
 
 class ReadFailed(RuntimeError):
-    """A read-only IAM call that failed, was denied, or returned something unusable."""
+    """A read-only IAM call that failed, was denied, or returned something unusable.
+
+    Its message is always "<Code> (<Operation>)", never AWS CLI text.
+    """
 
 
 def redact(text: str) -> str:
     """Replace every 12-digit account id. This is a public repository's tool."""
     return _ACCOUNT_ID.sub("<account>", text)
+
+
+def error_summary(text: str) -> str:
+    """The only form in which a failed read is reported: "<Code> (<Operation>)".
+
+    Accepts that form, or extracts it from AWS CLI error text. Anything else is withheld, so an
+    inventory file carrying raw CLI text cannot put the caller's identity into the output.
+    """
+    if _ERROR_SUMMARY.fullmatch(text):
+        return text
+    match = _CLI_ERROR.search(text)
+    if match:
+        return f"{match.group(1)} ({match.group(2)})"
+    return "unrecognised error text withheld"
 
 
 def _no_duplicate_keys(pairs: list) -> dict:
@@ -179,17 +209,23 @@ def evaluate_plan(plan: object, expected: dict) -> tuple[list[str], dict]:
     _, bootstrap = _variable(variables, "enable_revision_reader_publication_bootstrap")
     observed["enable_revision_reader_publication_bootstrap"] = bootstrap
 
-    for change in changes:
-        if not isinstance(change, dict) or change.get("type") != "aws_iam_role":
+    for index, change in enumerate(changes):
+        if not isinstance(change, dict):
+            findings.append(f"resource_changes[{index}] is not an object: refusing an unreadable plan")
             continue
-        if change.get("mode", "managed") != "managed":
+        if change.get("type") != "aws_iam_role" or change.get("mode", "managed") != "managed":
             continue
-        body = change.get("change") if isinstance(change.get("change"), dict) else {}
-        actions = body.get("actions") if isinstance(body.get("actions"), list) else []
+        address = change.get("address", "<unaddressed aws_iam_role>")
+        body = change.get("change")
+        actions = body.get("actions") if isinstance(body, dict) else None
+        if (not isinstance(actions, list) or not actions
+                or not all(isinstance(action, str) for action in actions)):
+            # A role entry whose change cannot be read is never skipped: it could be a create.
+            findings.append(f"{address}: change/actions unreadable: refusing")
+            continue
         if "create" not in actions and "update" not in actions:
             continue
         observed["iam_role_changes_checked"] += 1
-        address = change.get("address", "<unaddressed aws_iam_role>")
         after = body.get("after") if isinstance(body.get("after"), dict) else {}
         unknown = body.get("after_unknown") if isinstance(body.get("after_unknown"), dict) else {}
         if unknown.get("permissions_boundary") is True:
@@ -224,12 +260,14 @@ def evaluate_inventory(inventory: object, expected: dict) -> tuple[list[str], di
         findings.append("the IAM inventory's errors field is not an object")
         errors = {}
     for action, message in sorted(errors.items()):
-        if "NoSuchEntity" in str(message):
-            findings.append(f"{action}: the boundary policy does not exist (NoSuchEntity); "
+        label = action if _ERROR_KEY.fullmatch(str(action)) else "an unexpected error entry"
+        summary = error_summary(str(message))
+        if summary.startswith("NoSuchEntity ("):
+            findings.append(f"{label}: the boundary policy does not exist (NoSuchEntity); "
                             "Stage A must not be applied")
         else:
-            findings.append(f"{action} failed or was denied, so existence cannot be established: "
-                            f"{message}")
+            findings.append(f"{label} failed or was denied ({summary}), so existence cannot be "
+                            "established")
 
     policy = inventory.get("policy")
     default_version = None
@@ -309,18 +347,25 @@ class AwsCliIamReader:
     def _run(self, operation: str, arguments: list[str]) -> dict:
         command = ["aws", "iam", operation, *arguments,
                    "--profile", self.profile, "--output", "json"]
+        api_operation = "".join(word.capitalize() for word in operation.split("-"))
         try:
             proc = self._runner(command, capture_output=True, text=True, timeout=90)
         except (OSError, subprocess.TimeoutExpired) as exc:
-            raise ReadFailed(f"{type(exc).__name__}") from exc
+            raise ReadFailed(f"{type(exc).__name__} ({api_operation})") from exc
         if proc.returncode != 0:
-            raise ReadFailed((proc.stderr or "").strip()[:400] or f"exit {proc.returncode}")
+            # The CLI's text names the caller; keep only the error code and the operation.
+            match = _CLI_ERROR.search(proc.stderr or "")
+            if match:
+                raise ReadFailed(f"{match.group(1)} ({match.group(2)})")
+            exit_label = (f"CliExit{proc.returncode}" if proc.returncode > 0
+                          else f"CliSignal{-proc.returncode}")
+            raise ReadFailed(f"{exit_label} ({api_operation})")
         try:
             data = json.loads(proc.stdout or "", object_pairs_hook=_no_duplicate_keys)
         except (json.JSONDecodeError, PrecheckInputError) as exc:
-            raise ReadFailed("the response is not a single JSON object") from exc
+            raise ReadFailed(f"MalformedResponse ({api_operation})") from exc
         if not isinstance(data, dict):
-            raise ReadFailed("the response is not a JSON object")
+            raise ReadFailed(f"MalformedResponse ({api_operation})")
         return data
 
     def get_policy(self, policy_arn: str) -> dict:
