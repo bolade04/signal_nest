@@ -301,15 +301,19 @@ def _build_tenant(world: World, key: str, build: dict[str, int]) -> Tenant:
     build[f"POST {W}/scout-requests"] = 201
     life = post(f"{w}/scout-requests", {"name": f"Scout life {key}", "keywords": ["tea"]}, tok)
     t.life_request_id = life["id"]
-    # A schedule on the first request, through the feature-gated route with the flag ON.
+    # A schedule on the first request, through the feature-gated route with the flag ON
+    # and scheduling's environment ceiling lifted (FU-267-C1).
     settings = get_settings()
     saved = settings.scout_scheduling_enabled
+    saved_ceiling = settings.scout_scheduling_ceiling_lifted
     settings.scout_scheduling_enabled = True
+    settings.scout_scheduling_ceiling_lifted = True
     try:
         post(f"{w}/scout-requests/{t.request_id}/schedule", {"interval": "daily"}, tok)
         build[f"POST {W}/scout-requests/{{request_id}}/schedule"] = 201
     finally:
         settings.scout_scheduling_enabled = saved
+        settings.scout_scheduling_ceiling_lifted = saved_ceiling
     return t
 
 
@@ -401,13 +405,17 @@ def pov(request, world: World) -> Pov:
 
 @pytest.fixture
 def scheduling_on() -> Iterator[None]:
+    # The flag, and scheduling's environment ceiling lifted (FU-267-C1).
     settings = get_settings()
     saved = settings.scout_scheduling_enabled
+    saved_ceiling = settings.scout_scheduling_ceiling_lifted
     settings.scout_scheduling_enabled = True
+    settings.scout_scheduling_ceiling_lifted = True
     try:
         yield
     finally:
         settings.scout_scheduling_enabled = saved
+        settings.scout_scheduling_ceiling_lifted = saved_ceiling
 
 
 @pytest.fixture

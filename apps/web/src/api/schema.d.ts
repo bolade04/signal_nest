@@ -413,9 +413,12 @@ export interface paths {
          *     An unknown ``capability`` value is rejected as 422 by the typed enum before any
          *     resolution. A cross-tenant or absent workspace is a non-enumerating 404.
          *
-         *     With shipped defaults (all three global flags ``False``) and no real override row,
-         *     every capability resolves disabled via ``global_configuration`` — the surface is
-         *     dark. A persisted enable on a ``workspace_enableable`` capability would show
+         *     With shipped defaults (all three global flags ``False``, the scheduling environment
+         *     ceiling engaged) and no real override row, every capability resolves disabled —
+         *     ``scout_scheduling`` via ``safety_ceiling`` with ``environment_ceiling_lifted=false``
+         *     (whatever its overrides), the others via ``global_configuration`` — the surface is
+         *     dark. A persisted enable on a ``workspace_enableable`` capability that the ceiling
+         *     does not block would show
          *     ``has_override=True``/``decided_by=workspace_override``/``effective_enabled=True``
          *     while ``global_flag`` stays ``False``. No GLOBAL flag is changed, and every capability's
          *     live enforcement consumes this same decision: ``opportunity_feedback`` since Phase
@@ -2468,17 +2471,23 @@ export interface components {
          *
          *     A secret-free view of :class:`app.capabilities.resolver.CapabilityResolution`: the
          *     effective boolean a future gate would consume, the precedence rule that decided it,
-         *     the bound global-flag value, and whether an honored per-workspace override was
-         *     present (and its boolean). Reporting ``effective_enabled`` and ``global_flag``
+         *     the bound global-flag value, whether an honored per-workspace override was
+         *     present (and its boolean), and — for a capability with an environment ceiling — the
+         *     ceiling setting's value. Reporting ``effective_enabled`` and ``global_flag``
          *     separately lets the operator distinguish persisted override *intent* from global
-         *     *activation*. Carries no override ``reason`` note, actor id, timestamp, URL, or
-         *     credential.
+         *     *activation*. ``environment_ceiling_lifted`` is the value of
+         *     ``scout_scheduling_ceiling_lifted`` for ``scout_scheduling`` (``false``: the ceiling
+         *     is engaged and ``decided_by`` is ``safety_ceiling``) and ``null`` for a capability
+         *     with no environment ceiling. Carries no override ``reason`` note, actor id,
+         *     timestamp, URL, or credential.
          */
         CapabilityEffectiveOut: {
             capability: components["schemas"]["Capability"];
             decided_by: components["schemas"]["DecisionSource"];
             /** Effective Enabled */
             effective_enabled: boolean;
+            /** Environment Ceiling Lifted */
+            environment_ceiling_lifted: boolean | null;
             /** Global Flag */
             global_flag: boolean;
             /** Has Override */

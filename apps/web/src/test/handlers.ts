@@ -1,6 +1,11 @@
 import { http, HttpResponse } from 'msw';
 import { API_PREFIX } from '@/api/config';
-import type { LocationOut, OpportunityDetail, OpportunitySort } from '@/api/types';
+import type {
+  CapabilityEffective,
+  LocationOut,
+  OpportunityDetail,
+  OpportunitySort,
+} from '@/api/types';
 
 // A small but realistic in-memory backend for component/integration tests.
 // It models one org → one workspace → one brand → four independent city
@@ -410,15 +415,43 @@ interface OverrideRow {
 const capabilityOverrideRows = new Map<string, OverrideRow>();
 const overrideKey = (ws: string, cap: string) => `${ws}:${cap}`;
 
-export function resetCapabilityOverrides(): void {
-  capabilityOverrideRows.clear();
+// Scheduling's environment ceiling (FU-267-C1) ships engaged, as in the backend
+// (scout_scheduling_ceiling_lifted=false): it outranks every override and the
+// global flag. A test of the ordinary scheduling precedence lifts it first.
+let schedulingCeilingLifted = false;
+
+export function setSchedulingCeilingLifted(lifted: boolean): void {
+  schedulingCeilingLifted = lifted;
 }
 
-// Mirrors the backend resolver's honored-override semantics: an enable is
-// honored only for an enableable capability; a disable for a disableable one;
-// otherwise the deny-biased secure default applies. All global flags are False
-// (dark), so with no override the global configuration decides "disabled".
-function resolveEffective(ws: string, item: (typeof capabilityRegistryItems)[number]) {
+export function resetCapabilityOverrides(): void {
+  capabilityOverrideRows.clear();
+  schedulingCeilingLifted = false;
+}
+
+// Mirrors the backend resolver's semantics: the safety ceiling first (only
+// scheduling has an environment ceiling input); then an enable is honored only
+// for an enableable capability, a disable for a disableable one, otherwise the
+// deny-biased secure default applies. All global flags are False (dark), so with
+// no override the global configuration decides "disabled".
+function resolveEffective(
+  ws: string,
+  item: (typeof capabilityRegistryItems)[number],
+): CapabilityEffective {
+  const environment_ceiling_lifted =
+    item.capability === 'scout_scheduling' ? schedulingCeilingLifted : null;
+  if (environment_ceiling_lifted === false) {
+    return {
+      capability: item.capability,
+      workspace_id: ws,
+      effective_enabled: false,
+      decided_by: 'safety_ceiling',
+      global_flag: false,
+      has_override: false,
+      override_value: null,
+      environment_ceiling_lifted,
+    };
+  }
   const row = capabilityOverrideRows.get(overrideKey(ws, item.capability));
   if (row) {
     if (row.enabled && item.workspace_enableable) {
@@ -430,6 +463,7 @@ function resolveEffective(ws: string, item: (typeof capabilityRegistryItems)[num
         global_flag: false,
         has_override: true,
         override_value: true,
+        environment_ceiling_lifted,
       };
     }
     if (!row.enabled && item.workspace_disableable) {
@@ -441,6 +475,7 @@ function resolveEffective(ws: string, item: (typeof capabilityRegistryItems)[num
         global_flag: false,
         has_override: true,
         override_value: false,
+        environment_ceiling_lifted,
       };
     }
     return {
@@ -451,6 +486,7 @@ function resolveEffective(ws: string, item: (typeof capabilityRegistryItems)[num
       global_flag: false,
       has_override: false,
       override_value: null,
+      environment_ceiling_lifted,
     };
   }
   return {
@@ -461,6 +497,7 @@ function resolveEffective(ws: string, item: (typeof capabilityRegistryItems)[num
     global_flag: false,
     has_override: false,
     override_value: null,
+    environment_ceiling_lifted,
   };
 }
 

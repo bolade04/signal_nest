@@ -1179,13 +1179,22 @@ def _shipped_settings() -> Settings:
 
 def test_dark_state_shipped_defaults_resolve_every_capability_disabled(factory) -> None:
     """With shipped defaults and no real override row, every registered capability
-    resolves **disabled** via the global-configuration rule (§8.29 #21, §8.34 #45).
+    resolves **disabled** (§8.29 #21, §8.34 #45): scheduling via the safety ceiling,
+    whose environment ceiling ships engaged (FU-267-C1), the others via the
+    global-configuration rule.
 
     This is the production baseline: the override table holds no real row, all three
-    global flags are ``False``, so ``resolve_capability`` resolves every capability in
-    a sample workspace to disabled.
+    global flags are ``False`` and the scheduling ceiling is not lifted, so
+    ``resolve_capability`` resolves every capability in a sample workspace to disabled.
     """
     settings = _shipped_settings()
+    assert settings.scout_scheduling_ceiling_lifted is False
+    expected = {
+        Capability.OPPORTUNITY_FEEDBACK: DecisionSource.GLOBAL_CONFIGURATION,
+        Capability.SCOUT_SCHEDULING: DecisionSource.SAFETY_CEILING,
+        Capability.CONNECTOR_RSS: DecisionSource.GLOBAL_CONFIGURATION,
+    }
+    assert set(expected) == set(iter_capabilities())
     with factory() as s:
         for capability in iter_capabilities():
             res = resolve_capability(
@@ -1196,7 +1205,7 @@ def test_dark_state_shipped_defaults_resolve_every_capability_disabled(factory) 
                 workspace_id=_WS_A,
             )
             assert res.effective_enabled is False, capability
-            assert res.decided_by is DecisionSource.GLOBAL_CONFIGURATION, capability
+            assert res.decided_by is expected[capability], capability
             assert res.global_flag is False, capability
 
 

@@ -18,7 +18,11 @@ Deny-biased posture (Phase 4A-C.2 plan §8.9, §8.14, §8.18):
 * **Absence = disabled.** A missing, malformed, unknown, or tenant-mismatched
   override is treated as "no override", never as "enabled".
 * **Ceiling is absolute.** An unknown/unregistered capability is ceiling-blocked
-  first and can never be raised by an override or a global flag.
+  first and can never be raised by an override or a global flag. So is
+  ``scout_scheduling`` while its **environment ceiling** is engaged
+  (``scout_scheduling_ceiling_lifted=False``, the shipped default; FU-267-C1, the
+  operator's D-25-c ruling, option (b)): the scheduling kill switch outranks every
+  workspace override and the global flag. Lifting it restores rules 2-4 unchanged.
 * **Overrides only narrow, unless enable is permitted.** A ``workspace_disableable``
   capability always honors an ``enabled=False`` override; an ``enabled=True``
   override is honored only for a ``workspace_enableable`` capability (RSS is not),
@@ -37,21 +41,26 @@ enforcement point and its reflection share:
   ``opportunity_feedback_enabled`` stays ``False``.
 * ``scout_scheduling`` — LIVE since P6-CAP-1
   (:func:`app.scouting_requests.schedules.resolve_scheduling_capability`): schedule
-  mutations, tick seeding and the tick's own gate. An honored enable override makes
-  that workspace's schedules run while ``scout_scheduling_enabled`` stays ``False``.
+  mutations, tick seeding and the tick's own gate. Since FU-267-C1 it is
+  ceiling-blocked until the environment lifts the scheduling ceiling; once lifted, an
+  honored enable override makes that workspace's schedules run while
+  ``scout_scheduling_enabled`` stays ``False``.
 * ``connector_rss`` — LIVE since P6-CAP-1
   (:func:`app.scouting_requests.connectors._rss_enabled_for`): live connector
   selection. Not ``workspace_enableable``, so only the global flag can enable it; a
   disable override (or the ceiling) turns it off for a workspace.
 
-With all three global flags ``False`` and no override row, every capability still
-resolves **disabled** via the global-configuration rule.
+With all three global flags ``False``, no override row and the scheduling ceiling
+engaged (the shipped configuration), every capability resolves **disabled**:
+``scout_scheduling`` via the safety-ceiling rule, the other two via the
+global-configuration rule.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from types import MappingProxyType
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -63,6 +72,15 @@ from app.capabilities.registry import (
     get_policy,
 )
 from app.core.config import Settings
+
+#: Capabilities with an **environment ceiling**, each bound to the
+#: :class:`~app.core.config.Settings` attribute that *lifts* it (FU-267-C1, D-25-c
+#: option (b)). While that attribute is not ``True`` — it defaults to ``False`` — rule 1
+#: blocks the capability in that environment, above every workspace override and the
+#: global flag. Read-only, like the registry. Only scheduling has one.
+_ENVIRONMENT_CEILING_LIFT_ATTRS: MappingProxyType[Capability, str] = MappingProxyType(
+    {Capability.SCOUT_SCHEDULING: "scout_scheduling_ceiling_lifted"}
+)
 
 
 class DecisionSource(StrEnum):
@@ -97,6 +115,11 @@ class CapabilityResolution:
         has_override: Whether an honored per-workspace override was present.
         override_value: The honored override's boolean; ``None`` iff
             ``has_override`` is ``False``.
+        environment_ceiling_lifted: For a capability with an environment ceiling
+            (``scout_scheduling``), whether the environment had lifted it at
+            resolution time (``scout_scheduling_ceiling_lifted``); ``False`` means the
+            ceiling was engaged and decided (``decided_by=safety_ceiling``). ``None``
+            for a capability that has no environment ceiling.
     """
 
     capability: Capability
@@ -106,20 +129,43 @@ class CapabilityResolution:
     global_flag: bool
     has_override: bool
     override_value: bool | None
+    environment_ceiling_lifted: bool | None
 
 
-def _ceiling_blocks(capability: Capability) -> bool:
+def _environment_ceiling_lifted(settings: Settings, capability: Capability) -> bool | None:
+    """Read ``capability``'s environment-ceiling setting, or ``None`` if it has none.
+
+    Deny-biased: only a real ``True`` lifts the ceiling; ``False`` (the default) keeps
+    it engaged.
+    """
+    attr = _ENVIRONMENT_CEILING_LIFT_ATTRS.get(capability)
+    if attr is None:
+        return None
+    return getattr(settings, attr) is True
+
+
+def _ceiling_blocks(capability: Capability, *, environment_ceiling_lifted: bool | None) -> bool:
     """Whether the safety ceiling (rule 1) hard-blocks ``capability``.
 
-    In this batch the ceiling blocks only an unknown/unregistered capability —
-    any value absent from :data:`CAPABILITY_REGISTRY`, which can only reach here
-    via a future/forged enum member since the public entry point accepts a typed
-    :class:`Capability`. Every registered capability is *eligible* to be
-    ceiling-blocked (``subject_to_safety_ceiling=True``) but none is
-    environment-blocked by default yet; the rule-1 slot is reserved so such a
-    signal can be added later without reordering precedence (plan §8.10, §8.28 Q2).
+    Two inputs block, and nothing below rule 1 can raise either:
+
+    * an unknown/unregistered capability — any value absent from
+      :data:`CAPABILITY_REGISTRY`, which can only reach here via a future/forged enum
+      member since the public entry point accepts a typed :class:`Capability`;
+    * an engaged **environment ceiling** (FU-267-C1, D-25-c option (b)): a capability
+      bound in :data:`_ENVIRONMENT_CEILING_LIFT_ATTRS` (``scout_scheduling``) is
+      blocked unless ``environment_ceiling_lifted`` is ``True``. ``False`` and ``None``
+      (not supplied) both block — deny-biased.
+
+    The other registered capabilities are *eligible* to be ceiling-blocked
+    (``subject_to_safety_ceiling=True``) but have no environment input; for them
+    ``environment_ceiling_lifted`` is ignored.
     """
-    return capability not in CAPABILITY_REGISTRY
+    if capability not in CAPABILITY_REGISTRY:
+        return True
+    if capability in _ENVIRONMENT_CEILING_LIFT_ATTRS:
+        return environment_ceiling_lifted is not True
+    return False
 
 
 def decide_capability(
@@ -128,18 +174,29 @@ def decide_capability(
     workspace_id: str,
     global_flag: bool,
     override_value: bool | None,
+    environment_ceiling_lifted: bool | None = None,
 ) -> CapabilityResolution:
     """Pure, DB-free precedence decision (plan §8.9, §8.13); mirrors ``is_job_stuck``.
 
     Inputs are already-fetched primitives: the typed ``capability``, the bound
-    ``global_flag``, and ``override_value`` (already tenant-validated by the
-    caller; ``None`` means "no honored override"). Applies §8.9 rules 1→4 in
+    ``global_flag``, ``override_value`` (already tenant-validated by the
+    caller; ``None`` means "no honored override") and ``environment_ceiling_lifted``
+    (the capability's environment-ceiling setting; omitted, a capability that has an
+    environment ceiling is ceiling-blocked — deny-biased). Applies §8.9 rules 1→4 in
     order and constructs the immutable result. Fully deterministic — the primary
     unit-test surface, exercisable without a database.
     """
-    # Rule 1 — safety ceiling (absolute). An unknown/unregistered capability can
-    # never be raised by any override or flag.
-    if _ceiling_blocks(capability):
+    # Reported as the setting's value for a capability with an environment ceiling
+    # (a missing value reads as "not lifted"), ``None`` for one without.
+    ceiling_lifted = (
+        environment_ceiling_lifted is True
+        if capability in _ENVIRONMENT_CEILING_LIFT_ATTRS
+        else None
+    )
+
+    # Rule 1 — safety ceiling (absolute). An unknown/unregistered capability, or one
+    # whose environment ceiling is engaged, can never be raised by any override or flag.
+    if _ceiling_blocks(capability, environment_ceiling_lifted=environment_ceiling_lifted):
         return CapabilityResolution(
             capability=capability,
             workspace_id=workspace_id,
@@ -148,6 +205,7 @@ def decide_capability(
             global_flag=global_flag,
             has_override=False,
             override_value=None,
+            environment_ceiling_lifted=ceiling_lifted,
         )
 
     policy = get_policy(capability)
@@ -167,6 +225,7 @@ def decide_capability(
                 global_flag=global_flag,
                 has_override=True,
                 override_value=True,
+                environment_ceiling_lifted=ceiling_lifted,
             )
         if not override_value and policy.workspace_disableable:
             return CapabilityResolution(
@@ -177,6 +236,7 @@ def decide_capability(
                 global_flag=global_flag,
                 has_override=True,
                 override_value=False,
+                environment_ceiling_lifted=ceiling_lifted,
             )
         # Override present but not honorable for this capability's policy → secure
         # default (disabled). Deny-biased: an un-honorable enable never enables.
@@ -188,6 +248,7 @@ def decide_capability(
             global_flag=global_flag,
             has_override=False,
             override_value=None,
+            environment_ceiling_lifted=ceiling_lifted,
         )
 
     # Rule 3 — global configuration. With no honored override, the bound global
@@ -200,6 +261,7 @@ def decide_capability(
         global_flag=global_flag,
         has_override=False,
         override_value=None,
+        environment_ceiling_lifted=ceiling_lifted,
     )
 
 
@@ -244,8 +306,11 @@ def resolve_capability(
     The thin I/O wrapper around :func:`decide_capability`: short-circuits the
     safety ceiling for an unknown/forged capability, otherwise reads the bound
     global flag from ``settings`` (via the registry's ``global_flag_attr``, never
-    a hardcoded flag name), loads + tenant-validates the single override row, and
-    delegates the branching to the pure decision function.
+    a hardcoded flag name) and the capability's environment-ceiling setting (via
+    :data:`_ENVIRONMENT_CEILING_LIFT_ATTRS`). An engaged environment ceiling decides
+    without an override lookup — the kill switch never depends on override storage.
+    Otherwise it loads + tenant-validates the single override row and delegates the
+    branching to the pure decision function.
 
     Keyword-only at this safety-critical boundary. Never raises for a governance
     outcome (absence/error → disabled by precedence shape, not by exception); may
@@ -255,7 +320,7 @@ def resolve_capability(
     """
     # Short-circuit an unknown/forged capability before touching settings or the
     # DB: it is ceiling-blocked regardless.
-    if _ceiling_blocks(capability):
+    if capability not in CAPABILITY_REGISTRY:
         return decide_capability(
             capability=capability,
             workspace_id=workspace_id,
@@ -265,6 +330,16 @@ def resolve_capability(
 
     policy = get_policy(capability)
     global_flag = bool(getattr(settings, policy.global_flag_attr))
+    environment_ceiling_lifted = _environment_ceiling_lifted(settings, capability)
+    if _ceiling_blocks(capability, environment_ceiling_lifted=environment_ceiling_lifted):
+        # The environment ceiling outranks any override, so no row is read.
+        return decide_capability(
+            capability=capability,
+            workspace_id=workspace_id,
+            global_flag=global_flag,
+            override_value=None,
+            environment_ceiling_lifted=environment_ceiling_lifted,
+        )
     override_value = _load_override(
         session,
         capability=capability,
@@ -276,6 +351,7 @@ def resolve_capability(
         workspace_id=workspace_id,
         global_flag=global_flag,
         override_value=override_value,
+        environment_ceiling_lifted=environment_ceiling_lifted,
     )
 
 

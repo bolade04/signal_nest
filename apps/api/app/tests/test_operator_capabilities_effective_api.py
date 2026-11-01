@@ -49,6 +49,7 @@ _ITEM_FIELDS = {
     "global_flag",
     "has_override",
     "override_value",
+    "environment_ceiling_lifted",
 }
 
 # Substrings that must never appear in a governance-metadata response body.
@@ -217,16 +218,26 @@ class TestShape:
 
 
 # --------------------------------------------------------------------------- #
-# Dark-by-default — every capability disabled via global_configuration (case 3)
+# Dark-by-default — every capability disabled: scheduling by its engaged environment
+# ceiling (FU-267-C1), the others via global_configuration (case 3)
 # --------------------------------------------------------------------------- #
 class TestDarkByDefault:
-    def test_every_capability_disabled_via_global_configuration(self, h):
-        for item in h.effective().json()["items"]:
+    def test_every_capability_disabled_by_default(self, h):
+        expected = {
+            "opportunity_feedback": ("global_configuration", None),
+            "scout_scheduling": ("safety_ceiling", False),
+            "connector_rss": ("global_configuration", None),
+        }
+        items = h.effective().json()["items"]
+        assert {item["capability"] for item in items} == set(expected)
+        for item in items:
+            decided_by, ceiling_lifted = expected[item["capability"]]
             assert item["effective_enabled"] is False, item
-            assert item["decided_by"] == "global_configuration", item
+            assert item["decided_by"] == decided_by, item
             assert item["global_flag"] is False, item
             assert item["has_override"] is False, item
             assert item["override_value"] is None, item
+            assert item["environment_ceiling_lifted"] is ceiling_lifted, item
 
     def test_all_three_global_flags_remain_false(self):
         settings = get_settings()
@@ -297,9 +308,11 @@ class TestFilterAndTenancy:
     def test_unknown_capability_value_is_422(self, h):
         assert h.effective(capability="not_a_capability").status_code == 422
 
-    def test_override_in_one_workspace_does_not_leak_to_another(self, h):
+    def test_override_in_one_workspace_does_not_leak_to_another(self, h, monkeypatch):
         # Seed an enable in ws-a/org-a; ws-b/org-b must resolve independently to the
-        # (dark) global default — no cross-tenant leak.
+        # (dark) global default — no cross-tenant leak. The scheduling ceiling is lifted
+        # so that the override is honourable at all (FU-267-C1).
+        monkeypatch.setattr(get_settings(), "scout_scheduling_ceiling_lifted", True)
         h.seed_enable(org=_ORG_A, ws=_WS_A, capability=Capability.SCOUT_SCHEDULING)
         item = h.effective(org=_ORG_B, ws=_WS_B, capability="scout_scheduling").json()["items"][0]
         assert item["effective_enabled"] is False

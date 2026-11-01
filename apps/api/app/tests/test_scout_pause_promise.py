@@ -122,6 +122,8 @@ def s(factory):
 @pytest.fixture(autouse=True)
 def flag_on(monkeypatch):
     monkeypatch.setattr(get_settings(), "scout_scheduling_enabled", True)
+    # Live scheduling needs the environment ceiling lifted as well (FU-267-C1).
+    monkeypatch.setattr(get_settings(), "scout_scheduling_ceiling_lifted", True)
 
 
 @pytest.fixture

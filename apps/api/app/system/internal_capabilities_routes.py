@@ -59,8 +59,10 @@ at the request boundary. The effective, overrides, set, and clear routes authori
 validate the operator-supplied tenant scope (the workspace must exist and be owned by the
 supplied organization) before touching override state, mapping a cross-tenant or absent
 workspace to a non-enumerating 404 — never revealing whether the workspace exists.
-Because all three global flags stay ``False``, every capability resolves disabled via
-``global_configuration`` unless an honored per-workspace override is present.
+Under the shipped configuration (all three global flags ``False``, the scheduling ceiling
+engaged) every capability resolves disabled: ``scout_scheduling`` via ``safety_ceiling``
+whatever its overrides, the other two via ``global_configuration`` unless an honored
+per-workspace override is present.
 
 **Which capabilities have a live gate.** This is the fact these routes turn on. Since
 P6-CAP-1 all three enforce through the resolver, so what the effective route reports for
@@ -75,19 +77,25 @@ override still differ by policy:
 * ``scout_scheduling`` — **live resolver-backed gate** since P6-CAP-1
   (:func:`app.scouting_requests.schedules.resolve_scheduling_capability`, shared by the
   schedule mutation gate, the customer reflection, tick seeding and the tick itself).
-  ``workspace_enableable=True``, so an honored enable override makes schedule mutations
-  **serve** and ticks **fan out scouting runs** for that workspace while the global flag
-  stays ``False``. Recording such an override IS an activation for that workspace, and
-  turning the global flag off no longer stops it — clear the override (or record a
-  disable override) as well.
+  Since FU-267-C1 (D-25-c option (b)) an **environment ceiling** outranks every override
+  and the global flag: until the environment lifts it
+  (``scout_scheduling_ceiling_lifted=true``; the default is ``false``) scheduling
+  resolves disabled via ``safety_ceiling`` in every workspace, and the effective route
+  reports ``environment_ceiling_lifted=false``. Once it is lifted the ordinary precedence
+  applies: ``workspace_enableable=True``, so an honored enable override makes schedule
+  mutations **serve** and ticks **fan out scouting runs** for that workspace while the
+  global flag stays ``False`` — recording such an override IS then an activation for that
+  workspace. The stop for every workspace at once is re-engaging the ceiling (and
+  restarting), not clearing overrides.
 * ``connector_rss`` — **live resolver-backed selection** since P6-CAP-1
   (:func:`app.scouting_requests.connectors._rss_enabled_for`). Not
   ``workspace_enableable``: an ``enabled=True`` override is refused 422 here and would
   resolve to the secure default anyway, so only the global flag can turn RSS on; a
   disable override turns it off for one workspace.
 
-So "recording intent is not activation" is **false for feedback and scheduling** and
-holds only for RSS enables (which cannot be recorded). Do not generalise.
+So "recording intent is not activation" is **false for feedback, and for scheduling
+wherever the ceiling is lifted**; it holds for RSS enables (which cannot be recorded) and
+for scheduling only while the ceiling is engaged. Do not generalise.
 
 Every route requires an authenticated operator (``require_operator``: 401 anonymous,
 403 non-operator) and returns only bounded, secret-free governance metadata. The
@@ -163,11 +171,15 @@ class CapabilityEffectiveOut(BaseModel):
 
     A secret-free view of :class:`app.capabilities.resolver.CapabilityResolution`: the
     effective boolean a future gate would consume, the precedence rule that decided it,
-    the bound global-flag value, and whether an honored per-workspace override was
-    present (and its boolean). Reporting ``effective_enabled`` and ``global_flag``
+    the bound global-flag value, whether an honored per-workspace override was
+    present (and its boolean), and — for a capability with an environment ceiling — the
+    ceiling setting's value. Reporting ``effective_enabled`` and ``global_flag``
     separately lets the operator distinguish persisted override *intent* from global
-    *activation*. Carries no override ``reason`` note, actor id, timestamp, URL, or
-    credential.
+    *activation*. ``environment_ceiling_lifted`` is the value of
+    ``scout_scheduling_ceiling_lifted`` for ``scout_scheduling`` (``false``: the ceiling
+    is engaged and ``decided_by`` is ``safety_ceiling``) and ``null`` for a capability
+    with no environment ceiling. Carries no override ``reason`` note, actor id,
+    timestamp, URL, or credential.
     """
 
     capability: Capability
@@ -177,6 +189,7 @@ class CapabilityEffectiveOut(BaseModel):
     global_flag: bool
     has_override: bool
     override_value: bool | None
+    environment_ceiling_lifted: bool | None
 
 
 class CapabilityEffectiveListOut(BaseModel):
@@ -289,6 +302,7 @@ def _project(resolution: CapabilityResolution) -> CapabilityEffectiveOut:
         global_flag=resolution.global_flag,
         has_override=resolution.has_override,
         override_value=resolution.override_value,
+        environment_ceiling_lifted=resolution.environment_ceiling_lifted,
     )
 
 
@@ -342,9 +356,12 @@ def internal_capability_effective(
     An unknown ``capability`` value is rejected as 422 by the typed enum before any
     resolution. A cross-tenant or absent workspace is a non-enumerating 404.
 
-    With shipped defaults (all three global flags ``False``) and no real override row,
-    every capability resolves disabled via ``global_configuration`` — the surface is
-    dark. A persisted enable on a ``workspace_enableable`` capability would show
+    With shipped defaults (all three global flags ``False``, the scheduling environment
+    ceiling engaged) and no real override row, every capability resolves disabled —
+    ``scout_scheduling`` via ``safety_ceiling`` with ``environment_ceiling_lifted=false``
+    (whatever its overrides), the others via ``global_configuration`` — the surface is
+    dark. A persisted enable on a ``workspace_enableable`` capability that the ceiling
+    does not block would show
     ``has_override=True``/``decided_by=workspace_override``/``effective_enabled=True``
     while ``global_flag`` stays ``False``. No GLOBAL flag is changed, and every capability's
     live enforcement consumes this same decision: ``opportunity_feedback`` since Phase

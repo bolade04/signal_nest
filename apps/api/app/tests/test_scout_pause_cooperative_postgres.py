@@ -668,6 +668,8 @@ def test_the_schedule_chain_survives_pause_resume_and_a_stale_fenced_job(world, 
 
     w = world
     monkeypatch.setattr(get_settings(), "scout_scheduling_enabled", True)
+    # Live scheduling needs the environment ceiling lifted as well (FU-267-C1).
+    monkeypatch.setattr(get_settings(), "scout_scheduling_ceiling_lifted", True)
     monkeypatch.setattr(pipeline, "fetch_signals", Sources())
     t0 = datetime.now(UTC).replace(microsecond=0) + timedelta(seconds=1)  # after the seed
     clock = [t0]
