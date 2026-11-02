@@ -59,9 +59,8 @@ change of mind is a new row.
   ``Session`` class.
 
 Every check decides by mapper the same way: guarded if its class is, or subclasses, a
-decorated model (the MRO), or if any table it maps is a guarded table (a second mapping, or
-a mapping over a join that includes one). :func:`is_append_only` itself stays exact, for
-enumeration.
+decorated model (the MRO), or if any table it maps is a guarded table (a second mapping).
+:func:`is_append_only` itself stays exact, for enumeration.
 
 The walk reaches what SQLAlchemy's own traversal exposes, and the compile-time check what a
 statement with options compiles to as top-level CTEs. A DML statement that has already been
@@ -223,7 +222,7 @@ def _mapper_is_guarded(mapper: Any) -> bool:
     """Whether a mapper writes guarded rows (CF2-FIX3, W21-REV-CF2-DATA r3 C6): its class is
     (or subclasses) a decorated model, or any table it maps is a guarded table — so a second
     mapping of a guarded table (``__table__ = Model.__table__``, ``registry.map_imperatively(
-    Other, Model.__table__)``, a mapping over a join that includes it) is guarded too."""
+    Other, Model.__table__)``) is guarded too."""
     if is_guarded(mapper.class_):
         return True
     guarded = _guarded_table_ids()
