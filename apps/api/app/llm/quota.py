@@ -226,6 +226,18 @@ def _refuse(reason: str, detail: str | None = None) -> None:
     raise error
 
 
+def ceiling_amount(value: float | int) -> Decimal:
+    """A configured cost ceiling as an exact :class:`~decimal.Decimal` for comparison.
+
+    Never quantized to the ledger's six places: :func:`app.llm.budget.usd` quantizes in the
+    default 28-digit context, which raises ``InvalidOperation`` from 1e22 up, so a huge but
+    valid ceiling (``Settings`` accepts any finite value above 0) would crash the check
+    (DEFECT-5CW4-1). Comparing a six-place ledger amount with the exact configured value
+    needs no rounding, and a Decimal comparison is exact at any magnitude, up to
+    ``sys.float_info.max``. ``usd`` itself (the #269 ledger's) is unchanged."""
+    return Decimal(str(value))
+
+
 def check_ceilings(
     db: Session,
     settings: Settings,
@@ -253,7 +265,7 @@ def check_ceilings(
         (DAILY_COST_WORKSPACE, usage.workspace_cost, workspace_ceiling),
         (DAILY_COST_GLOBAL, usage.global_cost, settings.llm_daily_cost_ceiling_usd_global),
     ):
-        limit = ledger.usd(ceiling)
+        limit = ceiling_amount(ceiling)  # exact, unquantized (DEFECT-5CW4-1)
         total = spent + pending_cost
         if total >= limit or total + worst > limit:
             _refuse(reason)
@@ -318,6 +330,7 @@ __all__ = [
     "CeilingMeter",
     "DailyUsage",
     "LLMCeilingExceededError",
+    "ceiling_amount",
     "check_ceilings",
     "daily_usage",
     "day_window",

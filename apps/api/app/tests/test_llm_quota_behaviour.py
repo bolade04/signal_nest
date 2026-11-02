@@ -21,6 +21,7 @@ seam's quota code (:mod:`app.llm.quota`), on the binding coordinator decisions:
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
 import uuid
@@ -199,6 +200,55 @@ def test_a_ceiling_that_is_not_a_finite_positive_number_counts_as_unset(
     r = world.generate(world.seed_brief(ws), ws=ws)
     assert (r.status_code, r.json()["error"]["code"]) == (503, "creative_generation_unconfigured")
     assert provider.calls == 0
+
+
+HUGE_CEILINGS = [1e22, sys.float_info.max]
+
+
+@pytest.mark.parametrize("name", ["llm_daily_cost_ceiling_usd_per_workspace",
+                                  "llm_daily_cost_ceiling_usd_global"])
+@pytest.mark.parametrize("value", HUGE_CEILINGS, ids=["1e22", "float_max"])
+def test_a_huge_but_valid_cost_ceiling_is_usable(world, ws, monkeypatch, provider, name, value):
+    """DEFECT-5CW4-1: ``Settings`` accepts any finite ceiling above 0. Quantizing it to the
+    ledger's six places raised ``InvalidOperation`` from 1e22 up (a 500 at the route, an
+    unclassified retry in the job). The comparison is exact and unquantized now: the route
+    queues, the job generates, and the real comparison still refuses a spend that reaches
+    the ceiling."""
+    monkeypatch.setattr(get_settings(), name, value)
+    assert unusable_ceilings(get_settings()) == ()
+    _check(world, ws, worst=Decimal("0.5"))  # nothing near it
+    reached = Decimal(str(value))
+    # The other ceiling stays at its small test value; lift it out of the way. A pending
+    # cost counts toward both ceilings and the workspace one is checked first, so with
+    # both at the largest float the refusal names the workspace ceiling.
+    other = ("llm_daily_cost_ceiling_usd_global" if name.endswith("per_workspace")
+             else "llm_daily_cost_ceiling_usd_per_workspace")
+    monkeypatch.setattr(get_settings(), other, sys.float_info.max)
+    if name.endswith("per_workspace") or value == sys.float_info.max:
+        reason = DAILY_COST_WORKSPACE
+    else:
+        reason = DAILY_COST_GLOBAL
+    assert _refused(world, ws, pending_cost=reached) == reason  # reached: refused
+    with world.session() as s:  # the attempt that would cross it: refused
+        with pytest.raises(LLMCeilingExceededError):
+            check_ceilings(s, get_settings(), workspace_id=ws, task=GENERATE_TASK,
+                           now=datetime.now(UTC), pending_cost=reached - Decimal("0.5"),
+                           worst=Decimal("0.75"))
+    monkeypatch.setattr(get_settings(), other, SETTINGS_CEILINGS[other])
+    brief_id = world.seed_brief(ws)
+    job = world.generated(brief_id, ws=ws)
+    assert job["status"] == "succeeded", job
+    assert world.count(CreativeDraft, brief_id=brief_id) == 1
+    assert provider.calls == 1
+
+
+def test_a_ceiling_finer_than_the_ledger_is_compared_exactly(world, ws, monkeypatch):
+    """No rounding either way: a ceiling below half a micro-dollar is not rounded to 0
+    (which would refuse even a free attempt) nor up to a micro-dollar (which would admit
+    an attempt that crosses it)."""
+    monkeypatch.setattr(get_settings(), "llm_daily_cost_ceiling_usd_per_workspace", 4e-7)
+    _check(world, ws)  # a free attempt fits under 0.0000004
+    assert _refused(world, ws, worst=Decimal("0.000001")) == DAILY_COST_WORKSPACE
 
 
 def test_the_meter_itself_refuses_while_a_ceiling_is_unset(world, ws, monkeypatch, provider):
