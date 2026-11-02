@@ -6,7 +6,8 @@
 * **Explicit tenant columns** on both tables, ``NOT NULL`` and cascading with their scope.
 * **Schemas.** Closed vocabularies are enum-typed; requests are strict (``extra="forbid"``)
   and carry no free text, scope, provenance or author; content is bounded; the draft response
-  projects a row without the internal columns; the capability read has exactly one field.
+  projects a row without the internal columns; the capability read is two booleans only (one
+  at CF-2; ``generation_configured`` added at I-5C).
 * **Nothing activates.** ``creative_generation_enabled`` defaults ``False`` (the flag-default
   mutation-check target) and is reflected, required, in ``FeatureFlagsOut`` (O-4); the
   capability is workspace-enableable (O-3); the four cost/quota ceilings default ``None`` and
@@ -255,9 +256,15 @@ def test_the_draft_response_projects_a_row_without_internal_columns() -> None:
     assert out["review"] is None and out["body"] == "Body"
 
 
-def test_the_capability_read_has_exactly_one_field() -> None:
-    assert set(CreativeGenerationCapabilityOut.model_fields) == {"enabled"}
-    assert CreativeGenerationCapabilityOut(enabled=False).model_dump() == {"enabled": False}
+def test_the_capability_read_has_exactly_two_boolean_fields() -> None:
+    """No governance metadata reaches a customer: the reflection is two booleans only. I-5C
+    added ``generation_configured`` (battery O-5; it was one field, ``enabled``, at CF-2)."""
+    fields = CreativeGenerationCapabilityOut.model_fields
+    assert set(fields) == {"enabled", "generation_configured"}
+    assert all(field.annotation is bool for field in fields.values())
+    assert CreativeGenerationCapabilityOut(
+        enabled=False, generation_configured=False
+    ).model_dump() == {"enabled": False, "generation_configured": False}
 
 
 # --------------------------------------------------------------------------- #
