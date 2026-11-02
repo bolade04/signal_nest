@@ -31,10 +31,15 @@ from sqlalchemy import update
 from app.audit.models import AuditLog
 from app.campaign_context.models import ClaimsLibraryEntry
 from app.claims.engine import (
+    BLOCKING_KINDS,
     LibraryEntry,
     active_entries,
+    canonical_kind,
     check_claim_safety,
     fold,
+    is_approved_kind,
+    is_blocking_kind,
+    is_disclaimer_kind,
     review_against_library,
 )
 from app.claims.library import load_library
@@ -490,6 +495,105 @@ def test_the_engine_ignores_retired_entries_and_folds_both_sides():
     clean = review_against_library("Free parking. Terms apply.", None, entries)
     assert (clean.is_blocked, clean.blocked_claim_ids, clean.passed) == (False, [], True)
     assert fold("ｃｕｒｅ  All") == "cure all"
+
+
+# --------------------------------------------------------------------------- #
+# DEFECT-5CW4-2: a library kind is read in canonical form, failing closed by name
+# --------------------------------------------------------------------------- #
+BLOCKING_KIND_SPELLINGS = ["Prohibited", "Blocked", "BLOCKED", " blocked", "prohibited",
+                           "blocked\u200b", "ｂｌｏｃｋｅｄ"]
+INERT_KINDS = ["restricted", "Restricted", "blocked claim", "blocks", "unblocked", ""]
+
+
+@pytest.mark.parametrize("kind", BLOCKING_KIND_SPELLINGS)
+def test_the_engine_blocks_on_every_spelling_of_a_blocking_kind(kind):
+    """``ClaimIn.kind`` is free text: case, spacing, invisible characters and compatibility
+    forms do not decide what an entry does, and the campaign-context UI's "prohibited"
+    blocks like "blocked"."""
+    assert canonical_kind(kind) in BLOCKING_KINDS
+    review = review_against_library(
+        "Enjoy free parking forever.", None, [LibraryEntry("b", "free parking", kind)]
+    )
+    assert (review.is_blocked, review.blocked_claim_ids, review.passed) == (True, ["b"], False)
+
+
+@pytest.mark.parametrize("kind", INERT_KINDS)
+def test_an_unrecognised_kind_blocks_nothing_and_requires_nothing(kind):
+    entries = [LibraryEntry("x", "free parking", kind)]
+    review = review_against_library("Enjoy free parking forever.", None, entries)
+    assert (review.is_blocked, review.blocked_claim_ids, review.required_disclaimers) == (
+        False, [], []
+    )
+    assert not (is_blocking_kind(kind) or is_disclaimer_kind(kind) or is_approved_kind(kind))
+
+
+@pytest.mark.parametrize("kind", ["Required_Disclaimer", " REQUIRED_DISCLAIMER ",
+                                  "required_disclaimer"])
+def test_a_disclaimer_kind_is_read_in_canonical_form(kind):
+    review = review_against_library("Come by.", None, [LibraryEntry("d", "Terms apply.", kind)])
+    assert review.missing_disclaimers == ["Terms apply."] and not review.passed
+
+
+@pytest.mark.parametrize("kind", ["Prohibited", "Blocked", "BLOCKED", " blocked"])
+def test_a_blocking_kind_in_any_spelling_blocks_at_review_and_at_the_approval_recheck(
+    world, kind
+):
+    """End to end inside 5C: an entry added before generation blocks the stored review; one
+    added after the review blocks the approval re-check ("blocked now")."""
+    ws = world.workspace(f"kind {kind.strip()}")
+    entry = world.claim("weekend parking", kind=kind, ws=ws)
+    blocked_brief = world.seed_brief(ws)
+    world.generated(blocked_brief, ws=ws)
+    [blocked] = _drafts(world, blocked_brief)
+    [review] = world.rows(ContentReview, draft_id=blocked["id"])
+    assert (review["is_blocked"], review["blocked_claim_ids"]) == (True, [entry])
+    assert _refusal(world, blocked["id"]) == "review_blocked"
+
+    later = world.workspace(f"kind later {kind.strip()}")
+    brief_id = world.seed_brief(later)
+    world.generated(brief_id, ws=later)
+    [draft] = _drafts(world, brief_id)
+    assert _refusal(world, draft["id"]) is None
+    world.claim("weekend parking", kind=kind, ws=later)
+    assert _refusal(world, draft["id"]) == "blocked_claim"
+
+
+def test_an_unrecognised_kind_neither_blocks_nor_requires_at_review_or_recheck(world):
+    ws = world.workspace("kind inert")
+    for kind in INERT_KINDS:
+        world.claim("weekend parking", kind=kind, ws=ws)
+    brief_id = world.seed_brief(ws)
+    world.generated(brief_id, ws=ws)
+    [draft] = _drafts(world, brief_id)
+    [review] = world.rows(ContentReview, draft_id=draft["id"])
+    assert (review["is_blocked"], review["passed"], review["required_disclaimers"]) == (
+        False, True, []
+    )
+    assert _refusal(world, draft["id"]) is None
+
+
+def test_a_disclaimer_kind_in_another_spelling_is_required_at_the_recheck(world, ws):
+    brief_id = world.seed_brief(ws)
+    world.generated(brief_id, ws=ws)
+    [draft] = _drafts(world, brief_id)
+    world.claim("Licensed in Texas.", kind="Required_Disclaimer", ws=ws)
+    assert _refusal(world, draft["id"]) == "disclaimer_missing"
+
+
+def test_a_kind_spelling_does_not_change_what_the_model_is_offered(world, ws):
+    """Approved claims are offered by canonical kind too; a blocking or unrecognised kind is
+    never offered as approved."""
+    world.claim("Family owned since 1990.", kind="Approved", ws=ws)
+    world.claim("Free valet.", kind="restricted", ws=ws)
+    world.claim("Cures everything.", kind="Prohibited", ws=ws)
+    brief_id = world.seed_brief(ws)
+    with world.session() as s:
+        from app.briefs.models import RecommendationBrief
+
+        context = creative_service.generation_context(
+            s, s.get(RecommendationBrief, brief_id), "email", datetime.now(UTC)
+        )
+    assert context.inputs["approved_claims"] == ["Family owned since 1990."]
 
 
 def test_the_library_loader_does_not_load_retired_entries(world):

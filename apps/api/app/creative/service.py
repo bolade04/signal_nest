@@ -40,7 +40,8 @@ when no draft results (the worker re-writes them after a rollback).
 (:func:`app.llm.screening.screen_creative`): a link, contact detail, markup or instruction
 echo withholds it and nothing is stored. Otherwise the output-side content review runs on
 exactly the persisted text (:func:`app.claims.engine.review_against_library`): claim-safety
-findings, the workspace's active ``blocked`` claims it contains, and whether every required
+findings, the workspace's active blocking claims it contains (``blocked`` or ``prohibited``,
+kinds in canonical form), and whether every required
 disclaimer (the library's, plus the offer calendar's active offers') is carried. The review
 is stored with the draft, one row per draft version, and a blocked or failed review makes
 the draft unapprovable (:func:`draft_approval_refusal`).
@@ -83,14 +84,14 @@ from app.campaign_context.models import BrandVoiceProfile, OfferCalendarEntry
 from app.capabilities.registry import Capability
 from app.capabilities.resolver import resolve_capability
 from app.claims.engine import (
-    APPROVED_KIND,
-    BLOCKED_KIND,
-    DISCLAIMER_KIND,
     LibraryEntry,
     LibraryReview,
     active_entries,
     contains_phrase,
     fold,
+    is_approved_kind,
+    is_blocking_kind,
+    is_disclaimer_kind,
     review_against_library,
 )
 from app.claims.library import load_library
@@ -277,12 +278,14 @@ def draft_approval_refusal(db: Session, draft: CreativeDraft) -> str | None:
     The 5B approval service calls this when ``subject_type == creative_draft`` and refuses
     while it returns a reason. Refused when the draft has no review, when its review is
     blocked or names a blocked claim, when a required disclaimer is unresolved (the review
-    did not pass), when the text contains a ``blocked`` claim that is active in the
-    workspace's library *now* (one added after the draft was reviewed), or when it lacks a
-    ``required_disclaimer`` that is active in the library *now* — the same "library now"
-    re-check for both kinds (W21 review r1, O-4). An offer's disclaimer is not re-read: which
-    offers apply depends on the generation's date and location, so the stored review governs
-    it. A retired entry blocks nothing and requires nothing.
+    did not pass), when the text contains a blocking claim (``blocked`` or ``prohibited``)
+    that is active in the workspace's library *now* (one added after the draft was
+    reviewed), or when it lacks a ``required_disclaimer`` that is active in the library *now*
+    — the same "library now" re-check for both kinds (W21 review r1, O-4). Kinds are read in
+    their canonical form (:func:`app.claims.engine.canonical_kind`, DEFECT-5CW4-2), as the
+    review reads them; any other kind blocks and requires nothing. An offer's disclaimer is
+    not re-read: which offers apply depends on the generation's date and location, so the
+    stored review governs it. A retired entry blocks nothing and requires nothing.
     """
     review = db.scalar(
         select(ContentReview).where(
@@ -299,11 +302,11 @@ def draft_approval_refusal(db: Session, draft: CreativeDraft) -> str | None:
     text = fold(_draft_text(draft))
     active = active_entries(load_library(db, draft.workspace_id))
     for entry in active:
-        if entry.kind == BLOCKED_KIND and contains_phrase(text, fold(entry.text)):
+        if is_blocking_kind(entry.kind) and contains_phrase(text, fold(entry.text)):
             return "blocked_claim"
     for entry in active:
         required = fold(entry.text)
-        if entry.kind == DISCLAIMER_KIND and required and not contains_phrase(text, required):
+        if is_disclaimer_kind(entry.kind) and required and not contains_phrase(text, required):
             return "disclaimer_missing"
     return None
 
@@ -493,7 +496,7 @@ def generation_context(
     library = load_library(db, brief.workspace_id)
     active = active_entries(library)
     offer_disclaimers = _offer_disclaimers(db, brief, now)
-    disclaimers = [e.text for e in active if e.kind == DISCLAIMER_KIND] + offer_disclaimers
+    disclaimers = [e.text for e in active if is_disclaimer_kind(e.kind)] + offer_disclaimers
     profile = db.scalar(
         select(BusinessProfile).where(BusinessProfile.workspace_id == brief.workspace_id)
     )
@@ -504,7 +507,7 @@ def generation_context(
         "recommended_actions": list(brief.recommended_actions or []),
         "suggested_angles": list(brief.suggested_angles or []),
         "brand_voice": _brand_voice(db, brief.workspace_id),
-        "approved_claims": [e.text for e in active if e.kind == APPROVED_KIND],
+        "approved_claims": [e.text for e in active if is_approved_kind(e.kind)],
         "required_disclaimers": disclaimers,
     }
     return GenerationContext(

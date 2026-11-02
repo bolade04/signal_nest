@@ -123,10 +123,14 @@ def check_claim_safety(
 # --------------------------------------------------------------------------- #
 # The workspace claims library (Project Phase 5C output-side content review)
 # --------------------------------------------------------------------------- #
-#: The library kinds the review reads (``ClaimsLibraryEntry.kind``).
+#: The library kinds the review reads (``ClaimsLibraryEntry.kind``), in canonical form: a
+#: stored kind is always compared through :func:`canonical_kind`, never exactly.
 BLOCKED_KIND = "blocked"
 APPROVED_KIND = "approved"
 DISCLAIMER_KIND = "required_disclaimer"
+#: The canonical kinds whose entries block a draft. ``prohibited`` is the campaign-context
+#: UI's name for a blocked claim (its kind select offers approved / restricted / prohibited).
+BLOCKING_KINDS: frozenset[str] = frozenset({BLOCKED_KIND, "prohibited"})
 
 _WHITESPACE = re.compile(r"\s+")
 #: Full stops that IDNA and browsers treat as "." (ideographic, fullwidth, halfwidth
@@ -149,6 +153,40 @@ def fold(text: str) -> str:
     resolving, on either side."""
     canonical = normalise(text).translate(_FULL_STOPS)
     return _WHITESPACE.sub(" ", canonical).strip().casefold()
+
+
+def canonical_kind(kind: str | None) -> str:
+    """A library entry's ``kind`` in the one canonical form the 5C review reads
+    (DEFECT-5CW4-2): :func:`fold`, the claims matching form, so case, spacing, invisible
+    characters and compatibility forms never decide what an entry does.
+
+    ``ClaimIn.kind`` is free text in the CF-2 contract (a closed vocabulary is a later
+    contract decision, matrix O11), and the review used to compare it exactly: a steward's
+    "Blocked", "BLOCKED" or " blocked", and every "prohibited" entry the campaign-context UI
+    creates, were stored and never blocked. Read through this form, fail closed by name:
+
+    * ``blocked`` and ``prohibited`` block (:data:`BLOCKING_KINDS`; :func:`is_blocking_kind`);
+    * ``required_disclaimer`` must be carried (:func:`is_disclaimer_kind`);
+    * ``approved`` is an approved claim offered to the model (:func:`is_approved_kind`);
+    * any other kind — the UI's ``restricted``, a typo, an empty kind — is none of these: it
+      blocks nothing, requires nothing and is never offered to the model as approved.
+    """
+    return fold(kind or "")
+
+
+def is_blocking_kind(kind: str | None) -> bool:
+    """Whether an entry of ``kind`` blocks a draft that contains it."""
+    return canonical_kind(kind) in BLOCKING_KINDS
+
+
+def is_disclaimer_kind(kind: str | None) -> bool:
+    """Whether an entry of ``kind`` is a disclaimer the draft must carry."""
+    return canonical_kind(kind) == DISCLAIMER_KIND
+
+
+def is_approved_kind(kind: str | None) -> bool:
+    """Whether an entry of ``kind`` is an approved claim."""
+    return canonical_kind(kind) == APPROVED_KIND
 
 
 @dataclass(frozen=True)
@@ -213,19 +251,20 @@ def review_against_library(
 ) -> LibraryReview:
     """Review generated ``text`` against the workspace's claims library (Phase 5C §2).
 
-    ``check_claim_safety`` runs over the folded text with every **active** ``blocked`` entry
-    as a blocked claim (one hit makes the result ``blocked``); the hit entries' ids are
-    returned. Required disclaimers are the active ``required_disclaimer`` entries plus
+    ``check_claim_safety`` runs over the folded text with every **active** blocking entry
+    (``blocked`` or ``prohibited`` in :func:`canonical_kind` form) as a blocked claim (one hit
+    makes the result ``blocked``); the hit entries' ids are returned. Required disclaimers
+    are the active ``required_disclaimer`` entries (canonical form) plus
     ``extra_disclaimers`` (the offer calendar's), each resolved when the text contains it.
     Retired entries are ignored (:func:`active_entries`).
     """
     active = active_entries(entries)
     folded = fold(text)
-    blocked = [e for e in active if e.kind == BLOCKED_KIND and fold(e.text)]
+    blocked = [e for e in active if is_blocking_kind(e.kind) and fold(e.text)]
     safety = check_claim_safety(folded, industry, blocked_claims=[fold(e.text) for e in blocked])
     hit_ids = [e.id for e in blocked if contains_phrase(folded, fold(e.text))]
     disclaimers = _unique(
-        [*(e.text for e in active if e.kind == DISCLAIMER_KIND), *extra_disclaimers]
+        [*(e.text for e in active if is_disclaimer_kind(e.kind)), *extra_disclaimers]
     )
     missing = [d for d in disclaimers if not contains_phrase(folded, fold(d))]
     return LibraryReview(safety, hit_ids, disclaimers, missing)

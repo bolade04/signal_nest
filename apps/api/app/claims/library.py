@@ -2,8 +2,11 @@
 
 The library (``claims_library``, :class:`~app.campaign_context.models.ClaimsLibraryEntry`) is
 load-bearing for the 5C output-side review: its ``blocked`` entries block a generated draft
-and its ``required_disclaimer`` entries must appear in it. This module holds the pieces every
-writer and reader of the library shares, so there is one authority for each:
+and its ``required_disclaimer`` entries must appear in it. ``kind`` is free text; the review
+reads it in canonical form (:func:`app.claims.engine.canonical_kind`), so "Blocked" and the
+campaign-context UI's "prohibited" block too, and an unrecognised kind does nothing. This
+module holds the pieces every writer and reader of the library shares, so there is one
+authority for each:
 
 * :data:`CLAIMS_STEWARD_ROLES` — the exact roles that may write the library (W21 CF-2:
   ``OWNER``, ``ADMIN``, ``COMPLIANCE_REVIEWER``; no rank inheritance). The ``/claims`` routes
