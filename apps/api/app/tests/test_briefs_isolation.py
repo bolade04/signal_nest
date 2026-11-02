@@ -519,7 +519,8 @@ class TestCaptureLockIsPerOpportunity:
 
     Kills W4A-M03 (``_next_version`` locks every opportunity row), REV-A1 (it locks every
     opportunity of the workspace; review W21-REV-ADV5AB r1 MINOR-1) and REV-A2 (it takes no
-    lock). All three survive ``test_briefs_postgres.py``.
+    lock). W4A-M03 and REV-A1 survive ``test_briefs_postgres.py``; REV-A2 is also caught
+    there, by ``test_concurrent_captures_serialize_into_a_linear_version_chain``.
 
     Same-workspace concurrency is probed by the lock itself, not by letting a second capture
     run: on the unpriced (mock) path two captures in one workspace also wait on the
