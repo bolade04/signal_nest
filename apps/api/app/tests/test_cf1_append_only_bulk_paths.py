@@ -10,15 +10,19 @@ that is not the statement itself: a data-modifying CTE (which PostgreSQL execute
 to a ``select()`` or to an outer INSERT, UPDATE or DELETE of another table, selected from, in
 a scalar subquery or under ``INSERT … FROM SELECT``, an upsert CTE, and ``from_statement()``
 under the model or under another entity (update, delete, upsert, prefixed insert, or carrying
-such a CTE), for each append-only model (the three of CF-1 and, since CF-2,
-``creative_drafts`` and ``content_reviews``), and shows:
+such a CTE), and, since CF2-FIX3 (r3 C6), every path through a second mapping of a guarded
+table (``registry.map_imperatively`` and a declarative ``__table__ = Model.__table__``), for
+each append-only model (the three of CF-1 and, since CF-2, ``creative_drafts`` and
+``content_reviews``), and shows:
 
 * each path raises :class:`~app.db.append_only.AppendOnlyViolation` and the stored row is
   byte-identical afterwards;
 * the sanctioned Core statements on the *table* (privacy anonymisation, the foreign-key walk)
   still work under the guard, Core DML on the table is not refused in any position (a CTE on
-  a ``select()`` or on another table's UPDATE, ``from_statement()`` under another entity),
-  and a plain ORM INSERT is not refused in any position (top level, ``ON CONFLICT DO
+  a ``select()`` or on another table's UPDATE, ``from_statement()`` under another entity,
+  with an ORM attribute in its WHERE), a write to another table whose criteria select from a
+  guarded model is not refused (r3 C7: judged by its target), and a plain ORM INSERT is not
+  refused in any position (top level, ``ON CONFLICT DO
   NOTHING``, ``from_statement``, as a CTE); no guarded table declares a SQLite DDL conflict
   clause;
 * **static pin:** no production module outside ``app/privacy/`` builds an UPDATE or DELETE
@@ -65,13 +69,14 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import DeclarativeBase, registry, sessionmaker
 
 from app.approvals.models import Approval
 from app.audit.models import AuditLog
 from app.briefs.models import RecommendationBrief
 from app.creative.models import ContentReview, CreativeDraft
 from app.db.append_only import AppendOnlyViolation
+from app.jobs.worker_models import WorkerRegistration
 from app.organizations.models import Organization
 from app.tests._privacy_support import ORG_A, WS_A, PrivacyEnv, privacy_world
 
@@ -475,7 +480,17 @@ def _core_dml_from_statement_other_entity(m, rid):
     return select(Organization.id).from_statement(stmt), False
 
 
+def _core_update_with_orm_attribute_in_where(m, rid):
+    # CF2-FIX3 (r3 C7): an ORM attribute in a Core statement's WHERE sets its plugin subject,
+    # but its target is the plain table: Core, not refused.
+    t = m.__table__
+    return update(t).where(m.id == rid).values({FIELD[m]: "core"}), False
+
+
 CORE_CONTROLS = {
+    "update(Model.__table__).where(Model.id == rid) [ORM attribute in WHERE]": (
+        _core_update_with_orm_attribute_in_where
+    ),
     "select(1).add_cte(update(Model.__table__)...cte())": _core_cte_in_select,
     "update(sink).add_cte(update(Model.__table__)...cte())": _core_cte_on_outer_update,
     "select(Other.id).from_statement(update(Model.__table__))": (
@@ -505,6 +520,130 @@ def test_core_table_dml_in_any_position_is_not_refused_by_the_guard(world, model
             result.all()
         s.commit()
     assert _stored(world, model, rid)[FIELD[model]] == "core"
+
+
+# --------------------------------------------------------------------------- #
+# CF2-FIX3 (W21-REV-CF2-DATA r3 C6): a second mapping of a guarded table. The guard is keyed
+# on the table: a class that maps it without subclassing the model is refused on every path.
+# Both mapping styles, in registries of their own (never Base.registry, which the privacy
+# inventory enumerates).
+# --------------------------------------------------------------------------- #
+_SHADOW_REGISTRY = registry()
+
+
+class _ShadowBase(DeclarativeBase):
+    """A declarative base of its own for the ``__table__ = Model.__table__`` style."""
+
+
+def _imperative_shadow(model):
+    shadow = type(f"Imperative{model.__name__}", (), {})
+    _SHADOW_REGISTRY.map_imperatively(shadow, model.__table__)
+    return shadow
+
+
+def _declarative_shadow(model):
+    return type(f"Declarative{model.__name__}", (_ShadowBase,), {"__table__": model.__table__})
+
+
+SHADOWS = {
+    "map_imperatively(Other, Model.__table__)": {m: _imperative_shadow(m) for m in GUARDED},
+    "class Other(Base): __table__ = Model.__table__": {
+        m: _declarative_shadow(m) for m in GUARDED
+    },
+}
+
+
+def _shadow_update(s, m, sh, rid, w):
+    s.execute(update(sh).where(sh.id == rid).values({FIELD[m]: "changed"}))
+
+
+def _shadow_flush_update(s, m, sh, rid, w):
+    setattr(s.get(sh, rid), FIELD[m], "changed")
+    s.flush()
+
+
+def _shadow_flush_delete(s, m, sh, rid, w):
+    s.delete(s.get(sh, rid))
+    s.flush()
+
+
+def _shadow_bulk_update_mappings(s, m, sh, rid, w):
+    s.bulk_update_mappings(sh, [{"id": rid, FIELD[m]: "changed"}])
+
+
+def _shadow_upsert(s, m, sh, rid, w):
+    upsert = _upsert(w)(sh).values(**_stored(w, m, rid)).on_conflict_do_update(
+        index_elements=["id"], set_={FIELD[m]: "changed"}
+    )
+    s.execute(upsert)
+
+
+def _shadow_update_cte(s, m, sh, rid, w):
+    cte = update(sh).where(sh.id == rid).values({FIELD[m]: "changed"}).returning(sh.id)
+    s.execute(select(literal_column("1")).add_cte(cte.cte("u"))).all()
+
+
+SHADOW_PATHS = {
+    "execute(update(Other))": _shadow_update,
+    "flush an attribute change on Other": _shadow_flush_update,
+    "session.delete(Other) + flush": _shadow_flush_delete,
+    "bulk_update_mappings(Other)": _shadow_bulk_update_mappings,
+    "upsert on Other": _shadow_upsert,
+    "select(1).add_cte(update(Other)...cte())": _shadow_update_cte,
+}
+
+
+@pytest.mark.parametrize("model", GUARDED, ids=lambda m: m.__tablename__)
+@pytest.mark.parametrize("path", list(SHADOW_PATHS))
+@pytest.mark.parametrize("style", list(SHADOWS))
+def test_a_second_mapping_of_a_guarded_table_is_refused(world, style, path, model):
+    rid = _seed(world)[model]
+    before = _stored(world, model, rid)
+    shadow = SHADOWS[style][model]
+    factory = sessionmaker(bind=world.engine, expire_on_commit=False, future=True)
+    with factory() as s:
+        with pytest.raises(AppendOnlyViolation):
+            SHADOW_PATHS[path](s, model, shadow, rid, world)
+            s.commit()
+        s.rollback()
+    assert _stored(world, model, rid) == before
+
+
+def _core_delete_another_table_filtered_by_model(m, rid):
+    t = WorkerRegistration.__table__
+    return delete(t).where(t.c.id.in_(select(m.id).where(m.id == rid)))
+
+
+def _orm_update_another_model_filtered_by_model(m, rid):
+    sub = select(m.organization_id).where(m.id == rid)
+    return update(Organization).where(Organization.id.in_(sub)).values(name=Organization.name)
+
+
+OTHER_TABLE_CONTROLS = {
+    "delete(worker_registrations table).where(id IN select(Model.id))": (
+        _core_delete_another_table_filtered_by_model
+    ),
+    "update(Organization).where(id IN select(Model.organization_id))": (
+        _orm_update_another_model_filtered_by_model
+    ),
+}
+
+
+@pytest.mark.parametrize("model", GUARDED, ids=lambda m: m.__tablename__)
+@pytest.mark.parametrize("form", list(OTHER_TABLE_CONTROLS))
+def test_a_write_to_another_table_that_mentions_a_guarded_model_is_not_refused(
+    world, form, model
+):
+    """CF2-FIX3 (r3 C7): the guard judges a DML statement by its target. A write to an
+    unguarded table (Core or ORM) whose criteria select from a guarded model is not refused,
+    and the guarded row is untouched."""
+    rid = _seed(world)[model]
+    before = _stored(world, model, rid)
+    factory = sessionmaker(bind=world.engine, expire_on_commit=False, future=True)
+    with factory() as s:
+        s.execute(OTHER_TABLE_CONTROLS[form](model, rid))
+        s.commit()
+    assert _stored(world, model, rid) == before
 
 
 @pytest.mark.parametrize("model", GUARDED, ids=lambda m: m.__tablename__)
