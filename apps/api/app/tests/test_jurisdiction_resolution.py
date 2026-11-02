@@ -258,6 +258,9 @@ def test_a_forged_resolution_carrying_the_sentinel_still_denies():
         ("US", (), ("US-CA",), False),  # a whole country cannot be ruled out of a state
         ("GB", (), ("GB-ENG",), False),
         ("KE", (), ("NG", "US-TX"), True),
+        # An exclusion beats an allowance (exclusions are read first).
+        ("US-TX", ("US",), ("US-TX",), False),
+        ("NG-LA", ("NG-LA",), ("NG",), False),
         # An exclusion that is not a code cannot be ruled out: deny.
         ("KE", (), ("Kenya",), False),
         ("KE", (), (UNRESOLVED,), False),
