@@ -6,13 +6,15 @@ found open at ``30fc045c`` — ORM-enabled UPDATE/DELETE statements, ``Query.upd
 the legacy bulk API and an ORM upsert — plus, since FU-CF1-H1, an ORM insert carrying a
 statement prefix (SQLite ``OR REPLACE`` replaced a stored row through a session) and, since
 CF2-FIX2 (W21-REV-CF2-DATA r2 C3; FU-CF1-H2 as extended after W21-REV-CF1-DESC r3), ORM DML
-that is not the statement itself: a data-modifying CTE (which PostgreSQL executes) attached
-to a ``select()`` or to an outer INSERT, UPDATE or DELETE of another table, selected from, in
-a scalar subquery or under ``INSERT … FROM SELECT``, an upsert CTE, and ``from_statement()``
+that is not the statement itself: a data-modifying CTE (which PostgreSQL executes) attached to
+a ``select()`` or to an outer INSERT, UPDATE or DELETE of another table, selected from, in a
+scalar subquery or under ``INSERT … FROM SELECT``, an upsert CTE, and ``from_statement()``
 under the model or under another entity (update, delete, upsert, prefixed insert, or carrying
-such a CTE), and, since CF2-FIX3 (r3 C6), every path through a second mapping of a guarded
-table (``registry.map_imperatively`` and a declarative ``__table__ = Model.__table__``), for
-each append-only model (the three of CF-1 and, since CF-2, ``creative_drafts`` and
+such a CTE), DML referenced from loader-option criteria (``with_loader_criteria``,
+``joinedload`` / ``selectinload`` of a relationship ``.and_()``; CF2-FIX3, r3 C5), and, since
+CF2-FIX3 (r3 C6), every path through a second mapping of a guarded table
+(``registry.map_imperatively`` and a declarative ``__table__ = Model.__table__``), for each
+append-only model (the three of CF-1 and, since CF-2, ``creative_drafts`` and
 ``content_reviews``), and shows:
 
 * each path raises :class:`~app.db.append_only.AppendOnlyViolation` and the stored row is
@@ -69,7 +71,14 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.orm import DeclarativeBase, registry, sessionmaker
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    joinedload,
+    registry,
+    selectinload,
+    sessionmaker,
+    with_loader_criteria,
+)
 
 from app.approvals.models import Approval
 from app.audit.models import AuditLog
@@ -77,7 +86,7 @@ from app.briefs.models import RecommendationBrief
 from app.creative.models import ContentReview, CreativeDraft
 from app.db.append_only import AppendOnlyViolation
 from app.jobs.worker_models import WorkerRegistration
-from app.organizations.models import Organization
+from app.organizations.models import Organization, Workspace
 from app.tests._privacy_support import ORG_A, WS_A, PrivacyEnv, privacy_world
 
 API_DIR = Path(__file__).resolve().parents[2]
@@ -353,6 +362,33 @@ def _from_statement_other_entity_upsert(s, m, rid, w):
     s.execute(select(Organization.id).from_statement(stmt)).all()
 
 
+# CF2-FIX3 (W21-REV-CF2-DATA r3 C5): DML referenced from loader-option criteria, which
+# SQLAlchemy applies only at compile time (the walk cannot see it); the guard compiles a
+# statement that carries options and judges its top-level CTEs. PostgreSQL ran all of these.
+def _with_loader_criteria(s, m, rid, w):
+    cte = _update_returning(m, rid).cte("u")
+    crit = with_loader_criteria(Organization, Organization.id.in_(select(cte.c.id)))
+    s.execute(select(Organization).options(crit)).all()
+
+
+def _joinedload_and(s, m, rid, w):
+    cte = _update_returning(m, rid).cte("u")
+    load = joinedload(Organization.workspaces.and_(Workspace.id.in_(select(cte.c.id))))
+    s.execute(select(Organization).options(load)).unique().all()
+
+
+def _selectinload_and(s, m, rid, w):
+    cte = _update_returning(m, rid).cte("u")
+    load = selectinload(Organization.workspaces.and_(Workspace.id.in_(select(cte.c.id))))
+    s.execute(select(Organization).options(load)).all()
+
+
+def _query_with_loader_criteria(s, m, rid, w):
+    cte = delete(m).where(m.id == rid).returning(m.id).cte("d")
+    crit = with_loader_criteria(Organization, Organization.id.in_(select(cte.c.id)))
+    s.query(Organization).options(crit).all()
+
+
 def _from_statement_other_entity_carrying_a_cte(s, m, rid, w):
     carrier = (
         update(Organization).where(Organization.id == _ELSEWHERE).values(name="x")
@@ -396,6 +432,14 @@ PATHS: dict[str, Callable] = {
     "select(Other.id).from_statement(upsert(Model))": _from_statement_other_entity_upsert,
     "select(Other.id).from_statement(update(Other).add_cte(update(Model)...cte()))": (
         _from_statement_other_entity_carrying_a_cte
+    ),
+    "options(with_loader_criteria(Other, ...select(update(Model) cte)...))": (
+        _with_loader_criteria
+    ),
+    "options(joinedload(Other.rel.and_(...select(update(Model) cte)...)))": _joinedload_and,
+    "options(selectinload(Other.rel.and_(...select(update(Model) cte)...)))": _selectinload_and,
+    "query(Other).options(with_loader_criteria(...select(delete(Model) cte)...))": (
+        _query_with_loader_criteria
     ),
 }
 

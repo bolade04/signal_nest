@@ -9,9 +9,10 @@ table (``__table__ = Model.__table__``, ``registry.map_imperatively(Other, Model
 That is a flush, the legacy bulk API, and an ORM UPDATE, DELETE, upsert or prefixed INSERT
 whose target is a guarded table, in a statement passed to ``Session.execute``
 (``Query.update/delete`` included): as the statement itself, inside a ``from_statement()``
-under any entity, or as a CTE attached anywhere in it. Writes that are not ORM-enabled, or
-not made through the ``Session``, are listed under "What is not refused, by design". A
-revision is a new row; a change of mind is a new row.
+under any entity, as a CTE attached anywhere in it, or as a CTE that loader-option criteria
+add when the statement is compiled. Writes that are not ORM-enabled, or not made through the
+``Session``, are listed under "What is not refused, by design". A revision is a new row; a
+change of mind is a new row.
 
 **What is refused (every ORM write path except INSERT):**
 
@@ -41,8 +42,17 @@ revision is a new row; a change of mind is a new row.
   (``WITH u AS (UPDATE …)``, which PostgreSQL executes) wherever it is attached — to a
   ``select()``, or to an outer INSERT, UPDATE or DELETE of another table — or selected from at
   any depth (subquery, scalar subquery, ``union``, ``exists``, ``INSERT … FROM SELECT``), and
-  any combination of these. A plain ``insert(Model)`` (``ON CONFLICT DO NOTHING`` included)
-  is not refused in any position: append-only means insert-only;
+  any combination of these. **Loader-option criteria** (CF2-FIX3, r3 C5):
+  ``with_loader_criteria`` and a relationship's ``.and_()`` inside ``joinedload`` /
+  ``selectinload`` / … live in the statement's options, which SQLAlchemy applies only when it
+  compiles the statement, so the walk does not see DML referenced from them; when a
+  statement carries options, the listener also compiles it for the session's bind and judges
+  every top-level CTE of the compiled form by the same rule — that is where such DML runs
+  (PostgreSQL executes a data-modifying CTE only at the top level, SQLAlchemy hoists
+  non-nesting CTEs there, SQLite runs none), and ``selectinload``'s second statement passes
+  through the listener and is compiled and judged in turn. A plain ``insert(Model)`` (``ON
+  CONFLICT DO NOTHING`` included) is not refused in any position: append-only means
+  insert-only;
 * the legacy bulk API: ``Session.bulk_update_mappings()`` for a mapper that maps a guarded
   table, and ``Session.bulk_save_objects()`` with an instance of one that already has an
   identity (an update). These methods emit no event, so this module wraps them on the
@@ -53,12 +63,11 @@ decorated model (the MRO), or if any table it maps is a guarded table (a second 
 a mapping over a join that includes one). :func:`is_append_only` itself stays exact, for
 enumeration.
 
-The walk reaches what SQLAlchemy's own traversal exposes. It does **not** see DML referenced
-from loader-option criteria (``with_loader_criteria``, a relationship's ``.and_()`` inside
-``joinedload`` / ``selectinload`` / …), which SQLAlchemy applies only when it compiles the
-statement. A DML statement that has already been turned into SQL text before execution
-(``text(str(stmt.compile()))``), or that is held by a custom ``ClauseElement`` which does not
-expose it to traversal, is raw SQL to the guard (see below).
+The walk reaches what SQLAlchemy's own traversal exposes, and the compile-time check what a
+statement with options compiles to as top-level CTEs. A DML statement that has already been
+turned into SQL text before execution (``text(str(stmt.compile()))``), or that is held by a
+custom ``ClauseElement`` which exposes it neither to traversal nor as a compiled CTE, is raw
+SQL to the guard (see below).
 
 **Why every prefix, not only ``OR REPLACE`` (FU-CF1-H1).** A prefix is free dialect text
 (``"OR REPLACE"``, ``"or  replace"``, ``text("OR REPLACE")``, a dialect-restricted prefix), so
@@ -285,16 +294,41 @@ def _guarded_dml(statement: Any) -> tuple[str, str] | None:
     return None
 
 
+def _compiled_guarded_dml(state: ORMExecuteState) -> tuple[str, str] | None:
+    """Loader-option criteria (CF2-FIX3, W21-REV-CF2-DATA r3 C5). ``with_loader_criteria``
+    and a relationship's ``.and_()`` inside ``joinedload`` / ``selectinload`` / … live in the
+    statement's options and are applied when SQLAlchemy compiles it, so the walk above does
+    not see DML referenced from them. When the statement carries options, compile it for the
+    session's bind and judge every top-level CTE of the compiled form by the same rule. That
+    is where such DML runs: PostgreSQL executes a data-modifying CTE only at the top level,
+    SQLAlchemy hoists non-nesting CTEs there, and SQLite runs none. ``selectinload``'s
+    criteria reach the database in its own second statement, which passes through this
+    listener with its options and is compiled and judged in turn."""
+    if not getattr(state.statement, "_with_options", None):
+        return None
+    bind = state.session.get_bind(**state.bind_arguments)
+    compiled = state.statement.compile(dialect=bind.dialect)
+    for cte in getattr(compiled, "ctes", None) or ():
+        element = getattr(cte, "element", None)
+        if isinstance(element, UpdateBase):
+            found = _judge(element)
+            if found is not None:
+                name, operation = found
+                return name, operation + " in a CTE added at compile time (loader-option criteria)"
+    return None
+
+
 @event.listens_for(Session, "do_orm_execute")
 def _refuse_orm_statements(state: ORMExecuteState) -> None:
     """Refuse an ORM-enabled UPDATE, DELETE, upsert or prefixed INSERT on a guarded table
-    wherever it stands in the statement (see :func:`_guarded_dml`).
+    wherever it stands in the statement (see :func:`_guarded_dml`), or in a CTE that loader
+    options add at compile time (see :func:`_compiled_guarded_dml`).
 
     This listener runs for every statement passed to ``Session.execute`` (ORM-enabled or
     not), before SQLAlchemy compiles it for execution. A statement whose target is a plain
     ``Table`` (the sanctioned Core paths) has no target mapper and passes.
     """
-    found = _guarded_dml(state.statement)
+    found = _guarded_dml(state.statement) or _compiled_guarded_dml(state)
     if found is not None:
         name, operation = found
         raise _refusal(name, operation)
