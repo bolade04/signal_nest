@@ -581,11 +581,14 @@ def test_a_disclaimer_kind_in_another_spelling_is_required_at_the_recheck(world,
 
 
 def test_a_kind_spelling_does_not_change_what_the_model_is_offered(world, ws):
-    """Approved claims are offered by canonical kind too; a blocking or unrecognised kind is
-    never offered as approved."""
+    """Approved claims and required disclaimers reach the model by canonical kind too; a
+    blocking or unrecognised kind is never offered as approved. A disclaimer kind in another
+    spelling is in the inputs, so the generated draft carries it and its review resolves
+    (W21-REV-P5C r3 MINOR-1, mutant K8)."""
     world.claim("Family owned since 1990.", kind="Approved", ws=ws)
     world.claim("Free valet.", kind="restricted", ws=ws)
     world.claim("Cures everything.", kind="Prohibited", ws=ws)
+    world.claim("Licensed in Texas.", kind="Required_Disclaimer", ws=ws)
     brief_id = world.seed_brief(ws)
     with world.session() as s:
         from app.briefs.models import RecommendationBrief
@@ -594,6 +597,13 @@ def test_a_kind_spelling_does_not_change_what_the_model_is_offered(world, ws):
             s, s.get(RecommendationBrief, brief_id), "email", datetime.now(UTC)
         )
     assert context.inputs["approved_claims"] == ["Family owned since 1990."]
+    assert context.inputs["required_disclaimers"] == ["Licensed in Texas."]
+    assert world.generated(brief_id, ws=ws, channel="email")["status"] == "succeeded"
+    [draft] = _drafts(world, brief_id)
+    assert "Licensed in Texas." in draft["body"]
+    [review] = world.rows(ContentReview, draft_id=draft["id"])
+    assert review["required_disclaimers"] == ["Licensed in Texas."]
+    assert (review["disclaimers_resolved"], review["passed"]) == (True, True)
 
 
 def test_the_library_loader_does_not_load_retired_entries(world):
