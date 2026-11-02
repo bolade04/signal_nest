@@ -310,6 +310,46 @@ def _child_value(s: Session) -> str:
     return s.execute(select(t.c.value).where(t.c.id == "c1")).scalar_one()
 
 
+@append_only
+class _ConcreteParent(_PrivateBase):
+    __tablename__ = "cf1_concrete_parent_probe"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    value: Mapped[str] = mapped_column(String(32))
+
+
+class _ConcreteChild(_ConcreteParent):
+    """Concrete-table inheritance: the subclass maps a table of its own, not a guarded table,
+    so only the class (MRO) check guards it — the case the table key alone does not cover
+    (CF2-FIX3)."""
+
+    __tablename__ = "cf1_concrete_child_probe"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    value: Mapped[str] = mapped_column(String(32))
+    __mapper_args__ = {"concrete": True}
+
+
+@pytest.mark.parametrize("path", ["flush update", "update(ConcreteSubClass)"])
+def test_a_concrete_subclass_is_guarded_by_its_class(path) -> None:
+    engine = create_engine("sqlite://", future=True)
+    _PrivateBase.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False, future=True)
+    with factory() as s:
+        s.add(_ConcreteChild(id="k1", value="original"))
+        s.commit()
+        with pytest.raises(AppendOnlyViolation):
+            if path == "flush update":
+                s.get(_ConcreteChild, "k1").value = "changed"
+                s.commit()
+            else:
+                s.execute(
+                    update(_ConcreteChild).where(_ConcreteChild.id == "k1").values(value="x")
+                )
+        s.rollback()
+        t = _PrivateBase.metadata.tables["cf1_concrete_child_probe"]
+        assert s.execute(select(t.c.value).where(t.c.id == "k1")).scalar_one() == "original"
+    engine.dispose()
+
+
 def test_the_subclass_is_guarded_but_not_enumerated_as_decorated() -> None:
     assert is_guarded(_Child) and is_guarded(_Parent)
     assert is_append_only(_Parent) and not is_append_only(_Child)
