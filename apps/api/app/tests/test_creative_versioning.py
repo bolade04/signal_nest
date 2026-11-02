@@ -392,17 +392,37 @@ def test_postgres_concurrent_generations_take_distinct_contiguous_versions_per_b
     parent) after version 1; plus a second brief of the same workspace and a brief of the
     sibling workspace generating across channels at the same time. Four workers drain them
     concurrently: every brief is numbered 1..n with no gap or duplicate, and every job made
-    exactly one draft with one review."""
+    exactly one draft with one review.
+
+    The allocation window is held open (review W21-REV-5CW4 r1 MINOR-1): every allocation
+    holds 0.3 s after it has read ``max + 1`` (``creative_service._next_version`` wrapped,
+    still inside the attempt's transaction and locks), so attempts of one brief that are not
+    serialized are certain to meet there (the unique key then fails one as
+    ``version_conflict``). Under the generation locks the hold only adds latency, and the
+    recorded windows of one brief never overlap."""
+    import time
+
     from app.tests._creative_support import postgres_creative_world
 
     for name, value in GENEROUS.items():
         monkeypatch.setattr(get_settings(), name, value)
+    windows: list[tuple[str, float, float]] = []
+    real_next_version = creative_service._next_version
+
+    def held(db, brief_row):
+        version = real_next_version(db, brief_row)
+        opened = time.monotonic()
+        time.sleep(0.3)  # the window between reading max + 1 and the insert, widened
+        windows.append((brief_row.id, opened, time.monotonic()))
+        return version
+
     with postgres_creative_world("w4alloc") as world:
         world.enable()
         world.enable(world.ws2)
         brief = world.seed_brief()
         assert world.generated(brief)["status"] == "succeeded"
         [v1] = world.rows(CreativeDraft, brief_id=brief)
+        monkeypatch.setattr(creative_service, "_next_version", held)
         second, sibling = world.seed_brief(), world.seed_brief(world.ws2)
         jobs: dict[str, list[str]] = {brief: [], second: [], sibling: []}
         for role in EDITORS:
@@ -426,6 +446,11 @@ def test_postgres_concurrent_generations_take_distinct_contiguous_versions_per_b
                             sibling: [1, 2, 3, 4]}
         assert world.count(ContentReview) == 15
         assert world.count(CreativeDraft) == 15
+        assert len(windows) == 14  # every concurrent attempt allocated once, none retried
+        for brief_id in jobs:
+            spans = sorted((a, b) for w, a, b in windows if w == brief_id)
+            for (_, end), (start, _) in zip(spans, spans[1:], strict=False):
+                assert start >= end, f"two allocations of brief {brief_id} overlapped"
 
 
 def test_postgres_racing_identical_requests_make_one_job_then_one_draft_even_after_a_failure(
