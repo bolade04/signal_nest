@@ -63,3 +63,15 @@ describe('queryKeys: creative drafts and generation availability (CF-2)', () => 
     }
   });
 });
+
+describe('queryKeys: a draft version\'s decisions (I-5C)', () => {
+  it('is per workspace and per draft, under that draft\'s key', () => {
+    const key = queryKeys.draftApprovals('ws-1', 'draft-1');
+    expect(key).toEqual(['workspaces', 'ws-1', 'drafts', 'draft-1', 'approvals']);
+    const draft = queryKeys.creativeDraft('ws-1', 'draft-1');
+    expect(key.slice(0, draft.length)).toEqual([...draft]);
+    expect(key).not.toEqual(queryKeys.draftApprovals('ws-2', 'draft-1'));
+    expect(key).not.toEqual(queryKeys.draftApprovals('ws-1', 'draft-2'));
+    expect(key).not.toEqual(queryKeys.briefApprovals('ws-1', 'opp-1', 'draft-1'));
+  });
+});

@@ -1142,6 +1142,18 @@ const APPROVALS_DARK = () =>
     { status: 503 },
   );
 
+// Phase 5C (I-5C integration): the dark answer of every draft route (app/creative/routes.py).
+const CREATIVE_DARK = () =>
+  HttpResponse.json(
+    {
+      error: {
+        code: 'capability_unavailable',
+        message: 'Creative generation is not available yet.',
+      },
+    },
+    { status: 503 },
+  );
+
 export const handlers = [
   // ---- Tenant gate for every workspace-scoped route (runs first, then falls through) ----
   http.all(P('/workspaces/:ws'), tenantGate),
@@ -1945,6 +1957,21 @@ export const handlers = [
     http.get(P('/workspaces/:ws/opportunities/:id/briefs'), () => BRIEFS_DARK()),
     http.post(P('/workspaces/:ws/opportunities/:id/briefs'), () => BRIEFS_DARK()),
     http.get(P('/workspaces/:ws/opportunities/:id/briefs/:briefId'), () => BRIEFS_DARK()),
+  ],
+
+  // ---- Creative drafts (Phase 5C; mounted at I-5C) — dark by default ----
+  // The reflection answers 200 even while dark; every draft route answers 503 with the
+  // server's message (app/creative/routes.py). Tests opt in with server.use(...). The
+  // reflection must precede the greedy campaign-context `/workspaces/:ws/:kind` match.
+  ...[
+    http.get(P('/workspaces/:ws/creative-capability'), () =>
+      HttpResponse.json({ enabled: false, generation_configured: false }),
+    ),
+    http.get(P('/workspaces/:ws/briefs/:briefId/drafts'), () => CREATIVE_DARK()),
+    http.post(P('/workspaces/:ws/briefs/:briefId/drafts'), () => CREATIVE_DARK()),
+    http.get(P('/workspaces/:ws/drafts/:draftId'), () => CREATIVE_DARK()),
+    http.get(P('/workspaces/:ws/drafts/:draftId/approvals'), () => CREATIVE_DARK()),
+    http.post(P('/workspaces/:ws/drafts/:draftId/approvals'), () => CREATIVE_DARK()),
   ],
 
   // ---- Approval decisions (Phase 5B; same dark switch as the briefs; I-5A/I-5B) ----

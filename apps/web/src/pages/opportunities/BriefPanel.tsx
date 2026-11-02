@@ -8,7 +8,9 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { canEditWorkspace, useActorRole } from '@/lib/roles';
+import { Link } from 'react-router-dom';
 import { BriefDecisions } from '@/pages/approvals/BriefDecisions';
+import { useCreativeCapability } from '@/pages/creative/useCreative';
 import { formatDateTime } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
 import {
@@ -128,6 +130,8 @@ function BriefPanelBody({
   // The same cache entry the intelligence panel reads: no extra request.
   const intelligence = useOpportunityIntelligence({ workspaceId, opportunityId });
   const create = useCreateBrief({ workspaceId, opportunityId });
+  // I-5C: the shown version's drafts are one link away while creative generation is enabled.
+  const creative = useCreativeCapability(workspaceId);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   // Enabled globally but resolved disabled for this workspace: hide, as when dark.
@@ -171,6 +175,13 @@ function BriefPanelBody({
                 briefVersion: shown.brief_version,
               }}
             />
+            {creative.isEnabled ? (
+              <Button size="sm" variant="outline" asChild>
+                <Link to={`/creative/${shown.id}?opportunity=${encodeURIComponent(opportunityId)}`}>
+                  Open drafts
+                </Link>
+              </Button>
+            ) : null}
           </>
         ) : (
           <p className="text-sm text-muted-foreground">No brief has been generated yet.</p>

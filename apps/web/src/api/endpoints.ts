@@ -691,3 +691,29 @@ export const generateCreativeDraft = (
     body,
   });
 // --- Project Phase 5C: text creative generation (W21 lane P5C) — END -----------
+
+// ---- I-5C integration (W21 INT5AB): decisions on one draft version — begin ----------
+// The 5C build's decision routes (same rules as a brief's): recording a decision is for the
+// REVIEWER role exactly and never the draft's author; the history is readable by every role
+// but viewer. Dark (503 capability_unavailable) while creative_generation resolves disabled.
+const draftDecisionsPath = (workspaceId: string, draftId: string) =>
+  `/workspaces/${workspaceId}/drafts/${draftId}/approvals`;
+
+export const listDraftDecisions = (
+  workspaceId: string,
+  draftId: string,
+  params: { limit?: number; offset?: number } = {},
+  signal?: AbortSignal,
+) =>
+  apiRequest<ApprovalHistoryOut>(draftDecisionsPath(workspaceId, draftId), {
+    query: { ...params },
+    signal,
+  });
+
+export const recordDraftDecision = (
+  workspaceId: string,
+  draftId: string,
+  body: ApprovalDecisionCreate,
+) =>
+  apiRequest<ApprovalOut>(draftDecisionsPath(workspaceId, draftId), { method: 'POST', body });
+// ---- I-5C integration (W21 INT5AB): decisions on one draft version — end ------------

@@ -130,6 +130,10 @@ export const queryKeys = {
     ['workspaces', workspaceId, 'drafts', draftId] as const,
   creativeCapability: (workspaceId: string) =>
     ['workspaces', workspaceId, 'creative-capability'] as const,
+  // I-5C (W21 INT5AB): one draft version's decisions, under that draft's key, so the entry
+  // is per workspace and per draft and refreshing a draft reaches its history.
+  draftApprovals: (workspaceId: string, draftId: string) =>
+    ['workspaces', workspaceId, 'drafts', draftId, 'approvals'] as const,
 
   // Workspace-effective feedback availability (P6-UI-005). Deliberately NOT
   // `runtimeSummary`: that key carries the raw global flags, has no workspace in

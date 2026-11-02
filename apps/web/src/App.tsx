@@ -18,6 +18,9 @@ import { OpportunitiesPage } from '@/pages/Opportunities';
 import { OpportunityDetailPage } from '@/pages/OpportunityDetail';
 import { OperationsPage } from '@/pages/operations/Operations';
 import { ApprovalsRoute } from '@/pages/approvals/ApprovalsRoute';
+import { CreativeRoute } from '@/pages/creative/CreativeRoute';
+import { CreativeHomePage } from '@/pages/creative/CreativeHome';
+import { BriefDraftsPage } from '@/pages/creative/BriefDraftsPage';
 import { SettingsPage } from '@/pages/Settings';
 import { NotFoundPage } from '@/pages/NotFound';
 
@@ -45,6 +48,11 @@ export function App() {
           <Route path="opportunities/:opportunityId" element={<OpportunityDetailPage />} />
           {/* Phase 5B approval queue (I-5B): not-found while briefs are dark for the workspace. */}
           <Route path="approvals" element={<ApprovalsRoute />} />
+          {/* Phase 5C creative drafts (I-5C): not-found while creative_generation is dark. */}
+          <Route element={<CreativeRoute />}>
+            <Route path="creative" element={<CreativeHomePage />} />
+            <Route path="creative/:briefId" element={<BriefDraftsPage />} />
+          </Route>
           <Route path="settings" element={<SettingsPage />} />
           <Route element={<RequireOperator />}>
             <Route path="operations" element={<OperationsPage />} />
