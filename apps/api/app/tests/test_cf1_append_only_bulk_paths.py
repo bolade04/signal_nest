@@ -29,8 +29,9 @@ append-only model (the three of CF-1 and, since CF-2, ``creative_drafts`` and
   clause;
 * **static pin:** no production module outside ``app/privacy/`` builds an UPDATE or DELETE
   (function, attribute-call or method form, or ``Query``), an upsert or a prefixed insert
-  over these models (bare, ``aliased()`` or ``inspect()``) or their tables, writes a
-  literal unqualified UPDATE [ONLY] / UPDATE OR
+  over these models (bare, ``__mapper__``, ``aliased()``, ``inspect()`` or
+  ``class_mapper()``) or their tables, maps a guarded table a second time (``__table__ =``,
+  ``map_imperatively``), writes a literal unqualified UPDATE [ONLY] / UPDATE OR
   <algorithm> / DELETE FROM [ONLY] / INSERT OR <algorithm> INTO / REPLACE INTO / INSERT …
   DO UPDATE string on the guarded tables (bare, ``"…"``, ``'…'``, ``[…]`` or backticks),
   calls the bulk API or calls ``delete_rows``,
@@ -779,12 +780,14 @@ def _callee(node: ast.Call) -> str | None:
 
 #: Calls that stand for the model in an ORM statement: ``aliased(Model)``, ``inspect(Model)``
 #: (the Mapper), plain or attribute-called (``sa.orm.aliased``).
-_MODEL_WRAPPERS = {"aliased", "inspect"}
+_MODEL_WRAPPERS = {"aliased", "inspect", "class_mapper"}
+#: Attributes of a guarded model that stand for it or its table in a statement or a mapping.
+_MODEL_ATTRS = {"__table__", "__mapper__"}
 
 
 def _is_guarded(node: ast.AST, names: set[str]) -> bool:
-    """``Model``, ``Model.__table__``, ``aliased(Model)`` / ``inspect(Model)``, or an alias of
-    any of them."""
+    """``Model``, ``Model.__table__``, ``Model.__mapper__``, ``aliased(Model)`` /
+    ``inspect(Model)`` / ``class_mapper(Model)``, or an alias of any of them."""
     if isinstance(node, ast.Name):
         return node.id in names
     if isinstance(node, ast.NamedExpr):
@@ -793,10 +796,25 @@ def _is_guarded(node: ast.AST, names: set[str]) -> bool:
         return _is_guarded(node.args[0], names)
     return (
         isinstance(node, ast.Attribute)
-        and node.attr == "__table__"
+        and node.attr in _MODEL_ATTRS
         and isinstance(node.value, ast.Name)
         and node.value.id in names
     )
+
+
+def _remaps_a_guarded_table(node: ast.AST, names: set[str]) -> bool:
+    """A second mapping of a guarded table (CF2-FIX3, r3 C6): a class body's ``__table__ =
+    <guarded table>`` (plain or annotated), or ``map_imperatively(Cls, <guarded table>)`` /
+    ``map_imperatively(Cls, local_table=<guarded table>)``."""
+    if isinstance(node, ast.Assign | ast.AnnAssign) and node.value is not None:
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        return any(
+            isinstance(t, ast.Name) and t.id == "__table__" for t in targets
+        ) and _is_guarded(node.value, names)
+    if isinstance(node, ast.Call) and _callee(node) == "map_imperatively":
+        values = list(node.args[1:]) + [k.value for k in node.keywords if k.arg == "local_table"]
+        return any(_is_guarded(v, names) for v in values)
+    return False
 
 
 def _bindings(tree: ast.AST):
@@ -885,6 +903,9 @@ def _offences(tree: ast.AST) -> list[int]:
             and _SQL_WRITE.search(" ".join(node.value.split()))
         ):
             lines.append(node.lineno)  # UPDATE / DELETE FROM / INSERT ... DO UPDATE as SQL text
+            continue
+        if _remaps_a_guarded_table(node, names):
+            lines.append(node.lineno)  # a second mapping of a guarded table
             continue
         if not isinstance(node, ast.Call):
             continue
@@ -1016,6 +1037,24 @@ FLAGGED_FORMS = {
         "db.execute(pg_insert(inspect(Approval)).values(**r)"
         ".on_conflict_do_update(index_elements=['id'], set_={'note': 'n'}))"
     ),
+    # CF2-FIX3 (W21-REV-CF2-DATA r3 C6): a second mapping of a guarded table, and the model's
+    # mapper reached as Model.__mapper__ or class_mapper(Model).
+    "declarative second mapping": "class Shadow(Base):\n    __table__ = Approval.__table__",
+    "annotated second mapping": (
+        "class Shadow(Base):\n    __table__: Table = AuditLog.__table__"
+    ),
+    "second mapping through a table alias": (
+        "t = RecommendationBrief.__table__\nclass Shadow(Base):\n    __table__ = t"
+    ),
+    "map_imperatively a guarded table": "reg.map_imperatively(Shadow, CreativeDraft.__table__)",
+    "map_imperatively local_table=": (
+        "reg.map_imperatively(Shadow, local_table=ContentReview.__table__)"
+    ),
+    "update(Model.__mapper__)": "db.execute(update(Approval.__mapper__).values(note=None))",
+    "update(class_mapper(Model))": "db.execute(update(class_mapper(AuditLog)).values(reason=None))",
+    "delete(Model.__mapper__) in a CTE": (
+        "db.execute(select(literal_column('1')).add_cte(delete(Approval.__mapper__).cte('d')))"
+    ),
 }
 #: Look-alikes the pin must not flag.
 CLEAN_FORMS = {
@@ -1045,6 +1084,10 @@ CLEAN_FORMS = {
     "a select of aliased(Model)": "db.execute(select(aliased(AuditLog)).where(x))",
     "another model's aliased update": "db.execute(update(aliased(Job)).values(status='x'))",
     "inspect(Model) for its columns": "cols = inspect(Approval).columns",
+    "a class mapping another table": "class Other(Base):\n    __table__ = Job.__table__",
+    "map_imperatively another table": "reg.map_imperatively(Other, Job.__table__)",
+    "class_mapper(Model) for its columns": "cols = class_mapper(Approval).columns",
+    "Model.__mapper__ for its attributes": "attrs = Approval.__mapper__.attrs",
 }
 
 
@@ -1061,25 +1104,28 @@ def test_the_detector_ignores_look_alikes(form: str) -> None:
 def test_no_production_module_outside_privacy_writes_guarded_rows_after_insert() -> None:
     """A backstop to the runtime guard, not the enforcement layer. It follows **model** import
     aliases and annotated, tuple and walrus aliases, and matches only literal, unqualified
-    SQL strings on the guarded tables: ``UPDATE [ONLY]``, SQLite's ``UPDATE OR <algorithm>``,
-    ``DELETE FROM [ONLY]``, ``INSERT OR <algorithm> INTO``, ``REPLACE INTO`` and ``INSERT …
-    DO UPDATE``, the table name bare or quoted with ``"…"``, ``'…'``, ``[…]`` or backticks.
-    It flags a ``prefix_with`` on a guarded insert (function or method form), as the runtime
-    guard refuses every prefix on a guarded ORM insert, and takes ``aliased(Model)`` and
-    ``inspect(Model)`` for the model, inside a CTE too.
+    SQL strings on the guarded tables: ``UPDATE [ONLY]``, SQLite's ``UPDATE OR
+    <algorithm>``, ``DELETE FROM [ONLY]``, ``INSERT OR <algorithm> INTO``, ``REPLACE INTO``
+    and ``INSERT … DO UPDATE``, the table name bare or quoted with ``"…"``, ``'…'``, ``[…]``
+    or backticks. It flags a ``prefix_with`` on a guarded insert (function or method form),
+    as the runtime guard refuses every prefix on a guarded ORM insert; takes
+    ``Model.__mapper__``, ``aliased(Model)``, ``inspect(Model)`` and ``class_mapper(Model)``
+    for the model, inside a CTE too; and flags a second mapping of a guarded table
+    (``__table__ = <guarded table>``, ``map_imperatively(Cls, <guarded table>)``).
 
-    Not pinned: the statement functions (``update``, ``delete``, ``insert``, dialect inserts,
-    ``prefix_with``, ``aliased``, ``inspect``) imported or called under another name (e.g.
-    the ``Insert`` class or an unbound ``Insert.prefix_with(stmt, …)``); models referenced
-    through a module
+    Not pinned: the statement functions (``update``, ``delete``, ``insert``, dialect
+    inserts, ``prefix_with``, ``aliased``, ``inspect``, ``class_mapper``,
+    ``map_imperatively``) imported or called under another name (e.g. the ``Insert`` class
+    or an unbound ``Insert.prefix_with(stmt, …)``); models referenced through a module
     (``models.Approval``); tables built or reflected by name (``table("approvals")``,
     ``Table("approvals", …)``) or reached through ``Base.metadata``, ``getattr``,
-    ``inspect(...).local_table`` or ``Model.__mapper__.local_table``; tables passed as
-    parameters; SQL that schema-qualifies the table (``public.approvals``,
-    ``main.approvals``), puts a comment between the keywords and the table name, names the
-    table as a PostgreSQL Unicode-escape identifier (``U&"…"``), or uses TRUNCATE or MERGE;
-    DDL on a guarded table (``DROP TABLE``, ``ALTER TABLE … DROP COLUMN``); SQL given as a
-    ``bytes`` literal; a conflict clause declared in DDL (pinned absent separately, by
+    ``inspect(...).local_table`` or ``Model.__mapper__.local_table`` — including as the
+    table of a second mapping; tables passed as parameters; SQL that schema-qualifies the
+    table (``public.approvals``, ``main.approvals``), puts a comment between the keywords
+    and the table name, names the table as a PostgreSQL Unicode-escape identifier
+    (``U&"…"``), or uses TRUNCATE or MERGE; DDL on a guarded table (``DROP TABLE``, ``ALTER
+    TABLE … DROP COLUMN``); SQL given as a ``bytes`` literal; a conflict clause declared in
+    DDL (pinned absent separately, by
     ``test_no_guarded_table_declares_a_sqlite_conflict_clause``); and SQL assembled at run
     time. (The guarded, development-only demo reset in ``app.db.seed`` writes through
     ``Base.metadata`` and is the one sanctioned writer outside ``app/privacy/``.)"""
