@@ -109,6 +109,12 @@ all sanctioned:
 3. :func:`app.db.seed._reset` — the guarded, development-only demo reset that empties every
    table.
 
+**These lists are what the reviews found, not a proof of completeness.** "What is refused"
+and "What is not refused" record the paths the reviews of this guard tried (W21-REV-CF2-DATA
+r1–r3, W21-REV-CF1-DESC r1–r3, and the lanes' own probes); they do not prove that no other
+ORM path reaches a guarded row. Database-level immutability is the separate backstop (O-10,
+below).
+
 ``test_cf1_append_only_bulk_paths.py`` is a static **backstop**, not the enforcement layer
 (the runtime guard above is). It checks that no other production module builds an UPDATE or
 DELETE (function or attribute-call form, method form, ``Query``), an upsert or a prefixed
