@@ -98,6 +98,21 @@ def test_an_exclusion_wins_over_a_market_it_cannot_rule_out(limb):
 
 
 @pytest.mark.parametrize("limb", range(3), ids=_LIMB_IDS)
+def test_a_country_or_region_exclusion_removes_what_it_cannot_rule_out(limb):
+    """The breadth is deliberate (W21-REV-5DW2 r1, C1): a country exclusion removes every
+    observed market that states no country, and a region exclusion every observation in its
+    country that states no region. A stated component that differs still admits."""
+    uk = _online_rules(("UK",))[limb]
+    assert market_in_coverage(uk, "Montgomery") is False
+    assert market_in_coverage(uk, "Montgomery, US") is True
+    texas = _online_rules(("Texas",))[limb]
+    assert market_in_coverage(texas, "Little Rock, US") is False
+    assert market_in_coverage(texas, "Little Rock") is False
+    assert market_in_coverage(texas, "Little Rock, AR") is True
+    assert market_in_coverage(texas, "London, UK") is True
+
+
+@pytest.mark.parametrize("limb", range(3), ids=_LIMB_IDS)
 def test_online_coverage_without_exclusions_is_unchanged(limb):
     rule = _online_rules(())[limb]
     for market in [*FOUR_MARKETS, "London", "anywhere", None, ""]:
