@@ -1,12 +1,17 @@
-import { waitFor, within } from '@testing-library/react';
+import { useIsFetching, useQueryClient } from '@tanstack/react-query';
+import { act, waitFor, within } from '@testing-library/react';
 import { delay, http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { API_PREFIX } from '@/api/config';
+import { queryKeys } from '@/api/queryKeys';
 import type { ContentReviewOut, CreativeChannel, CreativeDraftOut } from '@/api/types';
+import { useAuth } from '@/auth/AuthContext';
 import { CreativeDraftsPanel } from '@/pages/creative/CreativeDraftsPanel';
 import { CHANNELS } from '@/pages/creative/creativeLabels';
+import { useCreativeCapability } from '@/pages/creative/useCreative';
 import { server } from '@/test/server';
 import { renderApp } from '@/test/utils';
+import { useWorkspace } from '@/workspace/WorkspaceContext';
 
 // Project Phase 5C-W4 (W21 lane 5CW4): the adversarial verification of W3's surfaces — the
 // draft editor, version history, review-warnings panel and blocked state — for every role and
@@ -20,6 +25,15 @@ import { renderApp } from '@/test/utils';
 //
 // The UI must never offer a control the API refuses, never send a body the API's strict
 // schema refuses, and never render stored text as markup.
+//
+// Settled state before every role- or capability-dependent assertion (PR #300 CI run
+// 41461159943): the panel's inputs arrive from three independent requests — the capability,
+// the drafts list and the session (/auth/me, then the organization list) — in any order.
+// Asserting presence or absence before all of them have landed races (an absence passes
+// vacuously; a presence fails on a slow runner). Every such assertion here first waits for a
+// probe rendered in the same providers, reading the same contexts and query cache the panel
+// reads, to report the settled state; and the role × state matrix runs in both response
+// orders (the session first, and the session last).
 
 const WS = 'ws-1';
 const BRIEF = 'brief-1';
@@ -77,27 +91,39 @@ function draft(version: number, overrides: Partial<CreativeDraftOut> = {}): Crea
 
 type Memberships = { organization_id: string; role: string }[];
 
-function session(memberships: Memberships) {
+/** The session; ``delayMs`` makes it land after the capability and the drafts list. */
+function session(memberships: Memberships, delayMs = 0) {
   server.use(
-    http.get(P('/auth/me'), () =>
-      HttpResponse.json({
+    http.get(P('/auth/me'), async () => {
+      if (delayMs) await delay(delayMs);
+      return HttpResponse.json({
         access_token: 'test-token',
         token_type: 'bearer',
         user: { id: 'user-1', email: 'demo@signalnest.dev', full_name: 'Demo', is_operator: false },
         memberships,
-      }),
-    ),
+      });
+    }),
   );
 }
+
+/** Which response lands last: the session (/auth/me) or the capability reflection. */
+type Order = 'session-last' | 'capability-last';
+const ORDERS: Order[] = ['session-last', 'capability-last'];
+const LATE_MS = 150;
 
 type CapabilityState = 'enabled' | 'disabled' | 'error' | 'forbidden' | 'pending' | 'list503';
 
 /** The backend for one capability state; returns its request log. */
-function backend(state: CapabilityState, items: CreativeDraftOut[] = [draft(2, { parent_draft_id: 'draft-1' }), draft(1)]) {
+function backend(
+  state: CapabilityState,
+  items: CreativeDraftOut[] = [draft(2, { parent_draft_id: 'draft-1' }), draft(1)],
+  capabilityDelayMs = 0,
+) {
   const log = { capability: 0, list: 0, post: 0, posts: [] as unknown[] };
   server.use(
     http.get(CAPABILITY, async () => {
       log.capability += 1;
+      if (capabilityDelayMs) await delay(capabilityDelayMs);
       if (state === 'pending') {
         await delay('infinite');
       }
@@ -151,78 +177,155 @@ function backend(state: CapabilityState, items: CreativeDraftOut[] = [draft(2, {
   return log;
 }
 
-function render() {
-  return renderApp(<CreativeDraftsPanel workspaceId={WS} briefId={BRIEF} />);
+/**
+ * Reports what the panel's decision reads, from the same providers and query cache: the
+ * session, the active organization, the role there (the panel's own lookup), the capability
+ * reflection (the same query, shared) and the drafts list's state (read from the cache, never
+ * fetched here). Test-only; renders plain text, no role.
+ */
+function Probe() {
+  const { status, memberships } = useAuth();
+  const { organizationId } = useWorkspace();
+  const capability = useCreativeCapability(WS);
+  const fetchingDrafts = useIsFetching({ queryKey: queryKeys.briefDrafts(WS, BRIEF) });
+  const drafts = useQueryClient().getQueryState(queryKeys.briefDrafts(WS, BRIEF));
+  const role = memberships.find((m) => m.organization_id === organizationId)?.role ?? 'none';
+  const draftsState = fetchingDrafts > 0 ? 'fetching' : (drafts?.status ?? 'idle');
+  return (
+    <span data-testid="probe">
+      {`session=${status} org=${organizationId ?? '-'} role=${role} capability=${capability.status} drafts=${draftsState}`}
+    </span>
+  );
 }
 
-const settle = () => new Promise((r) => setTimeout(r, 80));
+function render() {
+  return renderApp(
+    <>
+      <CreativeDraftsPanel workspaceId={WS} briefId={BRIEF} />
+      <Probe />
+    </>,
+  );
+}
+
+const settle = () => act(() => new Promise<void>((r) => setTimeout(r, 80)));
+
+/**
+ * Wait until every input of the panel's decision has landed and been rendered: the session,
+ * the active organization (org-1) and the role there, the capability reflection, and the
+ * drafts list's final state. Then one more tick, so the assertions that follow read the
+ * committed DOM of that state — an absence after this is evidence, not a race.
+ */
+async function loaded(
+  screen: ReturnType<typeof render>,
+  role: string,
+  capability: 'enabled' | 'disabled' | 'loading',
+  drafts: 'success' | 'error' | 'idle',
+) {
+  await waitFor(
+    () =>
+      expect(screen.getByTestId('probe')).toHaveTextContent(
+        `session=authenticated org=org-1 role=${role} capability=${capability} drafts=${drafts}`,
+      ),
+    { timeout: 5000 },
+  );
+  await settle();
+}
 
 function decisionControls(screen: ReturnType<typeof render>) {
   return screen.queryAllByRole('button', { name: /approve|reject|revoke|decide/i });
 }
 
-describe('5C-W4 — the UI never offers a control the API refuses (role × capability state)', () => {
-  for (const role of [...ROLES, 'superuser']) {
-    it(`${role}: enabled — drafts for every member, the editor only where the API generates`, async () => {
-      session([{ organization_id: 'org-1', role }]);
-      const log = backend('enabled');
-      const screen = render();
-      const nav = await screen.findByRole('navigation', { name: 'Draft versions' });
-      expect(within(nav).getAllByRole('button')).toHaveLength(2);
-      const offered = screen.queryByRole('group', { name: 'Generate a draft' }) !== null;
-      expect(offered).toBe(API_GENERATORS.has(role));
-      expect(screen.queryByRole('button', { name: 'Generate draft' }) !== null).toBe(API_GENERATORS.has(role));
-      expect(screen.queryByRole('button', { name: /Revise version/ }) !== null).toBe(API_GENERATORS.has(role));
-      expect(decisionControls(screen)).toEqual([]);
-      expect(log.post).toBe(0);
-    });
+const DARK_STATES = ['disabled', 'error', 'forbidden', 'pending', 'list503'] as const;
+/** The capability and drafts state each case settles in (what `loaded` waits for). */
+const SETTLED: Record<CapabilityState, ['enabled' | 'disabled' | 'loading', 'success' | 'error' | 'idle']> = {
+  enabled: ['enabled', 'success'],
+  disabled: ['disabled', 'idle'],
+  error: ['disabled', 'idle'],
+  forbidden: ['disabled', 'idle'],
+  pending: ['loading', 'idle'],
+  list503: ['enabled', 'error'],
+};
 
-    for (const state of ['disabled', 'error', 'forbidden', 'pending', 'list503'] as const) {
-      it(`${role}: ${state} — renders nothing and sends no draft request`, async () => {
-        session([{ organization_id: 'org-1', role }]);
-        const log = backend(state);
+function arrange(role: string, state: CapabilityState, order: Order) {
+  session([{ organization_id: 'org-1', role }], order === 'session-last' ? LATE_MS : 0);
+  return backend(state, undefined, order === 'capability-last' ? LATE_MS : 0);
+}
+
+describe('5C-W4 — the UI never offers a control the API refuses (role × capability state)', () => {
+  for (const order of ORDERS) {
+    for (const role of [...ROLES, 'superuser']) {
+      it(`${role}, ${order}: enabled — drafts for every member, the editor only where the API generates`, async () => {
+        const log = arrange(role, 'enabled', order);
         const screen = render();
-        await waitFor(() => expect(log.capability).toBeGreaterThanOrEqual(1));
-        if (state === 'list503') await waitFor(() => expect(log.list).toBeGreaterThanOrEqual(1));
-        await settle();
-        expect(screen.queryByRole('heading', { name: 'Drafts' })).toBeNull();
-        expect(screen.queryByRole('group', { name: 'Generate a draft' })).toBeNull();
-        expect(screen.queryAllByRole('button')).toEqual([]);
+        await loaded(screen, role, 'enabled', 'success');
+        const nav = screen.getByRole('navigation', { name: 'Draft versions' });
+        expect(within(nav).getAllByRole('button')).toHaveLength(2);
+        const generates = API_GENERATORS.has(role);
+        expect(screen.queryByRole('group', { name: 'Generate a draft' }) !== null).toBe(generates);
+        expect(screen.queryByRole('button', { name: 'Generate draft' }) !== null).toBe(generates);
+        expect(screen.queryByRole('button', { name: /Revise version/ }) !== null).toBe(generates);
+        expect(decisionControls(screen)).toEqual([]);
         expect(log.post).toBe(0);
-        if (state !== 'list503') expect(log.list).toBe(0);
       });
+
+      for (const state of DARK_STATES) {
+        it(`${role}, ${order}: ${state} — renders nothing and sends no draft request`, async () => {
+          const log = arrange(role, state, order);
+          const screen = render();
+          const [capability, drafts] = SETTLED[state];
+          await loaded(screen, role, capability, drafts);
+          expect(log.capability).toBeGreaterThanOrEqual(1);
+          expect(screen.queryByRole('heading', { name: 'Drafts' })).toBeNull();
+          expect(screen.queryByRole('group', { name: 'Generate a draft' })).toBeNull();
+          expect(screen.queryAllByRole('button')).toEqual([]);
+          expect(log.post).toBe(0);
+          if (state === 'list503') expect(log.list).toBeGreaterThanOrEqual(1);
+          else expect(log.list).toBe(0);
+        });
+      }
     }
   }
 
-  it('reads the role of the ACTIVE organization, not of another membership', async () => {
-    // An owner elsewhere and a viewer here: the API refuses this member's generate request.
-    session([
-      { organization_id: 'org-2', role: 'owner' },
-      { organization_id: 'org-1', role: 'viewer' },
-    ]);
-    backend('enabled');
-    const screen = render();
-    await screen.findByRole('navigation', { name: 'Draft versions' });
-    expect(screen.queryByRole('group', { name: 'Generate a draft' })).toBeNull();
-  });
+  for (const order of ORDERS) {
+    it(`reads the role of the ACTIVE organization, not of another membership (${order})`, async () => {
+      // An owner elsewhere and a viewer here: the API refuses this member's generate request.
+      session(
+        [
+          { organization_id: 'org-2', role: 'owner' },
+          { organization_id: 'org-1', role: 'viewer' },
+        ],
+        order === 'session-last' ? LATE_MS : 0,
+      );
+      backend('enabled', undefined, order === 'capability-last' ? LATE_MS : 0);
+      const screen = render();
+      await loaded(screen, 'viewer', 'enabled', 'success');
+      expect(screen.getByRole('navigation', { name: 'Draft versions' })).toBeInTheDocument();
+      expect(screen.queryByRole('group', { name: 'Generate a draft' })).toBeNull();
+    });
 
-  it('offers the editor to a marketer here who is only a viewer elsewhere', async () => {
-    session([
-      { organization_id: 'org-2', role: 'viewer' },
-      { organization_id: 'org-1', role: 'marketer' },
-    ]);
-    backend('enabled');
-    const screen = render();
-    expect(await screen.findByRole('group', { name: 'Generate a draft' })).toBeInTheDocument();
-  });
+    it(`offers the editor to a marketer here who is only a viewer elsewhere (${order})`, async () => {
+      session(
+        [
+          { organization_id: 'org-2', role: 'viewer' },
+          { organization_id: 'org-1', role: 'marketer' },
+        ],
+        order === 'session-last' ? LATE_MS : 0,
+      );
+      backend('enabled', undefined, order === 'capability-last' ? LATE_MS : 0);
+      const screen = render();
+      await loaded(screen, 'marketer', 'enabled', 'success');
+      expect(screen.getByRole('group', { name: 'Generate a draft' })).toBeInTheDocument();
+    });
 
-  it('offers nothing to a member with no membership in the active organization', async () => {
-    session([{ organization_id: 'org-2', role: 'owner' }]);
-    backend('enabled');
-    const screen = render();
-    await settle();
-    expect(screen.queryByRole('group', { name: 'Generate a draft' })).toBeNull();
-  });
+    it(`offers nothing to a member with no membership in the active organization (${order})`, async () => {
+      session([{ organization_id: 'org-2', role: 'owner' }], order === 'session-last' ? LATE_MS : 0);
+      backend('enabled', undefined, order === 'capability-last' ? LATE_MS : 0);
+      const screen = render();
+      await loaded(screen, 'none', 'enabled', 'success');
+      expect(screen.getByRole('navigation', { name: 'Draft versions' })).toBeInTheDocument();
+      expect(screen.queryByRole('group', { name: 'Generate a draft' })).toBeNull();
+    });
+  }
 });
 
 describe('5C-W4 — the draft editor sends only what the strict API body accepts', () => {
@@ -246,7 +349,7 @@ describe('5C-W4 — the draft editor sends only what the strict API body accepts
       session([{ organization_id: 'org-1', role: 'owner' }]);
       const log = backend('enabled');
       const screen = render();
-      await screen.findByRole('navigation', { name: 'Draft versions' });
+      await loaded(screen, 'owner', 'enabled', 'success');
       await screen.user.selectOptions(screen.getByLabelText('Channel'), channel);
       await screen.user.click(screen.getByRole('button', { name: 'Generate draft' }));
       await waitFor(() => expect(log.post).toBe(1));
@@ -258,7 +361,8 @@ describe('5C-W4 — the draft editor sends only what the strict API body accepts
     session([{ organization_id: 'org-1', role: 'admin' }]);
     const log = backend('enabled');
     const screen = render();
-    const nav = await screen.findByRole('navigation', { name: 'Draft versions' });
+    await loaded(screen, 'admin', 'enabled', 'success');
+    const nav = screen.getByRole('navigation', { name: 'Draft versions' });
     await screen.user.click(within(nav).getByRole('button', { name: /Version 1/ }));
     await screen.user.click(screen.getByRole('button', { name: 'Revise version 1' }));
     await waitFor(() => expect(log.post).toBe(1));
@@ -305,7 +409,8 @@ describe('5C-W4 — version history, review panel and blocked state', () => {
     session([{ organization_id: 'org-1', role: 'viewer' }]);
     backend('enabled', [draft(7, { parent_draft_id: 'draft-elsewhere' }), draft(6, { parent_draft_id: 'draft-5' })]);
     const screen = render();
-    const nav = await screen.findByRole('navigation', { name: 'Draft versions' });
+    await loaded(screen, 'viewer', 'enabled', 'success');
+    const nav = screen.getByRole('navigation', { name: 'Draft versions' });
     const labels = within(nav).getAllByRole('button').map((b) => b.textContent ?? '');
     expect(labels[0]).not.toMatch(/revises/);
     expect(labels[0]).not.toMatch(/undefined/);
@@ -343,7 +448,8 @@ describe('5C-W4 — version history, review panel and blocked state', () => {
     session([{ organization_id: 'org-1', role: 'viewer' }]);
     backend('enabled', [draft(1, { review: null })]);
     const screen = render();
-    const nav = await screen.findByRole('navigation', { name: 'Draft versions' });
+    await loaded(screen, 'viewer', 'enabled', 'success');
+    const nav = screen.getByRole('navigation', { name: 'Draft versions' });
     expect(within(nav).getByText('Review pending')).toBeInTheDocument();
     expect(screen.getByText('The content review is not available yet.')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
@@ -386,7 +492,8 @@ describe('5C-W4 — version history, review panel and blocked state', () => {
       }),
     ]);
     const screen = render();
-    await screen.findByRole('article', { name: 'Draft version 1' });
+    await loaded(screen, 'viewer', 'enabled', 'success');
+    expect(screen.getByRole('article', { name: 'Draft version 1' })).toBeInTheDocument();
     expect(screen.container.querySelector('img')).toBeNull();
     expect((window as unknown as { __pwned?: number }).__pwned).toBeUndefined();
     expect(screen.getAllByText(new RegExp(payload.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).length).toBeGreaterThan(0);
