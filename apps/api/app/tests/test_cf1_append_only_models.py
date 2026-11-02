@@ -9,8 +9,9 @@
   and the new tables carry ``created_at`` only — no ``updated_at`` and no ``onupdate``
   (Phase 5A plan §2).
 * This module covers the unit of work. Every other ORM path (ORM UPDATE/DELETE statements,
-  ``Query.update/delete``, the bulk API, upserts and, since FU-CF1-H1, an insert carrying a
-  statement prefix such as SQLite ``OR REPLACE``) is covered, on SQLite and PostgreSQL, by
+  ``Query.update/delete``, the bulk API, upserts, since FU-CF1-H1 an insert carrying a
+  statement prefix such as SQLite ``OR REPLACE``, and since CF2-FIX2 ORM DML nested in
+  another statement, e.g. a data-modifying CTE) is covered, on SQLite and PostgreSQL, by
   ``test_cf1_append_only_bulk_paths.py``, which also pins statically, within the forms it
   names, that no production module outside ``app/privacy/`` writes these rows after insert.
 * The sanctioned Core paths (privacy anonymisation, the foreign-key walk) still reach the
@@ -25,7 +26,8 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import pytest
-from sqlalchemy import String, create_engine, delete, insert, select, update
+from sqlalchemy import String, create_engine, delete, insert, literal_column, select, update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from app.approvals.models import Approval
@@ -279,6 +281,13 @@ class _Child(_Parent):
     __mapper_args__ = {"polymorphic_identity": "child"}
 
 
+class _Other(_PrivateBase):
+    """An unguarded model, the outer statement around the subclass's DML (FU-CF1-H2)."""
+
+    __tablename__ = "cf1_subclass_probe_other"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+
+
 @pytest.fixture
 def child_session() -> Iterator[Session]:
     engine = create_engine("sqlite://", future=True)
@@ -289,6 +298,11 @@ def child_session() -> Iterator[Session]:
         s.commit()
         yield s
     engine.dispose()
+
+
+def _child_upsert():
+    stmt = sqlite_insert(_Child).values(id="c1", kind="child", value="changed")
+    return stmt.on_conflict_do_update(index_elements=["id"], set_={"value": "changed"})
 
 
 def _child_value(s: Session) -> str:
@@ -305,7 +319,12 @@ def test_the_subclass_is_guarded_but_not_enumerated_as_decorated() -> None:
     "path",
     ["flush update", "flush delete", "update(SubClass)", "delete(SubClass)",
      "bulk_update_mappings(SubClass)", "bulk_save_objects(SubClass)",
-     "insert(SubClass).prefix_with('OR REPLACE')"],
+     "insert(SubClass).prefix_with('OR REPLACE')", "update(SubClass) as a CTE",
+     "delete(SubClass) as a CTE", "upsert(SubClass) as a CTE",
+     "update(Other).add_cte(update(SubClass) CTE)",
+     "select(Other.id).from_statement(update(SubClass))",
+     "select(Other.id).from_statement(delete(SubClass))",
+     "select(Other.id).from_statement(upsert(SubClass))"],
 )
 def test_every_orm_path_on_a_mapped_subclass_is_refused(child_session: Session, path) -> None:
     s = child_session
@@ -322,6 +341,38 @@ def test_every_orm_path_on_a_mapped_subclass_is_refused(child_session: Session, 
             s.execute(delete(_Child).where(_Child.id == "c1"))
         elif path == "bulk_update_mappings(SubClass)":
             s.bulk_update_mappings(_Child, [{"id": "c1", "value": "changed"}])
+        elif path == "update(SubClass) as a CTE":  # CF2-FIX2 (r2 C3): nested DML is refused
+            cte = (
+                update(_Child).where(_Child.id == "c1").values(value="changed")
+                .returning(_Child.id).cte("u")
+            )
+            s.execute(select(literal_column("1")).add_cte(cte)).all()
+        elif path == "delete(SubClass) as a CTE":
+            cte = delete(_Child).where(_Child.id == "c1").returning(_Child.id).cte("d")
+            s.execute(select(cte.c.id)).all()
+        elif path == "upsert(SubClass) as a CTE":  # FU-CF1-H2 as extended (r3 D2)
+            cte = _child_upsert().returning(_Child.id).cte("i")
+            s.execute(select(literal_column("1")).add_cte(cte)).all()
+        elif path == "update(Other).add_cte(update(SubClass) CTE)":
+            cte = (
+                update(_Child).where(_Child.id == "c1").values(value="changed")
+                .returning(_Child.id).cte("u")
+            )
+            s.execute(update(_Other).where(_Other.id == "none").values(id="x").add_cte(cte))
+        elif path == "select(Other.id).from_statement(update(SubClass))":  # r3 D1
+            stmt = (
+                update(_Child).where(_Child.id == "c1").values(value="changed")
+                .returning(_Child.id)
+            )
+            s.execute(select(_Other.id).from_statement(stmt)).all()
+            s.commit()
+        elif path == "select(Other.id).from_statement(delete(SubClass))":
+            stmt = delete(_Child).where(_Child.id == "c1").returning(_Child.id)
+            s.execute(select(_Other.id).from_statement(stmt)).all()
+            s.commit()
+        elif path == "select(Other.id).from_statement(upsert(SubClass))":
+            s.execute(select(_Other.id).from_statement(_child_upsert().returning(_Child.id))).all()
+            s.commit()
         elif path == "insert(SubClass).prefix_with('OR REPLACE')":  # FU-CF1-H1 (SQLite)
             s.execute(
                 insert(_Child).prefix_with("OR REPLACE").values(
