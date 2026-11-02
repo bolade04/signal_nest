@@ -675,21 +675,21 @@ def test_the_review_and_the_recheck_read_one_folded_text_for_any_persisted_draft
 
 
 # --------------------------------------------------------------------------- #
-# The entry's kind, case and whitespace (DEFECT-5CW4-2)
+# The entry's kind: case, spacing and compatibility forms (DEFECT-5CW4-2, fixed in P5C-FIX2)
 # --------------------------------------------------------------------------- #
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT-5CW4-2: ClaimIn.kind is free text, so a steward's 'Blocked', 'BLOCKED' or "
-        "' blocked' entry is stored (201) and silently never blocks: the engine compares the "
-        "kind exactly with 'blocked' (app/claims/engine.py BLOCKED_KIND). The protected "
-        "safety control fails open on a case or whitespace slip."
-    ),
+@pytest.mark.parametrize(
+    "kind",
+    ["Blocked", "BLOCKED", " blocked", "blocked ",
+     "\uff42\uff4c\uff4f\uff43\uff4b\uff45\uff44", "bl\u200bocked", "Prohibited"],
 )
-@pytest.mark.parametrize("kind", ["Blocked", "BLOCKED", " blocked", "blocked "])
 def test_a_blocked_entry_whose_kind_differs_only_in_case_or_space_blocks_or_is_refused(
     world, kind
 ):
+    """``ClaimIn.kind`` is free text; the review and the approval re-check read it in canonical
+    form (``app.claims.engine.canonical_kind``), so a steward's "Blocked", a full-width or
+    zero-width-split spelling, and the campaign-context UI's "prohibited" block — in the stored
+    review and when the entry is added after the review. (A 422 refusal of the kind would also
+    fail closed; the contract keeps it free text.)"""
     ws = world.workspace("kind case")
     r = world.send("POST", f"/workspaces/{ws}/claims", "compliance_reviewer",
                    {"text": "free parking forever", "kind": kind})
@@ -698,3 +698,11 @@ def test_a_blocked_entry_whose_kind_differs_only_in_case_or_space_blocks_or_is_r
     assert r.status_code == 201, r.text
     _, review = _generate(world, ws, body="Free parking forever this weekend.")
     assert review["is_blocked"] is True, (kind, review["blocked_claim_ids"])
+    assert review["blocked_claim_ids"] == [r.json()["id"]]
+    later = world.workspace("kind case recheck")
+    draft, review = _generate(world, later, body="Free parking forever this weekend.")
+    assert review["passed"] is True
+    added = world.send("POST", f"/workspaces/{later}/claims", "compliance_reviewer",
+                       {"text": "free parking forever", "kind": kind})
+    assert added.status_code == 201, added.text
+    assert _refusal(world, draft["id"]) == "blocked_claim"

@@ -16,7 +16,8 @@ of a month (#279, ``102393fa``).
   another time zone reads the UTC day; the meter and the job read the clock they are given.
 * **Fail closed.** Unset, NaN, ±infinity, zero, negative, boolean, string and ``Decimal``
   ceilings refuse at the route, in a queued job and in the meter itself, with no model call.
-  A huge ceiling that ``Settings`` accepts is checked too (see the DEFECT test below).
+  A huge ceiling that ``Settings`` accepts is usable at the route and in a queued job
+  (DEFECT-5CW4-1, fixed in P5C-FIX2).
 * **PostgreSQL: the global advisory lock never deadlocks** against an organization erasure
   that arrives *during* a generation, against another tenant's generation while one tenant's
   erasure is open, or against Scout-shaped budget-ledger traffic and the ledger sweep.
@@ -24,6 +25,7 @@ of a month (#279, ``102393fa``).
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
 import uuid
@@ -441,53 +443,48 @@ def test_settings_refuses_the_unusable_numbers_it_can_be_given():
                 Settings(**{name: value})
 
 
-HUGE = 1e22  # a finite number greater than 0: a valid ceiling for Settings
+HUGE = [1e22, sys.float_info.max]  # finite and greater than 0: valid ceilings for Settings
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT-5CW4-1: a cost ceiling >= 1e22 is accepted by Settings and is not 'unset', "
-        "but app.llm.budget.usd quantizes it to six places beyond the default 28-digit "
-        "decimal context, so check_ceilings raises decimal.InvalidOperation: the route "
-        "answers 500 instead of generating (nothing is breached) or refusing typed."
-    ),
-)
 @pytest.mark.parametrize(
     "name", ["llm_daily_cost_ceiling_usd_global", "llm_daily_cost_ceiling_usd_per_workspace"]
 )
-def test_a_huge_but_valid_cost_ceiling_is_usable(world, monkeypatch, name):
-    Settings(**{name: HUGE})  # accepted: finite and greater than 0
-    monkeypatch.setattr(get_settings(), name, HUGE)
+@pytest.mark.parametrize("value", HUGE, ids=["1e22", "float_max"])
+def test_a_huge_but_valid_cost_ceiling_is_usable(world, monkeypatch, name, value):
+    """DEFECT-5CW4-1 (fixed in P5C-FIX2, ``quota.ceiling_amount``): a ceiling ``Settings``
+    accepts is usable at any magnitude — the route queues (it used to answer 500 from 1e22
+    up) and the job generates."""
+    Settings(**{name: value})  # accepted: finite and greater than 0
+    monkeypatch.setattr(get_settings(), name, value)
     ws = world.workspace("huge ceiling")
     r = world.generate(world.seed_brief(ws), ws=ws)
     assert r.status_code == 202, r.text
-
-
-def test_a_huge_cost_ceiling_fails_closed_today(world, monkeypatch, provider):
-    """DEFECT-5CW4-1's failure mode is closed: the route errors (500) before enqueueing, and a
-    job queued before the ceiling changed never reaches the model (the unclassified error is
-    retried, never generated). Pins today's behaviour so the fix is a deliberate change."""
-    from fastapi.testclient import TestClient
-
-    from app.main import app
-
-    ws = world.workspace("huge closed")
-    brief_id = world.seed_brief(ws)
-    queued = world.generate(brief_id, ws=ws).json()["job_id"]
-    monkeypatch.setattr(get_settings(), "llm_daily_cost_ceiling_usd_per_workspace", HUGE)
-    monkeypatch.setattr(world, "client", TestClient(app, raise_server_exceptions=False))
-    jobs_before = world.count(Job, workspace_id=ws)
-    r = world.generate(brief_id, ws=ws, channel="sms")
-    assert r.status_code == 500
-    assert world.count(Job, workspace_id=ws) == jobs_before
     world.drain()
-    job = world.job(queued)
-    assert job["status"] != "succeeded"
-    assert provider.calls == 0 and world.count(CreativeDraft, workspace_id=ws) == 0
-    with world.witness.begin() as conn:  # never leave it to a later test's worker
-        conn.execute(Job.__table__.update().where(Job.__table__.c.id == queued)
-                     .values(status="cancelled"))
+    assert world.job(r.json()["job_id"])["status"] == "succeeded"
+
+
+@pytest.mark.parametrize("value", HUGE, ids=["1e22", "float_max"])
+def test_a_job_queued_before_its_cost_ceilings_became_huge_generates(
+    world, tenants, scenario_clock, provider, monkeypatch, value
+):
+    """The queued-job side of DEFECT-5CW4-1 (the route side is the test above): a job queued
+    under the ordinary ceilings, whose cost ceilings both become huge before it runs, passes
+    the meter's per-attempt check on its scenario day and generates once; the per-workspace
+    CALL ceiling still binds the same day (a huge cost ceiling lifts nothing else)."""
+    ws = tenants[0]
+    brief_id = world.seed_brief(ws)
+    queued = _post(world, ws, brief_id)
+    assert queued.status_code == 202
+    for name in ("llm_daily_cost_ceiling_usd_global", "llm_daily_cost_ceiling_usd_per_workspace"):
+        monkeypatch.setattr(get_settings(), name, value)
+    _usage(world, ws, SCENARIO, n=2, cost=1000.0)  # far above the ordinary cost ceilings
+    _drain(world, scenario_clock)
+    job = world.job(queued.json()["job_id"])
+    assert job["status"] == "succeeded", (job["last_error_code"], job["last_error_summary"])
+    assert provider.calls == 1
+    _usage(world, ws, SCENARIO)  # the scenario day's third generation call
+    refused = _post(world, ws, brief_id, channel="sms")
+    assert (refused.status_code, refused.json()["error"]["code"]) == (429, "llm_quota_exceeded")
 
 
 # --------------------------------------------------------------------------- #
