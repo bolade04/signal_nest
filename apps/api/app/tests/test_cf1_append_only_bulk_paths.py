@@ -64,6 +64,8 @@ from sqlalchemy import (
     Table,
     delete,
     insert,
+    inspect,
+    lambda_stmt,
     literal_column,
     select,
     text,
@@ -74,6 +76,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import (
     DeclarativeBase,
+    aliased,
     joinedload,
     registry,
     selectinload,
@@ -363,6 +366,36 @@ def _from_statement_other_entity_upsert(s, m, rid, w):
     s.execute(select(Organization.id).from_statement(stmt)).all()
 
 
+# CF2-FIX3 (W21-REV-CF2-DATA r3 C8): the model through aliased() / inspect() and a lambda
+# statement, which the docstring names as refused; a mutant that lets aliased() escape must
+# fail here.
+def _update_aliased(s, m, rid, w):
+    a = aliased(m)
+    s.execute(update(a).where(a.id == rid).values({FIELD[m]: "changed"}))
+
+
+def _delete_aliased(s, m, rid, w):
+    a = aliased(m)
+    s.execute(delete(a).where(a.id == rid))
+
+
+def _update_inspect(s, m, rid, w):
+    s.execute(update(inspect(m)).where(m.id == rid).values({FIELD[m]: "changed"}))
+
+
+def _cte_update_aliased(s, m, rid, w):
+    a = aliased(m)
+    cte = update(a).where(a.id == rid).values({FIELD[m]: "changed"}).returning(a.id).cte("u")
+    s.execute(select(literal_column("1")).add_cte(cte)).all()
+
+
+def _lambda_update(s, m, rid, w):
+    values = {FIELD[m]: "changed"}
+    # enable_tracking=False: built afresh each call, never a cached statement of another model
+    stmt = lambda_stmt(lambda: update(m).where(m.id == rid).values(values), enable_tracking=False)
+    s.execute(stmt)
+
+
 # CF2-FIX3 (W21-REV-CF2-DATA r3 C5): DML referenced from loader-option criteria, which
 # SQLAlchemy applies only at compile time (the walk cannot see it); the guard compiles a
 # statement that carries options and judges its top-level CTEs. PostgreSQL ran all of these.
@@ -442,6 +475,11 @@ PATHS: dict[str, Callable] = {
     "query(Other).options(with_loader_criteria(...select(delete(Model) cte)...))": (
         _query_with_loader_criteria
     ),
+    "update(aliased(Model))": _update_aliased,
+    "delete(aliased(Model))": _delete_aliased,
+    "update(inspect(Model))": _update_inspect,
+    "select(1).add_cte(update(aliased(Model))...cte())": _cte_update_aliased,
+    "lambda_stmt(lambda: update(Model)...)": _lambda_update,
 }
 
 
