@@ -1132,6 +1132,24 @@ def test_ec4_the_adapter_request_carries_every_field_as_an_untrusted_block(world
     assert len(adapter.generated) == 1
 
 
+@pytest.mark.parametrize("channel", ["social_post", "email", "search_ad", "sms", "landing_page"])
+def test_ec4_every_generation_call_passes_exactly_the_templates_keys(world, ws, channel):
+    """P5A's renderer is fail-closed, so every ``generate_creative`` call must carry each of
+    the template's keys and no other (W21-REV-INT5AB r2 §9, item 3): the inputs the
+    service builds are exactly the template's field set, for every channel."""
+    from app.briefs.models import RecommendationBrief
+    from app.llm.prompts import template_fields
+
+    fields = set(template_fields(PROMPTS[GENERATE_TASK].template))
+    assert len(fields) == 8
+    brief_id = world.seed_brief(ws)
+    with world.session() as s:
+        context = creative_service.generation_context(
+            s, s.get(RecommendationBrief, brief_id), channel, datetime.now(UTC)
+        )
+    assert set(context.inputs) == fields
+
+
 def test_ec4_a_template_input_mismatch_raises_before_anything_is_sent_or_charged(
     world, adapter, monkeypatch
 ):

@@ -261,6 +261,65 @@ def test_the_service_itself_refuses_a_foreign_draft_and_a_non_reviewer(world):
     assert world.count(Approval, draft_id=draft["id"]) == 0
 
 
+def test_brief_and_draft_histories_never_mix_even_when_their_ids_collide(world):
+    """A brief's decisions exclude draft decisions and a draft's exclude brief decisions
+    (W21-REV-INT5AB r2 §9, item 4), shown on the one case where only ``subject_type`` tells
+    them apart: a draft whose id and version equal an approved brief's. The sequence numbers,
+    both histories, and whether the brief counts as approved for generation stay apart."""
+    from types import SimpleNamespace
+
+    from app.approvals.service import list_decisions, record_decision
+    from app.briefs.models import RecommendationBrief
+    from app.core.enums import Role
+    from app.organizations.models import User
+
+    ws = world.workspace("ids collide")
+    brief_id = world.seed_brief(ws)  # the brief's decision 1: approved
+    source = _draft(world, ws)
+    host = world.seed_brief(ws, approved=False)
+    twin = {**{k: v for k, v in source.items() if k not in ("id", "created_at")},
+            "id": brief_id, "brief_id": host, "draft_version": 1}
+    [review] = world.rows(ContentReview, draft_id=source["id"])
+    with world.witness.begin() as conn:
+        conn.execute(insert(CreativeDraft.__table__).values(**twin))
+        conn.execute(insert(ContentReview.__table__).values(
+            **{k: v for k, v in review.items() if k not in ("id", "created_at", "draft_id")},
+            id=f"rv{brief_id[:30]}", draft_id=brief_id,
+        ))
+
+    def draft_history() -> list[tuple[str, str, int]]:
+        items = world.send("GET", _path(ws, brief_id), "reviewer").json()["items"]
+        return [(i["subject_type"], i["decision"], i["decision_seq"]) for i in items]
+
+    assert draft_history() == []  # the brief's approval is not the draft's
+    assert _decide(world, ws, brief_id).json()["decision_seq"] == 1
+    revoke = _decide(world, ws, brief_id, "revoked", reason_code="circumstances_changed")
+    assert revoke.json()["decision_seq"] == 2
+    assert _decide(world, ws, brief_id).json()["decision_seq"] == 3
+
+    with world.session() as s:  # the brief's own next decision: its sequence, not the draft's
+        brief = s.get(RecommendationBrief, brief_id)
+        ctx = SimpleNamespace(role=Role.REVIEWER, user=s.get(User, world.users["reviewer"]),
+                              workspace=SimpleNamespace(id=ws),
+                              organization=SimpleNamespace(id=world.org))
+        rejected = record_decision(s, ctx=ctx, brief=brief, decision="rejected",
+                                   subject_version=1, reason_code="inaccurate")
+        assert rejected.decision_seq == 2
+    with world.session() as s:
+        page = list_decisions(s, brief=s.get(RecommendationBrief, brief_id))
+        assert [(a.subject_type, a.decision, a.decision_seq) for a in page.items] == [
+            ("recommendation_brief", "rejected", 2), ("recommendation_brief", "approved", 1)
+        ]
+    assert draft_history() == [
+        ("creative_draft", "approved", 3), ("creative_draft", "revoked", 2),
+        ("creative_draft", "approved", 1),
+    ]
+    # The brief's controlling decision is its rejection; the draft's later approval under
+    # the same id and version does not make the brief generate.
+    refused = world.generate(brief_id, ws=ws)
+    assert _error(refused) == (422, "brief_not_approved")
+
+
 def test_the_decision_is_committed_before_the_201(world):
     from app.db.session import get_db
 
