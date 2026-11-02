@@ -86,7 +86,11 @@ def test_every_draft_endpoint_is_dark_and_nothing_is_reachable(world, monkeypatc
             else:
                 assert _error(r) == DARK, (role, method, path, r.text)
         cap = world.send("GET", f"/workspaces/{ws}/creative-capability", role)
-        assert (cap.status_code, cap.json()) == (200, {"enabled": False})
+        # I-5C: dark answers generation_configured false too, though every ceiling is set here.
+        assert (cap.status_code, cap.json()) == (
+            200,
+            {"enabled": False, "generation_configured": False},
+        )
     assert world.count(Job) == jobs_before
     world.drain()
     assert world.count(CreativeDraft, workspace_id=ws) == 0
@@ -96,7 +100,7 @@ def test_an_override_enables_exactly_its_workspace(world):
     on, off = world.workspace("override on"), world.workspace("override off", enabled=False)
     for ws, enabled in ((on, True), (off, False)):
         cap = world.send("GET", f"/workspaces/{ws}/creative-capability", "viewer")
-        assert cap.json() == {"enabled": enabled}
+        assert cap.json() == {"enabled": enabled, "generation_configured": enabled}
         brief_id = world.seed_brief(ws)
         r = world.send("GET", f"/workspaces/{ws}/briefs/{brief_id}/drafts", "viewer")
         assert r.status_code == (200 if enabled else 503)
@@ -109,11 +113,13 @@ def test_a_disable_override_wins_over_the_global_flag(world, monkeypatch):
     world.enable(ws, enabled=False)
     assert _error(world.send("GET", f"/workspaces/{ws}/drafts/x", "owner")) == DARK
     assert world.send("GET", f"/workspaces/{ws}/creative-capability", "owner").json() == {
-        "enabled": False
+        "enabled": False,
+        "generation_configured": False,
     }
     other = world.workspace("global on", enabled=False)  # no override: the flag decides
     assert world.send("GET", f"/workspaces/{other}/creative-capability", "owner").json() == {
-        "enabled": True
+        "enabled": True,
+        "generation_configured": True,
     }
 
 

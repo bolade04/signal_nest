@@ -1507,7 +1507,8 @@ export interface paths {
         /**
          * Whether creative generation is available for this workspace
          * @description Customer-facing, workspace-effective availability (any member). Advisory only: every
-         *     draft endpoint re-decides and answers 503 while disabled.
+         *     draft endpoint re-decides and answers 503 while disabled. ``generation_configured`` uses
+         *     the generate route's own ceiling check, and is false whenever ``enabled`` is (I-5C).
          */
         get: operations["read_creative_capability_api_v1_workspaces__workspace_id__creative_capability_get"];
         put?: never;
@@ -3244,12 +3245,14 @@ export interface components {
          * CreativeGenerationCapabilityOut
          * @description Customer-visible creative-generation availability for one workspace.
          *
-         *     Exactly one field (the ``FeedbackCapabilityOut`` precedent): no governance metadata
-         *     reaches a customer.
+         *     Two booleans and nothing else (the ``FeedbackCapabilityOut`` precedent): no governance
+         *     metadata — no ceiling name, value, usage or override detail — reaches a customer.
          */
         CreativeGenerationCapabilityOut: {
             /** Enabled */
             enabled: boolean;
+            /** Generation Configured */
+            generation_configured: boolean;
         };
         /**
          * CreativeGenerationQueuedOut

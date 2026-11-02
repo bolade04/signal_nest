@@ -144,11 +144,20 @@ class CreativeDraftListOut(BaseModel):
 class CreativeGenerationCapabilityOut(BaseModel):
     """Customer-visible creative-generation availability for one workspace.
 
-    Exactly one field (the ``FeedbackCapabilityOut`` precedent): no governance metadata
-    reaches a customer.
+    Two booleans and nothing else (the ``FeedbackCapabilityOut`` precedent): no governance
+    metadata — no ceiling name, value, usage or override detail — reaches a customer.
     """
 
+    #: Whether ``creative_generation`` resolves enabled for this workspace: the draft routes
+    #: answer 503 ``capability_unavailable`` while it is false.
     enabled: bool
+    #: Whether a generate request can be accepted here: ``enabled`` AND every daily generation
+    #: ceiling usable (the generate route's own ``unusable_ceilings`` check; it answers 503
+    #: ``creative_generation_unconfigured`` while one is not). Always false while ``enabled``
+    #: is false, so a dark workspace learns nothing about the deployment's configuration.
+    #: Added at I-5C (battery O-5) so the UI offers Generate only when the API would accept it;
+    #: a daily ceiling being reached (429) is not reflected.
+    generation_configured: bool
 
 
 __all__ = [
