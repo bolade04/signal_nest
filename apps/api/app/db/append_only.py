@@ -4,8 +4,9 @@
 **guarded table**. Every ORM-enabled write through a ``Session`` that would UPDATE or DELETE a
 row of a guarded table raises :class:`AppendOnlyViolation` before any statement is sent (or,
 inside a flush, before the flush completes; the caller's transaction is then rolled back),
-whichever mapping makes it: the model, a mapped subclass, or a second mapping of the same
-table (``__table__ = Model.__table__``, ``registry.map_imperatively(Other, Model.__table__)``).
+whichever mapping of the same ``Table`` object makes it: the model, a mapped subclass, or a
+second mapping of that ``Table`` object (``__table__ = Model.__table__``,
+``registry.map_imperatively(Other, Model.__table__)``).
 That is a flush, the legacy bulk API, and an ORM UPDATE, DELETE, upsert or prefixed INSERT
 whose target is a guarded table, in a statement passed to ``Session.execute``
 (``Query.update/delete`` included): as the statement itself, inside a ``from_statement()``
@@ -91,15 +92,18 @@ statement included), and whatever their WHERE or VALUES mention: a Core statemen
 criteria name a guarded model's ORM attribute (``update(Approval.__table__).where(Approval.id
 == …)``, or a write to another table filtered by ``select(AuditLog.id)``) is judged by its
 target (r3 C7). An ORM statement whose target is an unguarded model is not refused either,
-whatever its criteria mention. Also not refused: DDL (``DROP TABLE``, ``ALTER TABLE … DROP
-COLUMN``, ``TRUNCATE``), as text or as a SQLAlchemy DDL construct; an ORM statement executed
-on a bare ``Connection`` (``session.connection().execute(update(Model))``); the database's own
-``ON DELETE CASCADE`` / ``SET NULL`` actions when a parent row is deleted (a brief goes with
-its workspace, opportunity or evidence; ``approvals.brief_id`` and the actor columns are
-nulled); and a conflict clause declared in the table's own DDL (SQLite's ``ON CONFLICT
-REPLACE`` through ``sqlite_on_conflict…``), which would make a plain INSERT replace — no
-guarded table declares one. Exactly three places write these tables through Core after insert,
-all sanctioned:
+whatever its criteria mention. Also not refused: a class mapped to another ``Table`` object
+for the same database table — built by name in another ``MetaData``, or reflected
+(``Table("approvals", MetaData(), autoload_with=…)``): the guard keys on the guarded ``Table``
+objects (W21-REV-CF2-DATA r4 C10); DDL (``DROP TABLE``, ``ALTER TABLE … DROP COLUMN``,
+``TRUNCATE``), as text or as a SQLAlchemy DDL construct; an ORM statement executed on a bare
+``Connection`` (``session.connection().execute(update(Model))``); the database's own ``ON
+DELETE CASCADE`` / ``SET NULL`` actions when a parent row is deleted (a brief goes with its
+workspace, opportunity or evidence; ``approvals.brief_id`` and the actor columns are nulled);
+and a conflict clause declared in the table's own DDL (SQLite's ``ON CONFLICT REPLACE``
+through ``sqlite_on_conflict…``), which would make a plain INSERT replace — no guarded table
+declares one. Exactly three places write these tables through Core after insert, all
+sanctioned:
 
 1. :mod:`app.privacy.erasure` — the O-6 anonymisation that clears values naming an erased
    account or a deleted organization, and the foreign-key walk (``delete_rows``) that deletes
@@ -111,8 +115,9 @@ all sanctioned:
 **These lists are what the reviews found, not a proof of completeness.** "What is refused"
 and "What is not refused" record the paths the reviews of this guard tried (W21-REV-CF2-DATA
 r1–r3, W21-REV-CF1-DESC r1–r3, and the lanes' own probes); they do not prove that no other
-ORM path reaches a guarded row. Database-level immutability is the separate backstop (O-10,
-below).
+ORM path reaches a guarded row. Database-level immutability (a restricted runtime role, or
+triggers) would be a separate infrastructure change; it is not built, and whether to build it
+is an open operator decision (O-10, below).
 
 ``test_cf1_append_only_bulk_paths.py`` is a static **backstop**, not the enforcement layer
 (the runtime guard above is). It checks that no other production module builds an UPDATE or
