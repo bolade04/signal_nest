@@ -364,6 +364,9 @@ describe('5C-W4 — the draft editor sends only what the strict API body accepts
     await loaded(screen, 'admin', 'enabled', 'success');
     const nav = screen.getByRole('navigation', { name: 'Draft versions' });
     await screen.user.click(within(nav).getByRole('button', { name: /Version 1/ }));
+    // The channel is chosen explicitly: the editor's initial channel is the version selected
+    // when it mounted, which depends on whether the list or the session landed first.
+    await screen.user.selectOptions(screen.getByLabelText('Channel'), 'email');
     await screen.user.click(screen.getByRole('button', { name: 'Revise version 1' }));
     await waitFor(() => expect(log.post).toBe(1));
     expect(log.posts[0]).toEqual({ channel: 'email', parent_draft_id: 'draft-1' });
