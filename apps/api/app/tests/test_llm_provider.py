@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 
 import httpx
+import pydantic
 import pytest
 
 from app.llm import prompts as prompts_module
@@ -52,20 +53,42 @@ def _request(task: str = "classify_signal", inputs: dict | None = None) -> LLMRe
 # --------------------------------------------------------------------------- #
 # The seeded mock: determinism
 # --------------------------------------------------------------------------- #
+#: Registered tasks whose deterministic mock output has not landed yet (I-5AB + CF-2
+#: integration). W21 CF-2 froze ``generate_creative`` (prompt 1.0.0 and GenerateCreativeOut)
+#: and left its mock output to the 5C seam lane (5C-W2); until then the generic mock answers
+#: ``{}``, which is deterministic but not a valid GenerateCreativeOut. The set is pinned by
+#: ``test_a_pending_task_has_no_valid_mock_output_yet``, which fails as soon as a valid mock
+#: output exists, so the entry must be removed in the same change that adds it.
+MOCK_OUTPUT_PENDING = frozenset({"generate_creative"})
+
+
+def _every_field(task: str) -> dict:
+    return {
+        f: [f"value for {f}"] if f == "evidence" else f"value for {f}"
+        for f in template_fields(PROMPTS[task].template)
+    }
+
+
 class TestMockDeterminism:
     @pytest.mark.parametrize("task", sorted(TASK_SCHEMAS))
     def test_same_seed_and_inputs_give_identical_output(self, mock_llm_provider, task):
-        inputs = {
-            f: [f"value for {f}"] if f == "evidence" else f"value for {f}"
-            for f in template_fields(PROMPTS[task].template)
-        }
+        inputs = _every_field(task)
         twin = MockLLMProvider(model=mock_llm_provider.model, seed=mock_llm_provider.seed)
         a = mock_llm_provider.generate(_request(task, inputs), task, "v")
         b = twin.generate(_request(task, inputs), task, "v")
         assert a.output == b.output and a.input_hash == b.input_hash
         assert a.is_simulated and a.status == "ok"
+        if task in MOCK_OUTPUT_PENDING:
+            return  # schema validity: test_a_pending_task_has_no_valid_mock_output_yet
         # Every task's mock output is valid against its schema.
         TASK_SCHEMAS[task].model_validate(a.output)
+
+    @pytest.mark.parametrize("task", sorted(MOCK_OUTPUT_PENDING))
+    def test_a_pending_task_has_no_valid_mock_output_yet(self, mock_llm_provider, task):
+        assert task in TASK_SCHEMAS and task in PROMPTS
+        output = mock_llm_provider.generate(_request(task, _every_field(task)), task, "v").output
+        with pytest.raises(pydantic.ValidationError):
+            TASK_SCHEMAS[task].model_validate(output)
 
     def test_the_seed_and_the_inputs_both_enter_the_mock_hash(self, mock_llm_provider):
         base = mock_llm_provider.generate(_request(), "p", "v").input_hash
@@ -154,6 +177,12 @@ GOLDEN_PROMPTS = {
     "geo_reasoning": (
         "geo_reasoning", "1.0.0",
         "07178ac5aa69dbe8dd40cbe731531f080a7ad6a5d0ec8d3ec3149b62e4fa3083",
+    ),
+    # W21 CF-2 froze this prompt at 1.0.0; the digest is the one CF-2 pins in
+    # test_cf2_creative_contracts.GENERATE_CREATIVE_1_0_0_SHA256 (I-5AB + CF-2 integration).
+    "generate_creative": (
+        "generate_creative", "1.0.0",
+        "219609b1b883413210715ca9ab058776f50ecc313df3de806c088e56f7ddd348",
     ),
 }
 #: The system prompt is sent with every real call and has no version of its own: changing

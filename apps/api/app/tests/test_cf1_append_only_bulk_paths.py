@@ -3,20 +3,42 @@
 The unit-of-work guard (``before_update`` / ``before_delete``) is covered by
 ``test_cf1_append_only_models.py``. This module covers every other ORM write path the review
 found open at ``30fc045c`` — ORM-enabled UPDATE/DELETE statements, ``Query.update/delete``,
-the legacy bulk API and an ORM upsert — for each of the three append-only models, and shows:
+the legacy bulk API and an ORM upsert — plus, since FU-CF1-H1, an ORM insert carrying a
+statement prefix (SQLite ``OR REPLACE`` replaced a stored row through a session) and, since
+CF2-FIX2 (W21-REV-CF2-DATA r2 C3; FU-CF1-H2 as extended after W21-REV-CF1-DESC r3), ORM DML
+that is not the statement itself: a data-modifying CTE (which PostgreSQL executes) attached to
+a ``select()`` or to an outer INSERT, UPDATE or DELETE of another table, selected from, in a
+scalar subquery or under ``INSERT … FROM SELECT``, an upsert CTE, and ``from_statement()``
+under the model or under another entity (update, delete, upsert, prefixed insert, or carrying
+such a CTE), DML referenced from loader-option criteria (``with_loader_criteria``,
+``joinedload`` / ``selectinload`` of a relationship ``.and_()``; CF2-FIX3, r3 C5), and, since
+CF2-FIX3 (r3 C6), every path through a second mapping of a guarded table
+(``registry.map_imperatively`` and a declarative ``__table__ = Model.__table__``), for each
+append-only model (the three of CF-1 and, since CF-2, ``creative_drafts`` and
+``content_reviews``), and shows:
 
 * each path raises :class:`~app.db.append_only.AppendOnlyViolation` and the stored row is
   byte-identical afterwards;
 * the sanctioned Core statements on the *table* (privacy anonymisation, the foreign-key walk)
-  still work under the guard, and an ORM INSERT (plain or ``ON CONFLICT DO NOTHING``) is not
-  refused;
+  still work under the guard, Core DML on the table is not refused in any position (a CTE on
+  a ``select()`` or on another table's UPDATE, ``from_statement()`` under another entity,
+  with an ORM attribute in its WHERE), a write to another table whose criteria select from a
+  guarded model is not refused (r3 C7: judged by its target), and a plain ORM INSERT is not
+  refused in any position (top level, ``ON CONFLICT DO
+  NOTHING``, ``from_statement``, as a CTE); no guarded table declares a SQLite DDL conflict
+  clause;
 * **static pin:** no production module outside ``app/privacy/`` builds an UPDATE or DELETE
-  (function, attribute-call or method form, or ``Query``) or an upsert over these models or
-  their tables, writes a literal unqualified UPDATE / DELETE FROM / INSERT … DO UPDATE string
-  on the three tables, calls the bulk API or calls ``delete_rows``, following model import
-  aliases and annotated, tuple, list and walrus aliases — with an in-test control per form
-  and look-alikes that must pass. It is a backstop to the runtime guard; what it does not
-  pin is listed on the production-scan test and in ``app.db.append_only``;
+  (function, attribute-call or method form, or ``Query``), an upsert or a prefixed insert
+  over these models (bare, ``__mapper__``, ``aliased()``, ``inspect()`` or
+  ``class_mapper()``) or their tables, maps a guarded table a second time (``__table__ =``,
+  ``map_imperatively``), writes a literal unqualified UPDATE [ONLY] / UPDATE OR
+  <algorithm> / DELETE FROM [ONLY] / INSERT OR <algorithm> INTO / REPLACE INTO / INSERT …
+  DO UPDATE string on the guarded tables (bare, ``"…"``, ``'…'``, ``[…]`` or backticks),
+  calls the bulk API or calls ``delete_rows``,
+  following model import aliases and annotated, tuple, list and walrus aliases — with an
+  in-test control per form and look-alikes that must pass. It is a backstop to the runtime
+  guard; what it does not pin is listed on the production-scan test and in
+  ``app.db.append_only``;
 * a **mapped subclass** of a guarded model is guarded too (unit of work, statements, bulk
   API).
 
@@ -35,21 +57,52 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
-from sqlalchemy import delete, insert, update
+from sqlalchemy import (
+    Column,
+    MetaData,
+    String,
+    Table,
+    delete,
+    insert,
+    inspect,
+    lambda_stmt,
+    literal_column,
+    select,
+    text,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    aliased,
+    joinedload,
+    registry,
+    selectinload,
+    sessionmaker,
+    with_loader_criteria,
+)
 
 from app.approvals.models import Approval
 from app.audit.models import AuditLog
 from app.briefs.models import RecommendationBrief
+from app.creative.models import ContentReview, CreativeDraft
 from app.db.append_only import AppendOnlyViolation
+from app.jobs.worker_models import WorkerRegistration
+from app.organizations.models import Organization, Workspace
 from app.tests._privacy_support import ORG_A, WS_A, PrivacyEnv, privacy_world
 
 API_DIR = Path(__file__).resolve().parents[2]
-GUARDED = (RecommendationBrief, Approval, AuditLog)
+GUARDED = (RecommendationBrief, Approval, AuditLog, CreativeDraft, ContentReview)
 #: The column each probe tries to change (always allowed by the table's CHECKs).
-FIELD = {RecommendationBrief: "summary", Approval: "note", AuditLog: "reason"}
+FIELD = {
+    RecommendationBrief: "summary",
+    Approval: "note",
+    AuditLog: "reason",
+    CreativeDraft: "body",
+    ContentReview: "warnings",
+}
 
 BACKENDS = [
     "sqlite",
@@ -75,10 +128,12 @@ _serial = itertools.count(1)
 
 
 def _seed(world: PrivacyEnv) -> dict[type, str]:
-    """One fresh committed brief, approval and audit record (Core inserts, as a fixture)."""
+    """One fresh committed brief, approval, audit record, creative draft and content review
+    (Core inserts, as a fixture)."""
     n = next(_serial)
     ids = {RecommendationBrief: f"cf1b-brief-{n}", Approval: f"cf1b-appr-{n}",
-           AuditLog: f"cf1b-log-{n}"}
+           AuditLog: f"cf1b-log-{n}", CreativeDraft: f"cf2b-draft-{n}",
+           ContentReview: f"cf2b-review-{n}"}
     with world.engine.begin() as conn:
         conn.execute(
             insert(RecommendationBrief.__table__).values(
@@ -105,6 +160,24 @@ def _seed(world: PrivacyEnv) -> dict[type, str]:
             insert(AuditLog.__table__).values(
                 id=ids[AuditLog], organization_id=ORG_A, workspace_id=WS_A,
                 action="auth.register", reason="original", context={},
+            )
+        )
+        conn.execute(
+            insert(CreativeDraft.__table__).values(
+                id=ids[CreativeDraft], organization_id=ORG_A, workspace_id=WS_A,
+                brief_id=ids[RecommendationBrief], opportunity_id="a1-opp", draft_version=1,
+                channel="email", body="original", prompt_name="generate_creative",
+                prompt_version="1.0.0", model_identifier="mock", input_hash="0" * 64,
+                is_simulated=True, input_tokens=0, output_tokens=0, estimated_cost_usd=0,
+                created_by_snapshot="u Name <u@example.test>",
+            )
+        )
+        conn.execute(
+            insert(ContentReview.__table__).values(
+                id=ids[ContentReview], organization_id=ORG_A, workspace_id=WS_A,
+                draft_id=ids[CreativeDraft], draft_version=1, risk_level="low",
+                is_blocked=False, findings=[], warnings=["original"], blocked_claim_ids=[],
+                required_disclaimers=[], disclaimers_resolved=True, passed=True,
             )
         )
     return ids
@@ -166,6 +239,198 @@ def _merge_detached(s, m, rid, w):
     s.merge(obj)
 
 
+def _changed_row(w, m, rid) -> dict:
+    return {**_stored(w, m, rid), FIELD[m]: "changed"}
+
+
+# FU-CF1-H1: on SQLite, ``INSERT OR REPLACE`` deletes the conflicting row and inserts the new
+# one, so before the prefix guard ``insert(Model).prefix_with("OR REPLACE")`` through a
+# Session replaced a stored row with no error (CF1-DESC r1 raw/002, r2 raw/003). PostgreSQL
+# has no INSERT prefix; every prefix is refused before any statement is sent.
+def _insert_or_replace(s, m, rid, w):
+    s.execute(insert(m).prefix_with("OR REPLACE").values(**_changed_row(w, m, rid)))
+
+
+def _insert_or_replace_executemany(s, m, rid, w):
+    s.execute(insert(m).prefix_with("OR REPLACE"), [_changed_row(w, m, rid)])
+
+
+def _insert_or_replace_text_prefix(s, m, rid, w):
+    s.execute(insert(m).prefix_with(text("or  replace")).values(**_changed_row(w, m, rid)))
+
+
+def _insert_or_replace_sqlite_only(s, m, rid, w):
+    stmt = _upsert(w)(m).prefix_with("OR REPLACE", dialect="sqlite")
+    s.execute(stmt.values(**_changed_row(w, m, rid)))
+
+
+def _insert_or_ignore(s, m, rid, w):
+    s.execute(insert(m).prefix_with("OR IGNORE").values(**_changed_row(w, m, rid)))
+
+
+# CF2-FIX2 (W21-REV-CF2-DATA r2 C3): ORM DML nested inside another statement. PostgreSQL runs
+# a data-modifying CTE (WITH u AS (UPDATE ... RETURNING ...) SELECT ...), so before the nested
+# walk these changed or deleted guarded rows through a Session; SQLite has no DML in WITH and
+# refuses it itself, so there only the exception type shows the guard. The from_statement
+# forms changed rows on SQLite too: is_insert follows the inner statement, but the upsert and
+# prefix checks read the outer FromStatement.
+_SINK = Table("cf2fix2_sink", MetaData(), Column("id", String(64), primary_key=True))
+
+
+def _update_returning(m, rid):
+    return update(m).where(m.id == rid).values({FIELD[m]: "changed"}).returning(m.id)
+
+
+def _cte_update(s, m, rid, w):
+    s.execute(select(literal_column("1")).add_cte(_update_returning(m, rid).cte("u"))).all()
+
+
+def _cte_delete(s, m, rid, w):
+    cte = delete(m).where(m.id == rid).returning(m.id).cte("d")
+    s.execute(select(literal_column("1")).add_cte(cte)).all()
+
+
+def _select_from_update_cte(s, m, rid, w):
+    s.execute(select(_update_returning(m, rid).cte("u").c.id)).all()
+
+
+def _insert_from_select_of_update_cte(s, m, rid, w):
+    _SINK.create(w.engine, checkfirst=True)
+    cte = _update_returning(m, rid).cte("u")
+    s.execute(insert(_SINK).from_select(["id"], select(cte.c.id)))
+
+
+def _update_cte_in_scalar_subquery(s, m, rid, w):
+    cte = _update_returning(m, rid).cte("u")
+    s.execute(select(select(cte.c.id).scalar_subquery())).all()
+
+
+def _from_statement_upsert(s, m, rid, w):
+    upsert = _upsert(w)(m).values(**_stored(w, m, rid)).on_conflict_do_update(
+        index_elements=["id"], set_={FIELD[m]: "changed"}
+    )
+    s.execute(select(m).from_statement(upsert.returning(m))).all()
+
+
+def _from_statement_prefixed_insert(s, m, rid, w):
+    stmt = insert(m).prefix_with("OR REPLACE").values(**_changed_row(w, m, rid)).returning(m)
+    s.execute(select(m).from_statement(stmt)).all()
+
+
+# FU-CF1-H2 as extended by the coordinator (W21-REV-CF1-DESC r3): the outer statement is not
+# the guarded model. Before the whole-statement walk, the guard decided by the outer
+# statement's bind_mapper, so these passed: from_statement() under an unguarded entity
+# changed rows on SQLite and PostgreSQL; a CTE on an outer UPDATE/DELETE/INSERT of another
+# table, and an upsert CTE, changed rows on PostgreSQL.
+_ELSEWHERE = "no-such-organization"
+
+
+def _upsert_of(m, rid, w):
+    return _upsert(w)(m).values(**_stored(w, m, rid)).on_conflict_do_update(
+        index_elements=["id"], set_={FIELD[m]: "changed"}
+    )
+
+
+def _cte_upsert(s, m, rid, w):
+    cte = _upsert_of(m, rid, w).returning(m.id).cte("i")
+    s.execute(select(literal_column("1")).add_cte(cte)).all()
+
+
+def _cte_on_outer_update_of_another_table(s, m, rid, w):
+    outer = update(Organization).where(Organization.id == _ELSEWHERE).values(name="x")
+    s.execute(outer.add_cte(_update_returning(m, rid).cte("u")))
+
+
+def _cte_on_outer_delete_of_another_table(s, m, rid, w):
+    outer = delete(Organization).where(Organization.id == _ELSEWHERE)
+    s.execute(outer.add_cte(delete(m).where(m.id == rid).returning(m.id).cte("d")))
+
+
+def _cte_on_outer_insert_of_another_table(s, m, rid, w):
+    _SINK.create(w.engine, checkfirst=True)
+    outer = insert(_SINK).values(id=f"{rid}-carrier")
+    s.execute(outer.add_cte(_update_returning(m, rid).cte("u")))
+
+
+def _from_statement_other_entity_update(s, m, rid, w):
+    s.execute(select(Organization.id).from_statement(_update_returning(m, rid))).all()
+
+
+def _from_statement_other_entity_delete(s, m, rid, w):
+    stmt = delete(m).where(m.id == rid).returning(m.id)
+    s.execute(select(Organization.id).from_statement(stmt)).all()
+
+
+def _from_statement_other_entity_upsert(s, m, rid, w):
+    stmt = _upsert_of(m, rid, w).returning(m.id)
+    s.execute(select(Organization.id).from_statement(stmt)).all()
+
+
+# CF2-FIX3 (W21-REV-CF2-DATA r3 C8): the model through aliased() / inspect() and a lambda
+# statement, which the docstring names as refused; a mutant that lets aliased() escape must
+# fail here.
+def _update_aliased(s, m, rid, w):
+    a = aliased(m)
+    s.execute(update(a).where(a.id == rid).values({FIELD[m]: "changed"}))
+
+
+def _delete_aliased(s, m, rid, w):
+    a = aliased(m)
+    s.execute(delete(a).where(a.id == rid))
+
+
+def _update_inspect(s, m, rid, w):
+    s.execute(update(inspect(m)).where(m.id == rid).values({FIELD[m]: "changed"}))
+
+
+def _cte_update_aliased(s, m, rid, w):
+    a = aliased(m)
+    cte = update(a).where(a.id == rid).values({FIELD[m]: "changed"}).returning(a.id).cte("u")
+    s.execute(select(literal_column("1")).add_cte(cte)).all()
+
+
+def _lambda_update(s, m, rid, w):
+    values = {FIELD[m]: "changed"}
+    # enable_tracking=False: built afresh each call, never a cached statement of another model
+    stmt = lambda_stmt(lambda: update(m).where(m.id == rid).values(values), enable_tracking=False)
+    s.execute(stmt)
+
+
+# CF2-FIX3 (W21-REV-CF2-DATA r3 C5): DML referenced from loader-option criteria, which
+# SQLAlchemy applies only at compile time (the walk cannot see it); the guard compiles a
+# statement that carries options and judges its top-level CTEs. PostgreSQL ran all of these.
+def _with_loader_criteria(s, m, rid, w):
+    cte = _update_returning(m, rid).cte("u")
+    crit = with_loader_criteria(Organization, Organization.id.in_(select(cte.c.id)))
+    s.execute(select(Organization).options(crit)).all()
+
+
+def _joinedload_and(s, m, rid, w):
+    cte = _update_returning(m, rid).cte("u")
+    load = joinedload(Organization.workspaces.and_(Workspace.id.in_(select(cte.c.id))))
+    s.execute(select(Organization).options(load)).unique().all()
+
+
+def _selectinload_and(s, m, rid, w):
+    cte = _update_returning(m, rid).cte("u")
+    load = selectinload(Organization.workspaces.and_(Workspace.id.in_(select(cte.c.id))))
+    s.execute(select(Organization).options(load)).all()
+
+
+def _query_with_loader_criteria(s, m, rid, w):
+    cte = delete(m).where(m.id == rid).returning(m.id).cte("d")
+    crit = with_loader_criteria(Organization, Organization.id.in_(select(cte.c.id)))
+    s.query(Organization).options(crit).all()
+
+
+def _from_statement_other_entity_carrying_a_cte(s, m, rid, w):
+    carrier = (
+        update(Organization).where(Organization.id == _ELSEWHERE).values(name="x")
+        .returning(Organization.id).add_cte(_update_returning(m, rid).cte("u"))
+    )
+    s.execute(select(Organization.id).from_statement(carrier)).all()
+
+
 PATHS: dict[str, Callable] = {
     "execute(update(Model).where(...))": _update_where,
     "execute(update(Model), [pk rows])": _update_by_pk,
@@ -176,6 +441,45 @@ PATHS: dict[str, Callable] = {
     "Query.delete()": _query_delete,
     "insert(Model).on_conflict_do_update": _orm_upsert,
     "merge(detached, modified)": _merge_detached,
+    "insert(Model).prefix_with('OR REPLACE')": _insert_or_replace,
+    "execute(insert(Model).prefix_with('OR REPLACE'), [rows])": _insert_or_replace_executemany,
+    "insert(Model).prefix_with(text('or  replace'))": _insert_or_replace_text_prefix,
+    "dialect insert(Model).prefix_with('OR REPLACE', dialect='sqlite')": (
+        _insert_or_replace_sqlite_only
+    ),
+    "insert(Model).prefix_with('OR IGNORE')": _insert_or_ignore,
+    "select(1).add_cte(update(Model)...cte())": _cte_update,
+    "select(1).add_cte(delete(Model)...cte())": _cte_delete,
+    "select(cte.c.id) from update(Model)...cte()": _select_from_update_cte,
+    "INSERT INTO sink FROM SELECT of update(Model)...cte()": _insert_from_select_of_update_cte,
+    "update(Model)...cte() in a scalar subquery": _update_cte_in_scalar_subquery,
+    "select(Model).from_statement(upsert)": _from_statement_upsert,
+    "select(Model).from_statement(insert.prefix_with('OR REPLACE'))": (
+        _from_statement_prefixed_insert
+    ),
+    "select(1).add_cte(upsert(Model)...cte())": _cte_upsert,
+    "update(Other).add_cte(update(Model)...cte())": _cte_on_outer_update_of_another_table,
+    "delete(Other).add_cte(delete(Model)...cte())": _cte_on_outer_delete_of_another_table,
+    "insert(sink).add_cte(update(Model)...cte())": _cte_on_outer_insert_of_another_table,
+    "select(Other.id).from_statement(update(Model))": _from_statement_other_entity_update,
+    "select(Other.id).from_statement(delete(Model))": _from_statement_other_entity_delete,
+    "select(Other.id).from_statement(upsert(Model))": _from_statement_other_entity_upsert,
+    "select(Other.id).from_statement(update(Other).add_cte(update(Model)...cte()))": (
+        _from_statement_other_entity_carrying_a_cte
+    ),
+    "options(with_loader_criteria(Other, ...select(update(Model) cte)...))": (
+        _with_loader_criteria
+    ),
+    "options(joinedload(Other.rel.and_(...select(update(Model) cte)...)))": _joinedload_and,
+    "options(selectinload(Other.rel.and_(...select(update(Model) cte)...)))": _selectinload_and,
+    "query(Other).options(with_loader_criteria(...select(delete(Model) cte)...))": (
+        _query_with_loader_criteria
+    ),
+    "update(aliased(Model))": _update_aliased,
+    "delete(aliased(Model))": _delete_aliased,
+    "update(inspect(Model))": _update_inspect,
+    "select(1).add_cte(update(aliased(Model))...cte())": _cte_update_aliased,
+    "lambda_stmt(lambda: update(Model)...)": _lambda_update,
 }
 
 
@@ -197,7 +501,7 @@ def test_the_sanctioned_core_statements_still_work_under_the_guard(world):
     """Privacy anonymisation and the foreign-key walk use the TABLE, through a Session."""
     ids = _seed(world)
     factory = sessionmaker(bind=world.engine, expire_on_commit=False, future=True)
-    briefs, approvals, logs = (m.__table__ for m in GUARDED)
+    briefs, approvals, logs = (m.__table__ for m in (RecommendationBrief, Approval, AuditLog))
     with factory() as s:
         s.execute(
             update(briefs)
@@ -230,6 +534,250 @@ def test_orm_inserts_are_not_refused(world):
         s.commit()
     assert _stored(world, AuditLog, ids[AuditLog] + "-2") is not None
     assert _stored(world, AuditLog, ids[AuditLog]) == row
+    # select(Model).from_statement(plain insert): run as the outer insert, so not refused.
+    with factory() as s:
+        stmt = insert(AuditLog).values(
+            id=ids[AuditLog] + "-3", organization_id=ORG_A, action="auth.register", context={},
+        )
+        s.execute(select(AuditLog).from_statement(stmt.returning(AuditLog))).all()
+        s.commit()
+    assert _stored(world, AuditLog, ids[AuditLog] + "-3") is not None
+
+
+def _core_cte_in_select(m, rid):
+    t = m.__table__
+    cte = update(t).where(t.c.id == rid).values({FIELD[m]: "core"}).returning(t.c.id)
+    return select(literal_column("1")).add_cte(cte.cte("u")), True
+
+
+def _core_cte_on_outer_update(m, rid):
+    t = m.__table__
+    cte = update(t).where(t.c.id == rid).values({FIELD[m]: "core"}).returning(t.c.id)
+    outer = update(_SINK).where(_SINK.c.id == _ELSEWHERE).values(id="x")
+    return outer.add_cte(cte.cte("u")), True
+
+
+def _core_dml_from_statement_other_entity(m, rid):
+    t = m.__table__
+    stmt = update(t).where(t.c.id == rid).values({FIELD[m]: "core"}).returning(t.c.id)
+    return select(Organization.id).from_statement(stmt), False
+
+
+def _core_update_with_orm_attribute_in_where(m, rid):
+    # CF2-FIX3 (r3 C7): an ORM attribute in a Core statement's WHERE sets its plugin subject,
+    # but its target is the plain table: Core, not refused.
+    t = m.__table__
+    return update(t).where(m.id == rid).values({FIELD[m]: "core"}), False
+
+
+CORE_CONTROLS = {
+    "update(Model.__table__).where(Model.id == rid) [ORM attribute in WHERE]": (
+        _core_update_with_orm_attribute_in_where
+    ),
+    "select(1).add_cte(update(Model.__table__)...cte())": _core_cte_in_select,
+    "update(sink).add_cte(update(Model.__table__)...cte())": _core_cte_on_outer_update,
+    "select(Other.id).from_statement(update(Model.__table__))": (
+        _core_dml_from_statement_other_entity
+    ),
+}
+
+
+@pytest.mark.parametrize("model", GUARDED, ids=lambda m: m.__tablename__)
+@pytest.mark.parametrize("form", list(CORE_CONTROLS))
+def test_core_table_dml_in_any_position_is_not_refused_by_the_guard(world, model, form):
+    """Controls for the whole-statement walk: DML built on the *table* is Core, a sanctioned
+    path, wherever it stands, and reaches the database. PostgreSQL runs every form; SQLite has
+    no DML in WITH and refuses the CTE forms itself (a driver error, not the guard) but runs
+    the from_statement() form."""
+    rid = _seed(world)[model]
+    _SINK.create(world.engine, checkfirst=True)
+    stmt, uses_a_cte = CORE_CONTROLS[form](model, rid)
+    factory = sessionmaker(bind=world.engine, expire_on_commit=False, future=True)
+    with factory() as s:
+        if uses_a_cte and world.engine.dialect.name != "postgresql":
+            with pytest.raises(DBAPIError):
+                s.execute(stmt)
+            return
+        result = s.execute(stmt)
+        if getattr(result, "returns_rows", True):
+            result.all()
+        s.commit()
+    assert _stored(world, model, rid)[FIELD[model]] == "core"
+
+
+# --------------------------------------------------------------------------- #
+# CF2-FIX3 (W21-REV-CF2-DATA r3 C6): a second mapping of a guarded table. The guard is keyed
+# on the table: a class that maps it without subclassing the model is refused on every path.
+# Both mapping styles, in registries of their own (never Base.registry, which the privacy
+# inventory enumerates).
+# --------------------------------------------------------------------------- #
+_SHADOW_REGISTRY = registry()
+
+
+class _ShadowBase(DeclarativeBase):
+    """A declarative base of its own for the ``__table__ = Model.__table__`` style."""
+
+
+def _imperative_shadow(model):
+    shadow = type(f"Imperative{model.__name__}", (), {})
+    _SHADOW_REGISTRY.map_imperatively(shadow, model.__table__)
+    return shadow
+
+
+def _declarative_shadow(model):
+    return type(f"Declarative{model.__name__}", (_ShadowBase,), {"__table__": model.__table__})
+
+
+SHADOWS = {
+    "map_imperatively(Other, Model.__table__)": {m: _imperative_shadow(m) for m in GUARDED},
+    "class Other(Base): __table__ = Model.__table__": {
+        m: _declarative_shadow(m) for m in GUARDED
+    },
+}
+
+
+def _shadow_update(s, m, sh, rid, w):
+    s.execute(update(sh).where(sh.id == rid).values({FIELD[m]: "changed"}))
+
+
+def _shadow_flush_update(s, m, sh, rid, w):
+    setattr(s.get(sh, rid), FIELD[m], "changed")
+    s.flush()
+
+
+def _shadow_flush_delete(s, m, sh, rid, w):
+    s.delete(s.get(sh, rid))
+    s.flush()
+
+
+def _shadow_bulk_update_mappings(s, m, sh, rid, w):
+    s.bulk_update_mappings(sh, [{"id": rid, FIELD[m]: "changed"}])
+
+
+def _shadow_upsert(s, m, sh, rid, w):
+    upsert = _upsert(w)(sh).values(**_stored(w, m, rid)).on_conflict_do_update(
+        index_elements=["id"], set_={FIELD[m]: "changed"}
+    )
+    s.execute(upsert)
+
+
+def _shadow_update_cte(s, m, sh, rid, w):
+    cte = update(sh).where(sh.id == rid).values({FIELD[m]: "changed"}).returning(sh.id)
+    s.execute(select(literal_column("1")).add_cte(cte.cte("u"))).all()
+
+
+SHADOW_PATHS = {
+    "execute(update(Other))": _shadow_update,
+    "flush an attribute change on Other": _shadow_flush_update,
+    "session.delete(Other) + flush": _shadow_flush_delete,
+    "bulk_update_mappings(Other)": _shadow_bulk_update_mappings,
+    "upsert on Other": _shadow_upsert,
+    "select(1).add_cte(update(Other)...cte())": _shadow_update_cte,
+}
+
+
+@pytest.mark.parametrize("model", GUARDED, ids=lambda m: m.__tablename__)
+@pytest.mark.parametrize("path", list(SHADOW_PATHS))
+@pytest.mark.parametrize("style", list(SHADOWS))
+def test_a_second_mapping_of_a_guarded_table_is_refused(world, style, path, model):
+    rid = _seed(world)[model]
+    before = _stored(world, model, rid)
+    shadow = SHADOWS[style][model]
+    factory = sessionmaker(bind=world.engine, expire_on_commit=False, future=True)
+    with factory() as s:
+        with pytest.raises(AppendOnlyViolation):
+            SHADOW_PATHS[path](s, model, shadow, rid, world)
+            s.commit()
+        s.rollback()
+    assert _stored(world, model, rid) == before
+
+
+def _core_delete_another_table_filtered_by_model(m, rid):
+    t = WorkerRegistration.__table__
+    return delete(t).where(t.c.id.in_(select(m.id).where(m.id == rid)))
+
+
+def _orm_update_another_model_filtered_by_model(m, rid):
+    sub = select(m.organization_id).where(m.id == rid)
+    return update(Organization).where(Organization.id.in_(sub)).values(name=Organization.name)
+
+
+OTHER_TABLE_CONTROLS = {
+    "delete(worker_registrations table).where(id IN select(Model.id))": (
+        _core_delete_another_table_filtered_by_model
+    ),
+    "update(Organization).where(id IN select(Model.organization_id))": (
+        _orm_update_another_model_filtered_by_model
+    ),
+}
+
+
+@pytest.mark.parametrize("model", GUARDED, ids=lambda m: m.__tablename__)
+@pytest.mark.parametrize("form", list(OTHER_TABLE_CONTROLS))
+def test_a_write_to_another_table_that_mentions_a_guarded_model_is_not_refused(
+    world, form, model
+):
+    """CF2-FIX3 (r3 C7): the guard judges a DML statement by its target. A write to an
+    unguarded table (Core or ORM) whose criteria select from a guarded model is not refused,
+    and the guarded row is untouched."""
+    rid = _seed(world)[model]
+    before = _stored(world, model, rid)
+    factory = sessionmaker(bind=world.engine, expire_on_commit=False, future=True)
+    with factory() as s:
+        s.execute(OTHER_TABLE_CONTROLS[form](model, rid))
+        s.commit()
+    assert _stored(world, model, rid) == before
+
+
+@pytest.mark.parametrize("model", GUARDED, ids=lambda m: m.__tablename__)
+def test_a_nested_plain_orm_insert_is_not_refused(world, model):
+    """Append-only means insert-only, wherever the INSERT stands: a plain ORM insert of a
+    guarded model as a CTE passes the guard (coordinator ruling, FU-CF1-H2 extended).
+    PostgreSQL writes the new row and leaves the stored one alone; SQLite has no DML in WITH
+    and refuses it itself (a driver error, not the guard)."""
+    ids = _seed(world)
+    rid = ids[model]
+    before = _stored(world, model, rid)
+    new = dict(before, id=rid + "-cte")
+    # A genuinely new row: move off each table's unique key.
+    if model is RecommendationBrief:
+        new["brief_version"] = before["brief_version"] + 1000
+    elif model is Approval:
+        new["decision_seq"] = before["decision_seq"] + 1000
+    elif model is CreativeDraft:
+        new["draft_version"] = before["draft_version"] + 1000
+    elif model is ContentReview:  # one review per draft: review a second draft of the brief
+        draft = dict(_stored(world, CreativeDraft, ids[CreativeDraft]), id=rid + "-draft")
+        draft["draft_version"] += 1000
+        with world.engine.begin() as conn:
+            conn.execute(insert(CreativeDraft.__table__).values(**draft))
+        new["draft_id"] = draft["id"]
+    stmt = select(insert(model).values(**new).returning(model.id).cte("i").c.id)
+    factory = sessionmaker(bind=world.engine, expire_on_commit=False, future=True)
+    with factory() as s:
+        if world.engine.dialect.name == "postgresql":
+            assert s.execute(stmt).scalars().all() == [rid + "-cte"]
+            s.commit()
+            assert _stored(world, model, rid + "-cte") is not None
+        else:
+            with pytest.raises(DBAPIError):
+                s.execute(stmt).all()
+    assert _stored(world, model, rid) == before
+
+
+def test_no_guarded_table_declares_a_sqlite_conflict_clause():
+    """A DDL conflict clause (``sqlite_on_conflict…``, rendered ``ON CONFLICT REPLACE``) would
+    make a plain INSERT replace a stored row, which no statement guard can see. None of the
+    guarded tables declares one (FU-CF1-H1; ``app.db.append_only`` says so)."""
+    for model in GUARDED:
+        table = model.__table__
+        for constraint in table.constraints:
+            options = constraint.dialect_options["sqlite"]
+            assert options.get("on_conflict") is None, (table.name, constraint)
+        for column in table.columns:
+            options = column.dialect_options["sqlite"]
+            for key in ("on_conflict_not_null", "on_conflict_primary_key", "on_conflict_unique"):
+                assert options.get(key) is None, (table.name, column.name, key)
 
 
 # --------------------------------------------------------------------------- #
@@ -240,11 +788,24 @@ _TABLES = {m.__tablename__ for m in GUARDED}
 _BULK = {"bulk_update_mappings", "bulk_insert_mappings", "bulk_save_objects"}
 _INSERT_FNS = {"insert", "pg_insert", "sqlite_insert", "mysql_insert"}
 _UPSERTS = {"on_conflict_do_update", "on_duplicate_key_update"}
+#: Any statement prefix on a guarded insert (SQLite OR REPLACE / OR IGNORE / ...), as the
+#: runtime guard refuses (FU-CF1-H1).
+_PREFIXES = {"prefix_with"}
 _TABLE_ALT = "|".join(sorted(_TABLES))
+#: A guarded table name, bare or quoted with "...", '...', [...] or backticks (SQLite takes
+#: all four: a single-quoted string in a table position is read as the table's name).
+_T = rf"[\"'\[`]?(?:{_TABLE_ALT})[\"'\]`]?(?![\w])"
+#: SQLite's conflict algorithms (``UPDATE OR <alg>``, ``INSERT OR <alg>``).
+_ALG = r"(?:ROLLBACK|ABORT|REPLACE|FAIL|IGNORE)"
 _SQL_WRITE = re.compile(
-    rf"\bUPDATE\s+\"?(?:{_TABLE_ALT})\"?(?![\w])"
-    rf"|\bDELETE\s+FROM\s+\"?(?:{_TABLE_ALT})\"?(?![\w])"
-    rf"|\bINSERT\s+INTO\s+\"?(?:{_TABLE_ALT})\"?(?![\w]).*"
+    # UPDATE t; PostgreSQL UPDATE ONLY t; SQLite UPDATE OR <alg> t
+    rf"\bUPDATE\s+(?:OR\s+{_ALG}\s+)?(?:ONLY\s+)?{_T}"
+    # DELETE FROM t; PostgreSQL DELETE FROM ONLY t
+    rf"|\bDELETE\s+FROM\s+(?:ONLY\s+)?{_T}"
+    # SQLite INSERT OR <alg> INTO t, and REPLACE INTO t (an alias of INSERT OR REPLACE)
+    rf"|\b(?:INSERT\s+OR\s+{_ALG}|REPLACE)\s+INTO\s+{_T}"
+    # INSERT INTO t ... DO UPDATE / ON DUPLICATE KEY UPDATE
+    rf"|\bINSERT\s+INTO\s+{_T}.*"
     r"(?:\bDO\s+UPDATE\b|\bON\s+DUPLICATE\s+KEY\s+UPDATE\b)",
     re.IGNORECASE | re.DOTALL,
 )
@@ -255,18 +816,43 @@ def _callee(node: ast.Call) -> str | None:
     return getattr(node.func, "id", getattr(node.func, "attr", None))
 
 
+#: Calls that stand for the model in an ORM statement: ``aliased(Model)``, ``inspect(Model)``
+#: (the Mapper), plain or attribute-called (``sa.orm.aliased``).
+_MODEL_WRAPPERS = {"aliased", "inspect", "class_mapper"}
+#: Attributes of a guarded model that stand for it or its table in a statement or a mapping.
+_MODEL_ATTRS = {"__table__", "__mapper__"}
+
+
 def _is_guarded(node: ast.AST, names: set[str]) -> bool:
-    """``Model``, ``Model.__table__`` or an alias of either."""
+    """``Model``, ``Model.__table__``, ``Model.__mapper__``, ``aliased(Model)`` /
+    ``inspect(Model)`` / ``class_mapper(Model)``, or an alias of any of them."""
     if isinstance(node, ast.Name):
         return node.id in names
     if isinstance(node, ast.NamedExpr):
         return _is_guarded(node.value, names)
+    if isinstance(node, ast.Call) and _callee(node) in _MODEL_WRAPPERS and node.args:
+        return _is_guarded(node.args[0], names)
     return (
         isinstance(node, ast.Attribute)
-        and node.attr == "__table__"
+        and node.attr in _MODEL_ATTRS
         and isinstance(node.value, ast.Name)
         and node.value.id in names
     )
+
+
+def _remaps_a_guarded_table(node: ast.AST, names: set[str]) -> bool:
+    """A second mapping of a guarded table (CF2-FIX3, r3 C6): a class body's ``__table__ =
+    <guarded table>`` (plain or annotated), or ``map_imperatively(Cls, <guarded table>)`` /
+    ``map_imperatively(Cls, local_table=<guarded table>)``."""
+    if isinstance(node, ast.Assign | ast.AnnAssign) and node.value is not None:
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        return any(
+            isinstance(t, ast.Name) and t.id == "__table__" for t in targets
+        ) and _is_guarded(node.value, names)
+    if isinstance(node, ast.Call) and _callee(node) == "map_imperatively":
+        values = list(node.args[1:]) + [k.value for k in node.keywords if k.arg == "local_table"]
+        return any(_is_guarded(v, names) for v in values)
+    return False
 
 
 def _bindings(tree: ast.AST):
@@ -311,11 +897,15 @@ def _guarded_names(tree: ast.AST) -> set[str]:
 
 
 def _guarded_insert(node: ast.AST, names: set[str]) -> bool:
-    """An ``insert(...)`` / ``pg_insert(...)`` / ... call of a guarded name inside ``node``."""
+    """An ``insert(...)`` / ``pg_insert(...)`` / ... call of a guarded name, or the method form
+    ``Model.__table__.insert()``, inside ``node``."""
     return any(
         isinstance(inner, ast.Call)
         and _callee(inner) in _INSERT_FNS
-        and any(_is_guarded(a, names) for a in inner.args)
+        and (
+            any(_is_guarded(a, names) for a in inner.args)
+            or (isinstance(inner.func, ast.Attribute) and _is_guarded(inner.func.value, names))
+        )
         for inner in ast.walk(node)
     )
 
@@ -339,7 +929,8 @@ def _chain_root(node: ast.AST) -> ast.AST:
 
 def _offences(tree: ast.AST) -> list[int]:
     names = _guarded_names(tree)
-    upsert_vars = {name for name, value in _bindings(tree) if _guarded_insert(value, names)}
+    # Variables holding a guarded insert (for a later upsert or prefix through the variable).
+    insert_vars = {name for name, value in _bindings(tree) if _guarded_insert(value, names)}
     prose = _docstrings(tree)
     lines = []
     for node in ast.walk(tree):
@@ -350,6 +941,9 @@ def _offences(tree: ast.AST) -> list[int]:
             and _SQL_WRITE.search(" ".join(node.value.split()))
         ):
             lines.append(node.lineno)  # UPDATE / DELETE FROM / INSERT ... DO UPDATE as SQL text
+            continue
+        if _remaps_a_guarded_table(node, names):
+            lines.append(node.lineno)  # a second mapping of a guarded table
             continue
         if not isinstance(node, ast.Call):
             continue
@@ -372,11 +966,12 @@ def _offences(tree: ast.AST) -> list[int]:
                 for inner in ast.walk(func.value)
             ):
                 lines.append(node.lineno)
-        elif name in _UPSERTS and isinstance(func, ast.Attribute):
-            # insert(Model)....on_conflict_do_update(...), chained or through a variable
+        elif name in _UPSERTS | _PREFIXES and isinstance(func, ast.Attribute):
+            # insert(Model)....on_conflict_do_update(...) or .prefix_with(...), chained or
+            # through a variable
             root = _chain_root(func.value)
             if _guarded_insert(func.value, names) or (
-                isinstance(root, ast.Name) and root.id in upsert_vars
+                isinstance(root, ast.Name) and root.id in insert_vars
             ):
                 lines.append(node.lineno)
     return lines
@@ -425,6 +1020,79 @@ FLAGGED_FORMS = {
     ),
     "delete_rows of a guarded table": "delete_rows(db, Approval.__table__, ids)",
     "delete_rows of any table": "delete_rows(db, Opportunity.__table__, ids)",
+    # FU-CF1-H1 (CF1-DESC r1 raw/001): the forms the pin missed at fd12d69f.
+    "PostgreSQL UPDATE ONLY": "db.execute(text('UPDATE ONLY approvals SET note = NULL'))",
+    "PostgreSQL DELETE FROM ONLY": "db.execute(text('DELETE FROM ONLY audit_logs WHERE id = :i'))",
+    "SQLite INSERT OR REPLACE": (
+        "db.execute(text('INSERT OR REPLACE INTO approvals (id, note) VALUES (:i, :n)'))"
+    ),
+    "SQLite INSERT OR IGNORE": "SQL = 'insert or ignore into creative_drafts (id) values (:i)'",
+    "SQLite REPLACE INTO": "db.execute(text('REPLACE INTO audit_logs (id) VALUES (:i)'))",
+    "SQLite UPDATE OR REPLACE": "db.execute(text('UPDATE OR REPLACE approvals SET note = null'))",
+    "SQLite UPDATE OR IGNORE, bracket-quoted": (
+        "SQL = 'UPDATE OR IGNORE [content_reviews] SET x = 1'"
+    ),
+    "backtick-quoted DELETE": "SQL = 'DELETE FROM `recommendation_briefs` WHERE id = :i'",
+    "ORM insert prefix_with": "db.execute(insert(Approval).prefix_with('OR REPLACE').values(**r))",
+    "Core insert prefix_with (method form)": (
+        "db.execute(Approval.__table__.insert().prefix_with('OR REPLACE').values(**r))"
+    ),
+    "Core insert prefix_with (function form, after values)": (
+        "db.execute(insert(AuditLog.__table__).values(**r).prefix_with('OR REPLACE'))"
+    ),
+    "dialect insert prefix_with": (
+        "db.execute(sqlite_insert(CreativeDraft).prefix_with('OR IGNORE').values(**r))"
+    ),
+    "prefix_with through a variable": (
+        "stmt = insert(ContentReview).values(**r)\ndb.execute(stmt.prefix_with('OR REPLACE'))"
+    ),
+    # CF2-FIX2 (W21-REV-CF2-DATA r2 C4): SQLite 3.45 executes these as writes.
+    "SQLite single-quoted UPDATE": """db.execute(text("UPDATE 'approvals' SET note = NULL"))""",
+    "SQLite single-quoted INSERT OR REPLACE": (
+        """db.execute(text("INSERT OR REPLACE INTO 'approvals' (id) VALUES (:i)"))"""
+    ),
+    "SQLite single-quoted DELETE FROM": (
+        """db.execute(text("DELETE FROM 'audit_logs' WHERE id = :i"))"""
+    ),
+    # FU-CF1-H2 as extended (W21-REV-CF1-DESC r3 D3): the model through aliased() / inspect().
+    "update(aliased(Model))": "db.execute(update(aliased(AuditLog)).values(reason=None))",
+    "update(inspect(Model))": "db.execute(update(inspect(Approval)).values(note=None))",
+    "delete(aliased(Model)) in a CTE": (
+        "db.execute(select(literal_column('1')).add_cte(delete(aliased(AuditLog)).cte('d')))"
+    ),
+    "update(inspect(Model)) in a CTE": (
+        "u = update(inspect(Approval)).values(note=None).cte('u')\n"
+        "db.execute(select(literal_column('1')).add_cte(u))"
+    ),
+    "aliased model through a variable": (
+        "a = aliased(CreativeDraft)\ndb.execute(update(a).values(body='x'))"
+    ),
+    "attribute-called sa.orm.aliased": (
+        "db.execute(sa.update(sa.orm.aliased(ContentReview)).values(passed=False))"
+    ),
+    "Query on aliased(Model)": "db.query(aliased(RecommendationBrief)).filter(x).delete()",
+    "upsert on inspect(Model)": (
+        "db.execute(pg_insert(inspect(Approval)).values(**r)"
+        ".on_conflict_do_update(index_elements=['id'], set_={'note': 'n'}))"
+    ),
+    # CF2-FIX3 (W21-REV-CF2-DATA r3 C6): a second mapping of a guarded table, and the model's
+    # mapper reached as Model.__mapper__ or class_mapper(Model).
+    "declarative second mapping": "class Shadow(Base):\n    __table__ = Approval.__table__",
+    "annotated second mapping": (
+        "class Shadow(Base):\n    __table__: Table = AuditLog.__table__"
+    ),
+    "second mapping through a table alias": (
+        "t = RecommendationBrief.__table__\nclass Shadow(Base):\n    __table__ = t"
+    ),
+    "map_imperatively a guarded table": "reg.map_imperatively(Shadow, CreativeDraft.__table__)",
+    "map_imperatively local_table=": (
+        "reg.map_imperatively(Shadow, local_table=ContentReview.__table__)"
+    ),
+    "update(Model.__mapper__)": "db.execute(update(Approval.__mapper__).values(note=None))",
+    "update(class_mapper(Model))": "db.execute(update(class_mapper(AuditLog)).values(reason=None))",
+    "delete(Model.__mapper__) in a CTE": (
+        "db.execute(select(literal_column('1')).add_cte(delete(Approval.__mapper__).cte('d')))"
+    ),
 }
 #: Look-alikes the pin must not flag.
 CLEAN_FORMS = {
@@ -440,6 +1108,24 @@ CLEAN_FORMS = {
     "a similar table name": "SQL = 'UPDATE approvals_archive SET x = 1'",
     "an INSERT without DO UPDATE": "SQL = 'INSERT INTO approvals (id) VALUES (:i)'",
     "a docstring": 'def f():\n    """Never UPDATE approvals here."""\n    return 1',
+    "another model's prefixed insert": "db.execute(insert(Job).prefix_with('OR REPLACE'))",
+    "a prefixed select": "db.execute(select(AuditLog).prefix_with('DISTINCT'))",
+    "INSERT OR REPLACE into another table": "SQL = 'INSERT OR REPLACE INTO jobs (id) VALUES (:i)'",
+    "UPDATE ONLY a similar table name": "SQL = 'UPDATE ONLY approvals_archive SET x = 1'",
+    "prose naming a table": "MSG = 'You cannot update or delete approvals.'",
+    "a string literal that is not in a table position": (
+        "SQL = \"UPDATE jobs SET kind = 'approvals' WHERE id = :i\""
+    ),
+    "a quoted value in a DELETE on another table": (
+        "SQL = \"DELETE FROM jobs WHERE note = 'audit_logs'\""
+    ),
+    "a select of aliased(Model)": "db.execute(select(aliased(AuditLog)).where(x))",
+    "another model's aliased update": "db.execute(update(aliased(Job)).values(status='x'))",
+    "inspect(Model) for its columns": "cols = inspect(Approval).columns",
+    "a class mapping another table": "class Other(Base):\n    __table__ = Job.__table__",
+    "map_imperatively another table": "reg.map_imperatively(Other, Job.__table__)",
+    "class_mapper(Model) for its columns": "cols = class_mapper(Approval).columns",
+    "Model.__mapper__ for its attributes": "attrs = Approval.__mapper__.attrs",
 }
 
 
@@ -456,16 +1142,31 @@ def test_the_detector_ignores_look_alikes(form: str) -> None:
 def test_no_production_module_outside_privacy_writes_guarded_rows_after_insert() -> None:
     """A backstop to the runtime guard, not the enforcement layer. It follows **model** import
     aliases and annotated, tuple and walrus aliases, and matches only literal, unqualified
-    ``UPDATE`` / ``DELETE FROM`` / ``INSERT … DO UPDATE`` strings on the three tables.
+    SQL strings on the guarded tables: ``UPDATE [ONLY]``, SQLite's ``UPDATE OR
+    <algorithm>``, ``DELETE FROM [ONLY]``, ``INSERT OR <algorithm> INTO``, ``REPLACE INTO``
+    and ``INSERT … DO UPDATE``, the table name bare or quoted with ``"…"``, ``'…'``, ``[…]``
+    or backticks. It flags a ``prefix_with`` on a guarded insert (function or method form),
+    as the runtime guard refuses every prefix on a guarded ORM insert; takes
+    ``Model.__mapper__``, ``aliased(Model)``, ``inspect(Model)`` and ``class_mapper(Model)``
+    for the model, inside a CTE too; and flags a second mapping of a guarded table
+    (``__table__ = <guarded table>``, ``map_imperatively(Cls, <guarded table>)``).
 
-    Not pinned: the statement functions (``update``, ``delete``, ``insert``, dialect inserts)
-    imported under another name; models referenced through a module (``models.Approval``);
-    tables built or reflected by name (``table("approvals")``, ``Table("approvals", …)``) or
-    reached through ``Base.metadata``, ``getattr``, ``inspect(...).local_table`` or
-    ``Model.__mapper__.local_table``; tables passed as parameters; SQL that schema-qualifies
-    the table or uses TRUNCATE or MERGE; and SQL assembled at run time. (The guarded,
-    development-only demo reset in ``app.db.seed`` writes through ``Base.metadata`` and is the
-    one sanctioned writer outside ``app/privacy/``.)"""
+    Not pinned: the statement functions (``update``, ``delete``, ``insert``, dialect
+    inserts, ``prefix_with``, ``aliased``, ``inspect``, ``class_mapper``,
+    ``map_imperatively``) imported or called under another name (e.g. the ``Insert`` class
+    or an unbound ``Insert.prefix_with(stmt, …)``); models referenced through a module
+    (``models.Approval``); tables built or reflected by name (``table("approvals")``,
+    ``Table("approvals", …)``) or reached through ``Base.metadata``, ``getattr``,
+    ``inspect(...).local_table`` or ``Model.__mapper__.local_table`` — including as the
+    table of a second mapping; tables passed as parameters; SQL that schema-qualifies the
+    table (``public.approvals``, ``main.approvals``), puts a comment between the keywords
+    and the table name, names the table as a PostgreSQL Unicode-escape identifier
+    (``U&"…"``), or uses TRUNCATE or MERGE; DDL on a guarded table (``DROP TABLE``, ``ALTER
+    TABLE … DROP COLUMN``); SQL given as a ``bytes`` literal; a conflict clause declared in
+    DDL (pinned absent separately, by
+    ``test_no_guarded_table_declares_a_sqlite_conflict_clause``); and SQL assembled at run
+    time. (The guarded, development-only demo reset in ``app.db.seed`` writes through
+    ``Base.metadata`` and is the one sanctioned writer outside ``app/privacy/``.)"""
     privacy_hits, offenders = 0, []
     for path in sorted((API_DIR / "app").rglob("*.py")):
         rel = path.relative_to(API_DIR)

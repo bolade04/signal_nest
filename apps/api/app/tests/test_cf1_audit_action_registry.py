@@ -94,11 +94,21 @@ RESERVED = frozenset(
         "recommendation_brief.created",
     }
 )
+#: Added at CF-2 for 5C: the protected claims library and the creative draft.
+ADDED_CF2 = frozenset(
+    {
+        "claims_library_entry.created",
+        "claims_library_entry.updated",
+        "claims_library_entry.retired",
+        "creative_draft.created",
+    }
+)
 
 
 def test_the_registry_is_closed_and_exact() -> None:
-    assert {a.value for a in AuditAction} == PRE_REGISTRY | RESERVED
-    assert len(PRE_REGISTRY) == 33 and len(RESERVED) == 6
+    assert {a.value for a in AuditAction} == PRE_REGISTRY | RESERVED | ADDED_CF2
+    assert len(PRE_REGISTRY) == 33 and len(RESERVED) == 6 and len(ADDED_CF2) == 4
+    assert len(AuditAction) == 43
     assert set(AUDIT_ACTION_REGISTRY) == set(AuditAction)
     assert list(AUDIT_ACTION_REGISTRY) == list(AuditAction)  # declaration order
 
@@ -109,11 +119,18 @@ def test_registry_metadata_is_frozen_and_read_only() -> None:
         spec.domain = "x"  # type: ignore[misc]
     with pytest.raises(TypeError):
         AUDIT_ACTION_REGISTRY[AuditAction.AUTH_REGISTER] = spec  # type: ignore[index]
-    assert {s.introduced for s in AUDIT_ACTION_REGISTRY.values()} == {"pre-registry", "5A", "5B"}
+    assert {s.introduced for s in AUDIT_ACTION_REGISTRY.values()} == {
+        "pre-registry", "5A", "5B", "5C"
+    }
     reserved = {
-        s.action.value for s in AUDIT_ACTION_REGISTRY.values() if s.introduced != "pre-registry"
+        s.action.value
+        for s in AUDIT_ACTION_REGISTRY.values()
+        if s.introduced in {"5A", "5B"}
     }
     assert reserved == RESERVED
+    assert {
+        s.action.value for s in AUDIT_ACTION_REGISTRY.values() if s.introduced == "5C"
+    } == ADDED_CF2
     for spec in AUDIT_ACTION_REGISTRY.values():
         assert spec.action.value.startswith(spec.domain + ".")
 

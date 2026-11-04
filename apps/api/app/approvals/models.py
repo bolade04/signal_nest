@@ -15,7 +15,9 @@ An :class:`Approval` row is one **append-only** decision — ``approved``, ``rej
   name the decided version without a foreign key, so the binding survives the subject's
   deletion. For a ``recommendation_brief`` subject, ``brief_id`` is the live foreign key
   (``SET NULL`` when the brief goes) and, while set, equals ``subject_id``
-  (``ck_approval_brief_subject``).
+  (``ck_approval_brief_subject``); for a ``creative_draft`` subject (CF-2), ``draft_id``
+  plays the same role (``ck_approval_draft_subject``). The 5B service refuses to approve a
+  draft whose content review is blocked (Phase 5C plan §2).
 * **The latest decision controls.** ``decision_seq`` is monotonic per subject version
   (``uq_approval_decision_seq``); its allocation is serialized per subject by the 5B
   service under a row lock (the ``capabilities/service.py`` ``_workspace_lock_select``
@@ -84,6 +86,10 @@ def decided_role_sql() -> str:
 BRIEF_SUBJECT_SQL = (
     "brief_id IS NULL OR (subject_type = 'recommendation_brief' AND brief_id = subject_id)"
 )
+#: While ``draft_id`` is set, the row decides on that creative draft (CF-2).
+DRAFT_SUBJECT_SQL = (
+    "draft_id IS NULL OR (subject_type = 'creative_draft' AND draft_id = subject_id)"
+)
 
 
 @append_only
@@ -104,6 +110,7 @@ class Approval(Base, UUIDPrimaryKeyMixin, CreatedAtMixin):
         CheckConstraint(reason_polarity_sql(), name="ck_approval_reason_polarity"),
         CheckConstraint(decided_role_sql(), name="ck_approval_decided_role"),
         CheckConstraint(BRIEF_SUBJECT_SQL, name="ck_approval_brief_subject"),
+        CheckConstraint(DRAFT_SUBJECT_SQL, name="ck_approval_draft_subject"),
         CheckConstraint("subject_version >= 1", name="ck_approval_subject_version"),
         CheckConstraint("decision_seq >= 1", name="ck_approval_decision_seq"),
     )
@@ -119,6 +126,10 @@ class Approval(Base, UUIDPrimaryKeyMixin, CreatedAtMixin):
     #: The live link for a ``recommendation_brief`` subject; NULL once the brief is gone.
     brief_id: Mapped[str | None] = mapped_column(
         ForeignKey("recommendation_briefs.id", ondelete="SET NULL"), index=True
+    )
+    #: The live link for a ``creative_draft`` subject (CF-2); NULL once the draft is gone.
+    draft_id: Mapped[str | None] = mapped_column(
+        ForeignKey("creative_drafts.id", ondelete="SET NULL"), index=True
     )
 
     # --- Decision ------------------------------------------------------------------
@@ -145,6 +156,7 @@ class Approval(Base, UUIDPrimaryKeyMixin, CreatedAtMixin):
 __all__ = [
     "APPROVAL_NOTE_MAX_LENGTH",
     "BRIEF_SUBJECT_SQL",
+    "DRAFT_SUBJECT_SQL",
     "Approval",
     "decided_role_sql",
     "decision_sql",

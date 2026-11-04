@@ -79,6 +79,7 @@ function rawGlobalFlag(rawFlag: boolean) {
           scout_scheduling_enabled: rawFlag,
           connector_rss_enabled: false,
           recommendation_briefs_enabled: false,
+          creative_generation_enabled: false,
         },
       }),
     ),
