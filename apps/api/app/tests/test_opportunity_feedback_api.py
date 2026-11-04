@@ -283,7 +283,8 @@ def _reset(factory, monkeypatch):
     yield
     make, _ = factory
     with make() as s:
-        s.query(AuditLog).delete(synchronize_session=False)
+        # Core on the table: audit records are append-only to the ORM (W21 CF-1).
+        s.execute(AuditLog.__table__.delete())
         s.query(OpportunityFeedback).delete(synchronize_session=False)
         s.commit()
 
