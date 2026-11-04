@@ -120,6 +120,19 @@ export type ChannelPrefIn = S['ChannelPrefIn'];
 
 export type FeedbackCapability = S['FeedbackCapabilityOut'];
 
+// ---- Phase 5B approvals (W21 lane P5B) — begin -------------------------------------
+// A decision binds one exact, immutable brief version; the controlling decision is the
+// one with the highest `decision_seq` (the first item of a history page). The queue is
+// the approver's work list: briefs awaiting a decision, in the frozen brief projection.
+export type ApprovalDecision = S['ApprovalDecision'];
+export type ApprovalReason = S['ApprovalReason'];
+export type ApprovalDecisionCreate = S['ApprovalDecisionCreate'];
+export type ApprovalOut = S['ApprovalOut'];
+export type ApprovalHistoryOut = S['ApprovalHistoryOut'];
+export type RecommendationBriefOut = S['RecommendationBriefOut'];
+export type RecommendationBriefListOut = S['RecommendationBriefListOut'];
+// ---- Phase 5B approvals (W21 lane P5B) — end ---------------------------------------
+
 export type RuntimeSummary = S['RuntimeSummaryOut'];
 export type RuntimeCapability = S['CapabilityOut'];
 export type RuntimeCapabilities = S['CapabilitiesOut'];
