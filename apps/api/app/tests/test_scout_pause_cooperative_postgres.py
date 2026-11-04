@@ -752,9 +752,7 @@ def test_a_priced_model_admission_and_its_reservation_commit_in_one_transaction(
     w = world
     monkeypatch.setattr(pipeline, "fetch_signals", Sources())
     provider = PricedMock()
-    monkeypatch.setattr(
-        pipeline,
-        "llm_service",
+    monkeypatch.setattr("app.llm.service.llm_service",
         LLMService(provider, sleep=lambda _s: None, settings=offline_settings()),
     )
     admission_xids: list[str] = []

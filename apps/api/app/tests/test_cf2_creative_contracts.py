@@ -360,17 +360,22 @@ def test_the_job_type_is_built_in_and_registered() -> None:
     assert get_job_handler("creative.generate") is creative_handlers.execute_creative_generation
 
 
-def test_the_handler_stub_refuses_non_retryably_and_touches_nothing() -> None:
+def test_the_handler_refuses_a_bad_payload_non_retryably_and_touches_nothing() -> None:
+    """W21 lane P5C replaced CF-2's refusing stub with the 5C handler
+    (``app.creative.service.execute_generation``; behaviour in ``test_creative_generation``).
+    What CF-2 pinned still holds for a payload that is not a ``CreativeGeneratePayload``: a
+    non-retryable refusal before the session is used."""
+
     class _Untouchable:
         def __getattr__(self, name):  # any use of the session fails the test
-            raise AssertionError(f"the stub used the session: {name}")
+            raise AssertionError(f"the handler used the session: {name}")
 
     ctx = SimpleNamespace(db=_Untouchable(), payload={"brief_id": "b1"}, job_id="j1")
     with pytest.raises(JobExecutionError) as refused:
         creative_handlers.execute_creative_generation(ctx)
-    assert refused.value.error.code is JobErrorCode.POLICY
-    assert refused.value.error.summary == creative_handlers.NOT_IMPLEMENTED
-    assert is_retryable(JobErrorCode.POLICY) is False
+    assert refused.value.error.code is JobErrorCode.VALIDATION
+    assert refused.value.error.summary == "invalid_payload"
+    assert is_retryable(JobErrorCode.VALIDATION) is False
 
 
 #: The frozen ``generate_creative`` 1.0.0 template (CF-2 review CONTROLS C-3). The prompt's

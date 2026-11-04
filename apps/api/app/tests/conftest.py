@@ -145,3 +145,48 @@ def _offline_guard_per_test(request: pytest.FixtureRequest) -> Iterator[None]:
             )
         if violations:
             pytest.fail("\n".join(violations), pytrace=False)
+
+
+# --- Seeded mock LLM provider (Project Phase 5A, exit criterion 5) ------------------------
+#: The seed every LLM behavioural test uses: a fixed value, never the environment's.
+MOCK_LLM_SEED = "signalnest-tests-5a"
+
+
+@pytest.fixture
+def mock_llm_provider():
+    """A deterministic ``MockLLMProvider`` with a fixed seed (offline, free)."""
+    from app.llm.mock import MockLLMProvider
+
+    return MockLLMProvider(model="mock-1", seed=MOCK_LLM_SEED)
+
+
+@pytest.fixture
+def mock_llm_sleeps() -> list[float]:
+    """The retry waits the service asked for (the injectable clock records, never sleeps)."""
+    return []
+
+
+@pytest.fixture
+def mock_llm_service(mock_llm_provider, mock_llm_sleeps):
+    """An ``LLMService`` over the seeded mock, offline settings and a recording sleep."""
+    from app.llm.service import LLMService
+    from app.tests._llm_offline import offline_settings
+
+    return LLMService(
+        mock_llm_provider,
+        sleep=mock_llm_sleeps.append,
+        settings=offline_settings(llm_mock_seed=MOCK_LLM_SEED),
+    )
+
+
+@pytest.fixture
+def mock_llm_recorder():
+    """The seeded ``MockLLMProvider`` that also records every request it is sent (5A-W4).
+
+    Same seed as :func:`mock_llm_provider`, so its outputs are the seeded mock's; the recorded
+    :class:`~app.llm.base.LLMRequest` objects show what reached the provider after the
+    service's boundary sanitization (``app.tests.fixtures.llm.RecordingMock``).
+    """
+    from app.tests.fixtures.llm import RecordingMock
+
+    return RecordingMock(model="mock-1", seed=MOCK_LLM_SEED)
