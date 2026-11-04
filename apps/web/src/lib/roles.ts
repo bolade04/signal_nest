@@ -92,6 +92,11 @@ const ORGANIZATION_ADMIN_ROLES: ReadonlySet<Role> = new Set<Role>(['owner', 'adm
 // `require_exact_roles(OWNER, ADMIN, COMPLIANCE_REVIEWER)` — exact membership.
 const AUDIT_LOG_READER_ROLES: ReadonlySet<Role> = new Set<Role>(['owner', 'admin', 'compliance_reviewer']);
 
+// The claims library's stewards (W21 CF-2): `require_exact_roles(OWNER, ADMIN,
+// COMPLIANCE_REVIEWER)` on the claims write routes — exact membership, the same set as the
+// audit-log readers but a different question, so a separate constant.
+const CLAIMS_STEWARD_ROLES: ReadonlySet<Role> = new Set<Role>(['owner', 'admin', 'compliance_reviewer']);
+
 /** Whether `value` is one of the six contract roles. Unknown strings are not roles. */
 export function isRole(value: unknown): value is Role {
   return typeof value === 'string' && KNOWN_ROLES.has(value);
@@ -158,6 +163,20 @@ export function canManageOrganizationData(role: RoleInput): boolean {
  */
 export function canReadAuditLogs(role: RoleInput): boolean {
   return isRole(role) && AUDIT_LOG_READER_ROLES.has(role);
+}
+
+/**
+ * Claims-library writes: `POST`, `PATCH` and `DELETE` (soft retirement) on
+ * `/workspaces/{workspace_id}/claims` — exactly owner, admin or compliance_reviewer
+ * (`require_exact_roles`, `CLAIMS_STEWARDS` in `apps/api/app/campaign_context/routes.py`).
+ * The claims library is a protected safety control (Project Phase 5C, W21 CF-2): a
+ * marketer edits every other campaign-context collection but may not add, edit or retire
+ * claims through these routes. Reading the library stays membership-only. Known exception
+ * (coordinator ruling R1): onboarding (`POST /workspaces/{workspace_id}/onboarding`) still
+ * lets any editor add claims until the 5C build closes it.
+ */
+export function canManageClaims(role: RoleInput): boolean {
+  return isRole(role) && CLAIMS_STEWARD_ROLES.has(role);
 }
 
 /**
@@ -249,3 +268,37 @@ export function useActorRole(organizationId: string | null | undefined): ActorRo
   const { memberships } = useAuth();
   return useMemo(() => actorRoleFor(memberships, organizationId), [memberships, organizationId]);
 }
+
+// ---- Phase 5B approvals (W21 lane P5B) — begin -------------------------------------
+
+// `require_exact_roles(REVIEWER)` — `APPROVER_ROLES` (apps/api/app/approvals/policy.py,
+// operator decision O-2). Exact membership: an owner or admin does not inherit it.
+const APPROVER_ROLES: ReadonlySet<Role> = new Set<Role>(['reviewer']);
+
+// `require_exact_roles(OWNER, ADMIN, MARKETER, REVIEWER, COMPLIANCE_REVIEWER)` —
+// `APPROVAL_HISTORY_READERS` (apps/api/app/approvals/routes.py). Every role but viewer.
+const APPROVAL_HISTORY_READER_ROLES: ReadonlySet<Role> = new Set<Role>([
+  'owner',
+  'admin',
+  'marketer',
+  'reviewer',
+  'compliance_reviewer',
+]);
+
+/**
+ * Recording an approval decision on a brief and reading the approval queue — exactly
+ * `reviewer`. A duty boundary, not a rank: an owner outranks a reviewer and is still
+ * refused. The grant is organization-wide (a role lives on the organization membership),
+ * so a reviewer may decide in every workspace of the organization. The backend also
+ * refuses the brief's own author, which no role predicate can express: compare the
+ * brief's `created_by` with the signed-in user's id.
+ */
+export function canDecideApprovals(role: RoleInput): boolean {
+  return isRole(role) && APPROVER_ROLES.has(role);
+}
+
+/** Reading a brief's decision history — every role except `viewer`, by name. */
+export function canReadApprovalHistory(role: RoleInput): boolean {
+  return isRole(role) && APPROVAL_HISTORY_READER_ROLES.has(role);
+}
+// ---- Phase 5B approvals (W21 lane P5B) — end ---------------------------------------

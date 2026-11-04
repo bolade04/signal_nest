@@ -5,7 +5,7 @@
 > to **no** account; it deploys **nothing**; and it activates **no** capability. Every
 > value shown is a **name or a disposition**, never a credential. The global capability
 > feature flags (`opportunity_feedback_enabled`, `scout_scheduling_enabled`,
-> `connector_rss_enabled`, `recommendation_briefs_enabled`) remain Boolean **`False`**. Implementing the inventory
+> `connector_rss_enabled`, `recommendation_briefs_enabled`, `creative_generation_enabled`) remain Boolean **`False`**. Implementing the inventory
 > checks and the G5 gate is the later, separately authorized INFRA-3 *implementation*
 > tranche.
 
@@ -53,12 +53,13 @@ The inventory is derived **only** from repository evidence, not assumption:
   **UPPERCASED** (`SettingsConfigDict(case_sensitive=False)`). The one exception is
   `migration_mode`, whose `validation_alias` also admits `SN_MIGRATION_MODE` (§3.5).
 - Field enumeration is taken mechanically from `Settings.model_fields`. As of this
-  document the model declares **146 fields**, of which **10** are marked
+  document the model declares **151 fields**, of which **10** are marked
   `repr=False` (secret-bearing, host-identifying or internal) and **0** use `SecretStr`.
   *(Recounted 2026-11-01 on `main` `102393fa`: the previous figure, 87 fields and 9
   `repr=False`, dated from 2026-07-21 and had drifted as settings were added; the 48
   fields it did not classify are classified below. Project Phase 5 CF-1 then added
-  `recommendation_briefs_enabled`: 145 → 146.)*
+  `recommendation_briefs_enabled`: 145 → 146. Project Phase 5 CF-2 added
+  `creative_generation_enabled` and the four 5C ceilings: 146 → 151.)*
 - Secret sensitivity is read from the `repr=False` markers plus the field semantics
   documented in `config.py` and the runtime contract.
 - Staging requirement/forbidden conditions are read from the unconditional
@@ -109,7 +110,7 @@ that the one-disposition-per-field rule is auditable; §3.7 reconciles the count
 | `llm_allow_dev_fallback` | `LLM_ALLOW_DEV_FALLBACK` | no | Developer fallback; validator rejects `true` in staging, so it stays at its `False` default. |
 | `connector_rss_replay_origin` | `CONNECTOR_RSS_REPLAY_ORIGIN` | no | Development/test only: a loopback origin serving recorded feed captures; refused in staging/production, so it stays unset. |
 
-### 3.5 Non-secret configuration — 134 fields
+### 3.5 Non-secret configuration — 139 fields
 
 Safe as plaintext task-definition environment (or the model default). Grouped by
 concern; every row's disposition is **non-secret configuration**.
@@ -123,6 +124,7 @@ concern; every row's disposition is **non-secret configuration**.
 | `connector_rss_enabled` | `CONNECTOR_RSS_ENABLED` | Must remain `False`. |
 | `connector_rss_live_enabled` | `CONNECTOR_RSS_LIVE_ENABLED` | Live RSS egress master switch; must remain `False` (first-source decision P6-D03). |
 | `recommendation_briefs_enabled` | `RECOMMENDATION_BRIEFS_ENABLED` | Project Phase 5A (CF-1); must remain `False` — activation is a separate future authorization (Project Phase 5 plan §10). |
+| `creative_generation_enabled` | `CREATIVE_GENERATION_ENABLED` | Project Phase 5C (CF-2); must remain `False` — activation is a separate future authorization (Project Phase 5 plan §10). |
 
 **General / API:** `app_name` (`APP_NAME`), `app_mode` (`APP_MODE`, staging=`full`),
 `environment` (`ENVIRONMENT`, staging=`staging`), `debug` (`DEBUG`),
@@ -235,6 +237,14 @@ one-shot migration actor's task definition, never for the API or worker).
 (`LLM_WORKSPACE_MONTHLY_BUDGET_USD`), `llm_prices_usd_per_mtok`
 (`LLM_PRICES_USD_PER_MTOK`, JSON), `llm_price_source` (`LLM_PRICE_SOURCE`).
 
+**LLM creative-generation ceilings (Project Phase 5C, CF-2; no value is approved, so each
+stays unset — `None` — and the 5C generation service refuses every generation while any is
+unset; a configured value must be positive):** `llm_daily_cost_ceiling_usd_global`
+(`LLM_DAILY_COST_CEILING_USD_GLOBAL`), `llm_daily_cost_ceiling_usd_per_workspace`
+(`LLM_DAILY_COST_CEILING_USD_PER_WORKSPACE`), `llm_max_calls_per_workspace_per_day`
+(`LLM_MAX_CALLS_PER_WORKSPACE_PER_DAY`), `llm_max_output_tokens_per_call`
+(`LLM_MAX_OUTPUT_TOKENS_PER_CALL`).
+
 **Readiness probes:** `readiness_probe_timeout_seconds`
 (`READINESS_PROBE_TIMEOUT_SECONDS`), `readiness_total_timeout_seconds`
 (`READINESS_TOTAL_TIMEOUT_SECONDS`).
@@ -272,12 +282,12 @@ resource name into logs, but it is safe to supply as plaintext task environment.
 | IAM-derived | 2 |
 | Absent in staging | 2 |
 | Local-development-only | 4 |
-| Non-secret configuration | 134 |
-| **Total** | **146** |
+| Non-secret configuration | 139 |
+| **Total** | **151** |
 
-`4 + 2 + 2 + 4 + 134 = 146`, equal to the model's declared field count
+`4 + 2 + 2 + 4 + 139 = 151`, equal to the model's declared field count
 (`len(Settings.model_fields)`, recounted mechanically on 2026-11-01 and moved 145 → 146 by
-Project Phase 5 CF-1). **Zero fields
+Project Phase 5 CF-1 and 146 → 151 by CF-2). **Zero fields
 are unclassified**, and **all 10 `repr=False` fields** (`secret_key`, `database_url`,
 `redis_url`, `llm_api_key` → Secrets Manager; `s3_access_key_id`,
 `s3_secret_access_key` → IAM-derived; `otlp_endpoint`, `s3_endpoint_url` → absent;

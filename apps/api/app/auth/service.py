@@ -77,12 +77,37 @@ def register_invited(db: Session, *, token: str, full_name: str, password: str) 
     return user
 
 
+#: Why a sign-in was refused, as the login audit records it (Phase 5B login auditing).
+LOGIN_INVALID_CREDENTIALS = "invalid_credentials"
+LOGIN_INACTIVE_ACCOUNT = "inactive_account"
+
+
+class LoginFailedError(AuthError):
+    """A refused sign-in: the same 401 ``unauthorized`` answer and message as before.
+
+    Carries, for the login audit only, the id of the account the address belongs to
+    (``None`` when it belongs to none) and the closed failure reason. Neither reaches the
+    response: the HTTP envelope is ``code`` + ``message``, unchanged.
+    """
+
+    def __init__(self, message: str, *, user_id: str | None, failure: str):
+        super().__init__(message)
+        self.user_id = user_id
+        self.failure = failure
+
+
 def authenticate(db: Session, *, email: str, password: str) -> User:
     user = db.scalar(select(User).where(User.email == email))
     if not user or not verify_password(password, user.hashed_password):
-        raise AuthError("Invalid email or password.")
+        raise LoginFailedError(
+            "Invalid email or password.",
+            user_id=None if user is None else user.id,
+            failure=LOGIN_INVALID_CREDENTIALS,
+        )
     if not user.is_active:
-        raise AuthError("This account is inactive.")
+        raise LoginFailedError(
+            "This account is inactive.", user_id=user.id, failure=LOGIN_INACTIVE_ACCOUNT
+        )
     return user
 
 

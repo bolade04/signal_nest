@@ -1330,11 +1330,16 @@ _RSS_GATE_RELS = ("scouting_requests/connectors.py",)
 #: The recommendation-briefs live gate (Project Phase 5A) — resolver only, one decision call
 #: site (``briefs.routes._resolve_briefs_capability``), relative to ``app/``.
 _BRIEFS_GATE_RELS = ("briefs/routes.py",)
+#: The Phase 5B approvals gate (W21 P5B): ``approvals/routes.py`` decides
+#: ``RECOMMENDATION_BRIEFS`` for a workspace through the resolver exactly as the feedback gate
+#: does (one decision call site, fail-closed), and imports nothing from the service.
+_APPROVALS_GATE_REL = "approvals/routes.py"
 #: Sanctioned production consumers of the capability control plane, each mapped to the
 #: exact control-plane modules it may import. The operator router (4A-C.4) may consume
 #: both the service and the resolver; the opportunity-feedback gate (4B-A), the
-#: scheduling and RSS gates (P6-CAP-1) and the recommendation-briefs gate (Phase 5A) may
-#: consume only the resolver. Every other production module must consume neither.
+#: scheduling and RSS gates (P6-CAP-1), the recommendation-briefs gate (Phase 5A) and the
+#: approvals gate (Phase 5B) may consume only the resolver. Every other production module
+#: must consume neither.
 _SANCTIONED_CONSUMERS = {
     _ALLOWED_CONSUMER_REL: frozenset(_CONTROL_PLANE_MODULES),
     _FEEDBACK_GATE_REL: frozenset({_RESOLVER_MODULE}),
@@ -1342,6 +1347,7 @@ _SANCTIONED_CONSUMERS = {
         rel: frozenset({_RESOLVER_MODULE})
         for rel in _SCHEDULING_GATE_RELS + _RSS_GATE_RELS + _BRIEFS_GATE_RELS
     },
+    _APPROVALS_GATE_REL: frozenset({_RESOLVER_MODULE}),
 }
 
 
@@ -1475,7 +1481,8 @@ def test_consumer_allow_list_covers_live_gates_and_the_operator_router() -> None
     assert _SERVICE_MODULE not in feedback_imports
     # The P6-CAP-1 and Phase 5A entries are grounded and narrow the same way: each
     # genuinely imports the resolver and none imports the service.
-    for rel in _SCHEDULING_GATE_RELS + _RSS_GATE_RELS + _BRIEFS_GATE_RELS:
+    # The Phase 5B approvals gate likewise (W21 P5B).
+    for rel in _SCHEDULING_GATE_RELS + _RSS_GATE_RELS + _BRIEFS_GATE_RELS + (_APPROVALS_GATE_REL,):
         path = _APP_DIR / rel
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         imports = _control_plane_imports(path, tree)

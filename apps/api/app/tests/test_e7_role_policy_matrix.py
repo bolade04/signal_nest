@@ -94,6 +94,10 @@ EDITORS = (OWNER, ADMIN, MARKETER)  # require_role(OWNER, ADMIN, MARKETER): a ra
 ORG_ADMINS = (OWNER, ADMIN)  # require_exact_organization_roles(OWNER, ADMIN)
 ORG_OWNER = (OWNER,)  # require_exact_organization_roles(OWNER) -- P6-PRIV-1
 AUDIT_READERS = (OWNER, ADMIN, COMPLIANCE)  # require_exact_roles(...) -- P6-AUTH-3
+APPROVERS = (REVIEWER,)  # require_exact_roles(REVIEWER) -- Phase 5B, O-2 (approvals.policy)
+APPROVAL_HISTORY_READERS = (OWNER, ADMIN, MARKETER, REVIEWER, COMPLIANCE)  # Phase 5B
+#: W21 CF-2: the claims library is a protected control -- exact roles, marketers excluded.
+CLAIMS_STEWARDS = (OWNER, ADMIN, COMPLIANCE)  # require_exact_roles(...) -- CF-2
 
 # Categories.
 RANK_FLOOR = "role_gated_workspace_rank_floor"
@@ -142,6 +146,7 @@ LOCATION_404 = "Location not found in this workspace."
 SCHEDULING_DARK = "Scout scheduling is not available yet."
 FEEDBACK_DARK = "Opportunity feedback is not available yet."
 BRIEFS_DARK = "Recommendation briefs are not available yet."  # Project Phase 5A
+APPROVALS_DARK = "Recommendation briefs and approvals are not available yet."  # Phase 5B
 # New in 6B-3A. Messages are the service's; the codes are frozen by the contract (§50).
 INVITATION_NOT_FOUND = ("invitation_not_found", "Invitation not found.")
 MEMBER_NOT_FOUND = ("member_not_found", "Member not found.")
@@ -181,6 +186,15 @@ _CONTEXT = (
 _W = "/workspaces/{workspace_id}"
 _O = "/organizations/{organization_id}"
 
+
+def _writers(collection: str) -> tuple[tuple[str, ...], str]:
+    """Who may write a context collection, and the gate's category. The claims library is
+    the W21 CF-2 protected control (exact OWNER/ADMIN/COMPLIANCE_REVIEWER); every other
+    collection keeps the OWNER/ADMIN/MARKETER rank floor."""
+    if collection == "claims":
+        return CLAIMS_STEWARDS, WS_EXACT
+    return EDITORS, RANK_FLOOR
+
 #: The explicit policy table. 57 role-gated rows (39 that existed before 6B-3A + 5 new
 #: OWNER/ADMIN routes + 9 context-collection PATCH routes from P6-PLAT-9 + the location
 #: deactivate/reactivate pair of P6-UI-023), 26 membership-only rows (25 workspace,
@@ -189,25 +203,28 @@ _O = "/organizations/{organization_id}"
 #: the 2 GET routes whose membership check is inside the handler. Project Phase 5A adds 4:
 #: the editor-only brief capture (RANK_FLOOR), the two member-gated brief reads and the
 #: member-gated brief-capability reflection.
+#: Phase 5B adds 3 exact-set rows (WS_EXACT): recording a decision and reading the approval
+#: queue (REVIEWER exactly) and a brief's decision history (every role but viewer).
+#: W21 CF-2 moves the three claims write routes (POST, PATCH, DELETE) from the rank floor to
+#: an exact set.
 E7_POLICY: tuple[Policy, ...] = (
     # --- role-gated, workspace scope, rank floor (require_role(OWNER, ADMIN, MARKETER)) -----
     _row("POST", f"{_W}/onboarding", "workspace", EDITORS, RANK_FLOOR, _body_422()),
     _row("PUT", f"{_W}/business-profile", "workspace", EDITORS, RANK_FLOOR, _body_422()),
-    *(_row("POST", f"{_W}/{c}", "workspace", EDITORS, RANK_FLOOR, _body_422()) for c in _CONTEXT),
+    *(_row("POST", f"{_W}/{c}", "workspace", *_writers(c), _body_422()) for c in _CONTEXT),
     *(
         _row(
             "DELETE",
             f"{_W}/{c}/{{item_id}}",
             "workspace",
-            EDITORS,
-            RANK_FLOOR,
+            *_writers(c),
             _handler_404(ITEM_404),
         )
         for c in _CONTEXT
     ),
     # P6-PLAT-9: the body is validated after the gate, so an admitted role's ``[]`` is a 422.
     *(
-        _row("PATCH", f"{_W}/{c}/{{item_id}}", "workspace", EDITORS, RANK_FLOOR, _body_422())
+        _row("PATCH", f"{_W}/{c}/{{item_id}}", "workspace", *_writers(c), _body_422())
         for c in _CONTEXT
     ),
     _row("POST", f"{_W}/locations", "workspace", EDITORS, RANK_FLOOR, _body_422()),
@@ -318,6 +335,28 @@ E7_POLICY: tuple[Policy, ...] = (
     ),
     # --- role-gated, workspace scope, exact set -- the P6-AUTH-3 audit-route case ----------
     _row("GET", f"{_W}/audit-logs", "workspace", AUDIT_READERS, WS_EXACT, OK_200),
+    # --- role-gated, workspace scope, exact set -- Phase 5B approvals (W21 P5B) ---------------
+    # Dark by default: an admitted role clears the gate and meets the capability's 503 (the
+    # GETs) or the body validation that FastAPI runs before the handler (the POST).
+    _row(
+        "POST",
+        f"{_W}/opportunities/{{opportunity_id}}/briefs/{{brief_id}}/approvals",
+        "workspace",
+        APPROVERS,
+        WS_EXACT,
+        _body_422(),
+    ),
+    _row(
+        "GET",
+        f"{_W}/opportunities/{{opportunity_id}}/briefs/{{brief_id}}/approvals",
+        "workspace",
+        APPROVAL_HISTORY_READERS,
+        WS_EXACT,
+        _dark_503(APPROVALS_DARK),
+    ),
+    _row(
+        "GET", f"{_W}/approval-queue", "workspace", APPROVERS, WS_EXACT, _dark_503(APPROVALS_DARK)
+    ),
     # --- role-gated, organization scope, exact set ------------------------------------------
     _row("POST", f"{_O}/workspaces", "organization", ORG_ADMINS, ORG_EXACT, _body_422()),
     _row("POST", f"{_O}/invitations", "organization", ORG_ADMINS, ORG_EXACT, _body_422()),
@@ -585,7 +624,7 @@ class TestPolicyTableCompleteness:
             c: sum(1 for r in served if r.category == c) for c in {r.category for r in served}
         }
         assert counts == {
-            "role_gated": 59,
+            "role_gated": 62,
             MEMBER_WS: 28,
             MEMBER_ORG: 1,
             "operator": OPERATOR_ROUTE_COUNT,
@@ -596,8 +635,11 @@ class TestPolicyTableCompleteness:
             c: sum(1 for p in E7_POLICY if p.category == c) for c in {p.category for p in E7_POLICY}
         }
         assert by_category == {
-            RANK_FLOOR: 49,
-            WS_EXACT: 1,
+            # 48 at CF-1; +1 Phase 5A (brief capture); -3 W21 CF-2 (claims writes -> WS_EXACT).
+            RANK_FLOOR: 46,
+            # 1 at CF-1 (audit-logs); +3 Phase 5B (approvals); +3 W21 CF-2 (claims writes).
+            # Both sides moved this pin from 1 to 4, so git kept one 4: the union is 7.
+            WS_EXACT: 7,
             ORG_EXACT: 9,
             MEMBER_WS: 28,
             MEMBER_ORG: 1,
@@ -633,7 +675,10 @@ class TestPolicyTableCompleteness:
         # 127 -> 131 (Project Phase 5A): POST .../opportunities/{opportunity_id}/briefs, a
         # RANK_FLOOR row; GET .../briefs, GET .../briefs/{brief_id} and
         # GET /workspaces/{workspace_id}/brief-capability, MEMBER_WS rows.
-        assert len(served) == 131
+        # 131 -> 134 (Phase 5B, W21 P5B; I-5A/I-5B integration): POST and GET
+        # .../briefs/{brief_id}/approvals and GET /workspaces/{workspace_id}/approval-queue,
+        # each a WS_EXACT row above.
+        assert len(served) == 134
 
     def test_one_row_per_route(self):
         keys = [p.key for p in E7_POLICY]
@@ -641,7 +686,7 @@ class TestPolicyTableCompleteness:
 
     def test_rows_are_machine_readable_and_partition_the_roles(self):
         rows = json.loads(json.dumps([asdict(p) for p in E7_POLICY]))
-        assert len(rows) == 90
+        assert len(rows) == 93
         for row in rows:
             assert set(row) == {"method", "path", "scope", "allowed", "denied", "category", "probe"}
             assert set(row["allowed"]) | set(row["denied"]) == set(ALL_ROLES)
@@ -660,7 +705,9 @@ class TestPolicyTableCompleteness:
         assert diff["membership_missing_from_table"] == [victim_member.key]
 
     def test_completeness_check_fails_when_a_role_set_drifts(self):
-        audit = next(p for p in E7_POLICY if p.category == WS_EXACT)
+        audit = next(
+            p for p in E7_POLICY if p.category == WS_EXACT and p.path.endswith("/audit-logs")
+        )
         drifted = tuple(
             _row(p.method, p.path, p.scope, (OWNER, ADMIN), p.category, p.probe)
             if p is audit
@@ -904,7 +951,7 @@ def _url(world: World, policy: Policy) -> tuple[str, dict[str, str] | None]:
         "{job_id}",
         "{invitation_id}",
         "{user_id}",
-        "{brief_id}",  # Project Phase 5A
+        "{brief_id}",  # Project Phase 5A (briefs) and Phase 5B (approvals)
     ):
         path = path.replace(name, SENTINEL)
     assert "{" not in path, path
