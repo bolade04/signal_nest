@@ -42,7 +42,7 @@ work, intentionally not prescribed here.
 | `worker_active` | gauge | In `METRIC_NAMES`; **no production emit path**. Active/stale worker counts are observable via `GET /api/v1/internal/system/workers` (`active_count`, `stale_count`), not via metrics. |
 | `dependency_operation_total` | counter | In `METRIC_NAMES`; **no production emit path** yet. |
 | `dependency_operation_duration_ms` | histogram | In `METRIC_NAMES`; **no production emit path** yet. |
-| `llm_calls_total` | counter | In `METRIC_NAMES` (Project Phase 5A, W21 CF-1); **no production emit path** until the 5A LLM seam lands. Labels `dependency`, `operation`, `outcome`, `error_class` (closed sets, `app/core/metrics.py`); a dedicated name, so provider failures stay out of `dependency_operation_total{outcome="failure"}`. |
+| `llm_calls_total` | counter | In `METRIC_NAMES` (Project Phase 5A, W21 CF-1); emitted by `app/llm/service.py` for every provider attempt (Phase 5A seam). Tenant-free. Labels `dependency`, `operation`, `outcome`, `error_class` (closed sets, `app/core/metrics.py`); a dedicated name, so provider failures stay out of `dependency_operation_total{outcome="failure"}`. |
 | `llm_call_duration_ms` | histogram | As above; labels `dependency`, `operation`, `outcome`. |
 | `llm_input_tokens_total` | counter | As above; labels `dependency`, `operation`. |
 | `llm_output_tokens_total` | counter | As above; labels `dependency`, `operation`. |

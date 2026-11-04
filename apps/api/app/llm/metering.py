@@ -337,6 +337,11 @@ class LLMMeter:
         self._admitted: tuple[Any, str] | None = None
         #: The bound of each record, in step (same-session path).
         self._bounds: list[Decimal] = []
+        #: The id of the usage-ledger row (``llm_usage_events.id``) of the latest recorded
+        #: attempt. Assigned here, before the row is written, so a caller can reference
+        #: the row of the call that produced its output (Phase 5A brief provenance). The
+        #: row exists once it is written: at settlement (shared ledger) or :meth:`flush`.
+        self.last_usage_event_id: str | None = None
 
     def bind(
         self,
@@ -607,6 +612,9 @@ class LLMMeter:
         cost = self._charge(provider, model, worst, usage, response, error)
         self.spent = round(self.spent + cost, 6)
         record = {
+            # Pre-assigned, so every write of this attempt's usage row (settlement, late
+            # settlement, flush, the after-rollback re-write) carries the same id.
+            "id": uuid.uuid4().hex,
             "task": task,
             "provider": provider,
             "model": model,
@@ -615,6 +623,7 @@ class LLMMeter:
             "cost_usd": cost,
             "outcome": "ok" if error is None else type(error).__name__,
         }
+        self.last_usage_event_id = record["id"]
         admitted, self._admitted = self._admitted, None
         known = error is None or not (
             isinstance(error, LLMTimeoutError) or getattr(error, "outcome_unknown", False)

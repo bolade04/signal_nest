@@ -17,6 +17,7 @@ import { ScoutRequestDetailPage } from '@/pages/ScoutRequestDetail';
 import { OpportunitiesPage } from '@/pages/Opportunities';
 import { OpportunityDetailPage } from '@/pages/OpportunityDetail';
 import { OperationsPage } from '@/pages/operations/Operations';
+import { ApprovalsRoute } from '@/pages/approvals/ApprovalsRoute';
 import { SettingsPage } from '@/pages/Settings';
 import { NotFoundPage } from '@/pages/NotFound';
 
@@ -42,6 +43,8 @@ export function App() {
           <Route path="scout-requests/:requestId" element={<ScoutRequestDetailPage />} />
           <Route path="opportunities" element={<OpportunitiesPage />} />
           <Route path="opportunities/:opportunityId" element={<OpportunityDetailPage />} />
+          {/* Phase 5B approval queue (I-5B): not-found while briefs are dark for the workspace. */}
+          <Route path="approvals" element={<ApprovalsRoute />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route element={<RequireOperator />}>
             <Route path="operations" element={<OperationsPage />} />

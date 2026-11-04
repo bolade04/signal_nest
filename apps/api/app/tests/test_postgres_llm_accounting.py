@@ -706,7 +706,13 @@ def test_p6_the_sweep_defers_to_a_live_lease_and_a_late_settlement_still_records
 
     def call() -> None:
         try:
-            service.run("classify_signal", child.RUN_INPUTS, meter=meter)
+            service.run(
+                "classify_signal",
+                child.RUN_INPUTS,
+                meter=meter,
+                organization_id=meter.organization_id,
+                workspace_id=meter.workspace_id,
+            )
         except BaseException as exc:  # noqa: BLE001 - surfaced to the test
             errors.append(exc)
 
@@ -1587,7 +1593,13 @@ def test_p9_mock_provider_calls_of_the_handlers_meter_are_recorded_in_full(facto
         meter.bind(db, organization_id=ORG, workspace_id=WS, scout_request_id=None)
         assert meter.shared_ledger
         for content in ("a", "b", "c"):
-            service.run("classify_signal", {"content": content}, meter=meter)
+            service.run(
+                "classify_signal",
+                {"content": content, "audiences": None},
+                meter=meter,
+                organization_id=meter.organization_id,
+                workspace_id=meter.workspace_id,
+            )
         assert _ledger_counts(db) == (0, 0, 0)  # nothing reserved for a mock call
         if write == "after_rollback":
             db.rollback()  # the attempt failed: the worker rolls it back, then writes
@@ -1622,7 +1634,13 @@ def test_p9_the_bare_meter_without_a_session_factory_records_priced_calls(factor
         meter.bind(db, organization_id=ORG, workspace_id=WS, scout_request_id=None)
         assert not meter.shared_ledger
         for content in ("a", "b"):
-            service.run("classify_signal", {"content": content}, meter=meter)
+            service.run(
+                "classify_signal",
+                {"content": content, "audiences": None},
+                meter=meter,
+                organization_id=meter.organization_id,
+                workspace_id=meter.workspace_id,
+            )
         meter.flush(db)
         db.commit()
     spent = 2 * child.FIXED_COST

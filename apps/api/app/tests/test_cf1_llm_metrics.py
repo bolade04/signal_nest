@@ -47,6 +47,7 @@ from app.llm.base import (
     LLMUnavailableError,
 )
 from app.llm.metering import LLMBudgetExceededError
+from app.llm.quota import LLMCeilingExceededError
 from app.llm.schemas import TASK_SCHEMAS
 
 LLM_METRICS = (LLM_CALLS_TOTAL, LLM_CALL_DURATION_MS, LLM_INPUT_TOKENS_TOTAL,
@@ -61,6 +62,9 @@ TAXONOMY = {
     LLMUnavailableError: "unavailable",
     LLMProviderError: "provider_error",
     LLMBudgetExceededError: "budget_exceeded",
+    # Project Phase 5C (W21 lane P5C): a generation attempt refused by a daily ceiling is a
+    # budget refusal (a subclass, so the existing ``budget_exceeded`` value; no new label).
+    LLMCeilingExceededError: "budget_exceeded",
 }
 
 

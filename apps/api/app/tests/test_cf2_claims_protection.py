@@ -17,9 +17,10 @@ plan §2). For ``/workspaces/{workspace_id}/claims`` only:
   editors, hard delete and no audit record.
 
 This is a disclosed live behaviour change at merge: marketers lose write access to the
-``/claims`` routes. **Known exception (coordinator ruling R1):** ``POST /onboarding`` still
-lets any editor, a marketer included, *add* claims (any kind, at any time, without a
-per-claim audit record) until the 5C build closes it; this module does not test onboarding.
+``/claims`` routes. ``POST /onboarding``, the library's other writer, is held to the same
+rules by the 5C build (coordinator ruling R1: steward-only, ``ClaimIn``-validated, first
+onboarding only, audited per entry); this module does not test onboarding —
+``test_creative_claims_onboarding_api`` does.
 
 The world is built through real HTTP flows (the P6-PLAT-8 harness of
 ``test_campaign_context_integrity``) on a temporary SQLite file with foreign keys on; this
