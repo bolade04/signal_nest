@@ -130,19 +130,21 @@ def test_system_capabilities_is_coarse_summary_only(client: TestClient, auth: di
     assert body["is_local_mode"] is True
     assert "capabilities" not in body
     # Read-only product-capability reflections are exposed (never backend
-    # topology). All five registered capabilities ship dark, so all reflect
+    # topology). All six registered capabilities ship dark, so all reflect
     # False. This stays EXACT-EQUALITY on purpose: it is the closed-set
     # disclosure control for a customer-facing endpoint, and it is what fails
-    # loudly if a sixth value is ever reflected into `features`. Do not relax
+    # loudly if a seventh value is ever reflected into `features`. Do not relax
     # it to a subset or per-key check. `recommendation_briefs_enabled` was added
-    # at Project Phase 5 CF-1 and `creative_generation_enabled` at CF-2, each per
-    # operator decision O-4 (ALT_expose_all), in the same commit as its flag.
+    # at Project Phase 5 CF-1, `creative_generation_enabled` at CF-2 and
+    # `content_export_enabled` at CF-3, each per operator decision O-4
+    # (ALT_expose_all), in the same commit as its flag.
     assert body["features"] == {
         "opportunity_feedback_enabled": False,
         "scout_scheduling_enabled": False,
         "connector_rss_enabled": False,
         "recommendation_briefs_enabled": False,
         "creative_generation_enabled": False,
+        "content_export_enabled": False,
     }
     blob = resp.text.lower()
     for forbidden in ("password", "api_key", "secret", "redis://", "postgresql://"):
@@ -157,6 +159,7 @@ def test_system_capabilities_is_coarse_summary_only(client: TestClient, auth: di
         "connector_rss_enabled",
         "recommendation_briefs_enabled",
         "creative_generation_enabled",
+        "content_export_enabled",
     ],
 )
 def test_system_capabilities_reflects_each_flag_independently(

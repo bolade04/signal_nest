@@ -350,6 +350,7 @@ describe('P6-UI-005 — workspace-effective feedback reflection', () => {
             connector_rss_enabled: false,
             recommendation_briefs_enabled: false,
             creative_generation_enabled: false,
+            content_export_enabled: false,
           },
         }),
       ),

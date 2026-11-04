@@ -37,6 +37,8 @@ def test_capability_value_set_is_closed_and_exact() -> None:
         "recommendation_briefs",
         # Project Phase 5C, added at W21 CF-2 (O-3).
         "creative_generation",
+        # Project Phase 5E, added at W21 CF-3 (O-3).
+        "content_export",
     }
 
 
@@ -52,6 +54,7 @@ def test_iter_capabilities_is_deterministic_declaration_order() -> None:
         Capability.CONNECTOR_RSS,
         Capability.RECOMMENDATION_BRIEFS,
         Capability.CREATIVE_GENERATION,
+        Capability.CONTENT_EXPORT,
     )
     # Stable across repeated calls.
     assert iter_capabilities() == iter_capabilities()
@@ -82,6 +85,7 @@ def test_global_flag_bindings_are_exact() -> None:
     assert get_policy(Capability.CREATIVE_GENERATION).global_flag_attr == (
         "creative_generation_enabled"
     )
+    assert get_policy(Capability.CONTENT_EXPORT).global_flag_attr == "content_export_enabled"
 
 
 def test_policies_are_frozen_and_immutable() -> None:
@@ -123,6 +127,7 @@ def test_route_guarded_capabilities_are_workspace_enableable() -> None:
         Capability.SCOUT_SCHEDULING,
         Capability.RECOMMENDATION_BRIEFS,
         Capability.CREATIVE_GENERATION,
+        Capability.CONTENT_EXPORT,
     ):
         policy = get_policy(capability)
         assert policy.workspace_enableable is True
@@ -138,6 +143,7 @@ _ACTIVATION_PHASE = {
     Capability.CONNECTOR_RSS: "4B",
     Capability.RECOMMENDATION_BRIEFS: "5A",
     Capability.CREATIVE_GENERATION: "5C",
+    Capability.CONTENT_EXPORT: "5E",
 }
 
 
@@ -172,6 +178,7 @@ def test_persisted_values_are_sorted_and_match_enum() -> None:
     values = persisted_values()
     assert values == (
         "connector_rss",
+        "content_export",
         "creative_generation",
         "opportunity_feedback",
         "recommendation_briefs",

@@ -167,6 +167,14 @@ class AccountExportOut(BaseModel):
     #: Project Phase 5C (W21 CF-2): creative drafts the account generated (ids, version,
     #: channel, its own snapshot; no model-generated text).
     drafts_authored: list[dict[str, Any]]
+    #: Project Phase 5E (W21 CF-3): exports the account made (ids, version, format,
+    #: jurisdiction, its own snapshot; never the exported text).
+    exports_performed: list[dict[str, Any]]
+    #: Project Phase 5E (W21 CF-3): the account's own in-app notifications (codes, ids and
+    #: instants; no text).
+    notifications_received: list[dict[str, Any]]
+    #: Project Phase 5E (W21 CF-3): the account's own per-event notification preferences.
+    notification_preferences: list[dict[str, Any]]
 
 
 class ExportedTableOut(BaseModel):

@@ -19,6 +19,11 @@ with the plumbing of ``test_cf1_contract_migration``:
   one step down removes exactly this revision (both tables, ``approvals.draft_id`` and
   ``claims_library.retired_at`` gone, both CHECKs narrowed, every other index and row kept)
   and ``upgrade`` restores it.
+
+The CHECK-equality and insert tests run at the code head (CF-3's ``c3f8e1a6d2b9``, which adds a
+jurisdiction CHECK to both tables and widens the capability vocabulary); the downgrade tests
+start from ``a7d2e9f4c1b8`` itself (CF-3's own downgrade is pinned by
+``test_cf3_contract_migration``).
 """
 
 from __future__ import annotations
@@ -50,7 +55,10 @@ from app.tests.test_cf1_contract_migration import (
 )
 
 API_DIR = Path(__file__).resolve().parents[2]
-HEAD = "a7d2e9f4c1b8"
+#: This revision (W21 CF-2).
+CF2 = "a7d2e9f4c1b8"
+#: The code head (W21 CF-3), which follows CF-2.
+HEAD = "c3f8e1a6d2b9"
 CF1 = "f3a9c1e7b2d5"
 OVERRIDES = "workspace_capability_overrides"
 NEW_TABLES = {"creative_drafts", "content_reviews"}
@@ -59,12 +67,14 @@ NEW_TABLES = {"creative_drafts", "content_reviews"}
 EXPECTED_CHECKS = {
     "creative_drafts": {
         "ck_creative_draft_channel",
+        "ck_creative_draft_jurisdiction_code",  # CF-3
         "ck_creative_draft_usage",
         "ck_creative_draft_version",
     },
     "content_reviews": {
         "ck_content_review_blocked",
         "ck_content_review_draft_version",
+        "ck_content_review_jurisdiction_code",  # CF-3
         "ck_content_review_passed",
         "ck_content_review_risk_level",
     },
@@ -88,6 +98,16 @@ def migrated(tmp_path) -> Path:
     return db_path
 
 
+@pytest.fixture()
+def at_cf2(tmp_path) -> Path:
+    """A database at exactly this revision (for its own downgrade)."""
+    db_path = tmp_path / "cf2-only.db"
+    result = _alembic(db_path, "upgrade", CF2)
+    assert result.returncode == 0, result.stderr
+    assert _version(db_path) == [CF2]
+    return db_path
+
+
 # --------------------------------------------------------------------------- #
 # Head, drift, and the CHECKs against their Python authorities
 # --------------------------------------------------------------------------- #
@@ -97,7 +117,8 @@ def test_the_head_is_single_and_follows_cf1() -> None:
 
     script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
     assert [r.revision for r in script.get_revisions("heads")] == [HEAD]
-    assert script.get_revision(HEAD).down_revision == CF1
+    assert script.get_revision(HEAD).down_revision == CF2
+    assert script.get_revision(CF2).down_revision == CF1
 
 
 def test_upgrade_leaves_no_model_drift(migrated: Path) -> None:
@@ -251,7 +272,7 @@ def _refused(db_path: Path, message: str) -> None:
     assert refused.returncode != 0
     assert message in refused.stdout + refused.stderr
     # Nothing changed: same revision, same tables, the widened CHECKs and new columns kept.
-    assert _version(db_path) == [HEAD]
+    assert _version(db_path) == [CF2]
     assert _tables(db_path) == tables_before
     assert "draft_id" in _columns(db_path, "approvals")
     assert "retired_at" in _columns(db_path, "claims_library")
@@ -261,79 +282,79 @@ def _refused(db_path: Path, message: str) -> None:
     )
 
 
-def test_downgrade_refuses_while_an_override_names_the_capability(migrated: Path) -> None:
+def test_downgrade_refuses_while_an_override_names_the_capability(at_cf2: Path) -> None:
     _sql(
-        migrated,
+        at_cf2,
         f"INSERT INTO {OVERRIDES} (id, organization_id, workspace_id, capability, enabled)"
         " VALUES ('ov-creative', 'o', 'w', 'creative_generation', 1)",
     )
-    _refused(migrated, "name 'creative_generation'; clear them before downgrading")
-    assert _sql(migrated, f"SELECT capability FROM {OVERRIDES}") == [("creative_generation",)]
+    _refused(at_cf2, "name 'creative_generation'; clear them before downgrading")
+    assert _sql(at_cf2, f"SELECT capability FROM {OVERRIDES}") == [("creative_generation",)]
 
 
-def test_downgrade_refuses_while_an_approval_decides_on_a_draft(migrated: Path) -> None:
-    _sql(migrated, _APPROVAL_SQL, ("kept-draft-decision", "creative_draft", "d1", None, 1))
-    _refused(migrated, "approval record(s) decide on a creative_draft")
-    assert _sql(migrated, "SELECT id, subject_type FROM approvals") == [
+def test_downgrade_refuses_while_an_approval_decides_on_a_draft(at_cf2: Path) -> None:
+    _sql(at_cf2, _APPROVAL_SQL, ("kept-draft-decision", "creative_draft", "d1", None, 1))
+    _refused(at_cf2, "approval record(s) decide on a creative_draft")
+    assert _sql(at_cf2, "SELECT id, subject_type FROM approvals") == [
         ("kept-draft-decision", "creative_draft")
     ]
 
 
-def test_downgrade_refuses_while_a_claim_is_retired(migrated: Path) -> None:
-    _sql(migrated, _CLAIM_SQL, ("retired-claim", "2026-11-01 00:00:00"))
-    _refused(migrated, "dropping retired_at would re-activate them")
-    assert _sql(migrated, "SELECT id, retired_at FROM claims_library") == [
+def test_downgrade_refuses_while_a_claim_is_retired(at_cf2: Path) -> None:
+    _sql(at_cf2, _CLAIM_SQL, ("retired-claim", "2026-11-01 00:00:00"))
+    _refused(at_cf2, "dropping retired_at would re-activate them")
+    assert _sql(at_cf2, "SELECT id, retired_at FROM claims_library") == [
         ("retired-claim", "2026-11-01 00:00:00")
     ]
 
 
 def test_one_step_down_removes_exactly_this_revision_and_up_restores_it(
-    migrated: Path,
+    at_cf2: Path,
 ) -> None:
-    override_indexes = _indexes(migrated, OVERRIDES)
-    approval_indexes = _indexes(migrated, "approvals")
-    claim_indexes = _indexes(migrated, "claims_library")
+    override_indexes = _indexes(at_cf2, OVERRIDES)
+    approval_indexes = _indexes(at_cf2, "approvals")
+    claim_indexes = _indexes(at_cf2, "claims_library")
     assert "ix_approvals_draft_id" in approval_indexes
     # Rows the downgrade must keep: a brief decision, an active claim, a CF-1 override.
     _sql(
-        migrated,
+        at_cf2,
         _APPROVAL_SQL.replace("NULL, ?, 'approved'", "?, ?, 'approved'"),
         ("brief-decision", "recommendation_brief", "brief-1", "brief-1", None, 1),
     )
-    _sql(migrated, _CLAIM_SQL, ("active-claim", None))
+    _sql(at_cf2, _CLAIM_SQL, ("active-claim", None))
     _sql(
-        migrated,
+        at_cf2,
         f"INSERT INTO {OVERRIDES} (id, organization_id, workspace_id, capability, enabled)"
         " VALUES ('ov-briefs', 'o', 'w', 'recommendation_briefs', 1)",
     )
 
-    down = _alembic(migrated, "downgrade", "-1")
+    down = _alembic(at_cf2, "downgrade", "-1")
     assert down.returncode == 0, down.stdout + down.stderr
-    assert _version(migrated) == [CF1]
-    assert not NEW_TABLES & _tables(migrated)
-    assert "draft_id" not in _columns(migrated, "approvals")
-    assert "retired_at" not in _columns(migrated, "claims_library")
-    checks = _checks(migrated, "approvals")
+    assert _version(at_cf2) == [CF1]
+    assert not NEW_TABLES & _tables(at_cf2)
+    assert "draft_id" not in _columns(at_cf2, "approvals")
+    assert "retired_at" not in _columns(at_cf2, "claims_library")
+    checks = _checks(at_cf2, "approvals")
     assert "ck_approval_draft_subject" not in checks
     assert _in_list(checks["ck_approval_subject_type"], "subject_type") == {
         "recommendation_brief"
     }
-    narrowed = _checks(migrated, OVERRIDES)["ck_workspace_capability_override_capability"]
+    narrowed = _checks(at_cf2, OVERRIDES)["ck_workspace_capability_override_capability"]
     assert _in_list(narrowed, "capability") == {
         "connector_rss", "opportunity_feedback", "recommendation_briefs", "scout_scheduling"
     }
     # The batch rebuilds kept every other index and every row.
-    assert _indexes(migrated, OVERRIDES) == override_indexes
-    assert _indexes(migrated, "approvals") == approval_indexes - {"ix_approvals_draft_id"}
-    assert _indexes(migrated, "claims_library") == claim_indexes
-    assert _sql(migrated, "SELECT id, brief_id FROM approvals") == [("brief-decision", "brief-1")]
-    assert _sql(migrated, "SELECT id FROM claims_library") == [("active-claim",)]
-    assert _sql(migrated, f"SELECT id FROM {OVERRIDES}") == [("ov-briefs",)]
-    assert {"recommendation_briefs", "approvals"} <= _tables(migrated)  # CF-1: untouched
+    assert _indexes(at_cf2, OVERRIDES) == override_indexes
+    assert _indexes(at_cf2, "approvals") == approval_indexes - {"ix_approvals_draft_id"}
+    assert _indexes(at_cf2, "claims_library") == claim_indexes
+    assert _sql(at_cf2, "SELECT id, brief_id FROM approvals") == [("brief-decision", "brief-1")]
+    assert _sql(at_cf2, "SELECT id FROM claims_library") == [("active-claim",)]
+    assert _sql(at_cf2, f"SELECT id FROM {OVERRIDES}") == [("ov-briefs",)]
+    assert {"recommendation_briefs", "approvals"} <= _tables(at_cf2)  # CF-1: untouched
 
-    up = _alembic(migrated, "upgrade", "head")
+    up = _alembic(at_cf2, "upgrade", "head")  # through this revision to the code head
     assert up.returncode == 0, up.stderr
-    assert _version(migrated) == [HEAD]
-    assert NEW_TABLES <= _tables(migrated)
-    assert _indexes(migrated, "approvals") == approval_indexes
-    assert _alembic(migrated, "check").returncode == 0
+    assert _version(at_cf2) == [HEAD]
+    assert NEW_TABLES <= _tables(at_cf2)
+    assert _indexes(at_cf2, "approvals") == approval_indexes
+    assert _alembic(at_cf2, "check").returncode == 0

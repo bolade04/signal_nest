@@ -19,6 +19,7 @@ from app.campaign_context.models import (  # noqa: F401
     AudienceProfile,
     BrandVoiceProfile,
     Campaign,
+    CampaignLocation,
     ChannelPreference,
     ClaimsLibraryEntry,
     CompetitorProfile,
@@ -30,6 +31,7 @@ from app.capabilities.models import WorkspaceCapabilityOverride  # noqa: F401
 from app.connectors.models import SourceTakedown, SourceTakedownCase  # noqa: F401
 from app.creative.models import ContentReview, CreativeDraft  # noqa: F401
 from app.db.base import Base  # noqa: F401
+from app.exports.models import Export  # noqa: F401
 from app.feedback.models import OpportunityFeedback  # noqa: F401
 from app.intelligence.records import SignalIntelligenceRecord  # noqa: F401
 from app.jobs.models import Job, JobEvent  # noqa: F401
@@ -40,6 +42,7 @@ from app.llm.models import (  # noqa: F401
     LLMUsageEvent,
 )
 from app.locations.models import BusinessLocation, GeoCoverageRule  # noqa: F401
+from app.notifications.models import Notification, NotificationPreference  # noqa: F401
 from app.opportunities.models import (  # noqa: F401
     Opportunity,
     OpportunityObservation,

@@ -39,6 +39,7 @@ from app.core.actor_snapshot import actor_snapshot
 from app.creative.models import ContentReview, CreativeDraft
 from app.db.append_only import AppendOnlyViolation, append_only, is_append_only, is_guarded
 from app.db.models import Base
+from app.exports.models import Export
 
 SNAPSHOT = actor_snapshot(user_id="u-author", full_name="Ada Author", email="ada@example.test")
 
@@ -232,10 +233,14 @@ def test_exactly_the_append_only_models_are_guarded() -> None:
         # CF-2 (Project Phase 5C).
         "creative_drafts",
         "content_reviews",
+        # CF-3 (Project Phase 5E).
+        "exports",
     }
 
 
-@pytest.mark.parametrize("model", [RecommendationBrief, Approval, CreativeDraft, ContentReview])
+@pytest.mark.parametrize(
+    "model", [RecommendationBrief, Approval, CreativeDraft, ContentReview, Export]
+)
 def test_new_append_only_tables_carry_created_at_only(model) -> None:
     columns = model.__table__.c
     assert "created_at" in columns
@@ -308,6 +313,46 @@ def _child_upsert():
 def _child_value(s: Session) -> str:
     t = _PrivateBase.metadata.tables["cf1_subclass_probe"]
     return s.execute(select(t.c.value).where(t.c.id == "c1")).scalar_one()
+
+
+@append_only
+class _ConcreteParent(_PrivateBase):
+    __tablename__ = "cf1_concrete_parent_probe"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    value: Mapped[str] = mapped_column(String(32))
+
+
+class _ConcreteChild(_ConcreteParent):
+    """Concrete-table inheritance: the subclass maps a table of its own, not a guarded table,
+    so only the class (MRO) check guards it — the case the table key alone does not cover
+    (CF2-FIX3)."""
+
+    __tablename__ = "cf1_concrete_child_probe"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    value: Mapped[str] = mapped_column(String(32))
+    __mapper_args__ = {"concrete": True}
+
+
+@pytest.mark.parametrize("path", ["flush update", "update(ConcreteSubClass)"])
+def test_a_concrete_subclass_is_guarded_by_its_class(path) -> None:
+    engine = create_engine("sqlite://", future=True)
+    _PrivateBase.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False, future=True)
+    with factory() as s:
+        s.add(_ConcreteChild(id="k1", value="original"))
+        s.commit()
+        with pytest.raises(AppendOnlyViolation):
+            if path == "flush update":
+                s.get(_ConcreteChild, "k1").value = "changed"
+                s.commit()
+            else:
+                s.execute(
+                    update(_ConcreteChild).where(_ConcreteChild.id == "k1").values(value="x")
+                )
+        s.rollback()
+        t = _PrivateBase.metadata.tables["cf1_concrete_child_probe"]
+        assert s.execute(select(t.c.value).where(t.c.id == "k1")).scalar_one() == "original"
+    engine.dispose()
 
 
 def test_the_subclass_is_guarded_but_not_enumerated_as_decorated() -> None:

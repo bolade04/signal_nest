@@ -40,16 +40,27 @@ columns** (``organization_id``, ``workspace_id``) so a query never has to join t
 draft. Retention: the review cascades with its draft (it is never kept beyond the draft it
 judges), so its survival is bounded by the draft's — not indefinite (the O-6 rider).
 
+**Jurisdiction and retention (Project Phase 5D/5E, W21 CF-3).** A draft snapshots the
+resolved ``jurisdiction_code`` at generation and a review records the jurisdiction it was
+evaluated under (:mod:`app.jurisdiction.codes`), each written once at insert and nullable
+(``NULL``: none captured; the 5E export refuses such a draft; the resolver's ``UNRESOLVED`` is
+never stored). Both tables gain ``deleted_at``, the soft-delete marker of the 5E retention
+mechanism (durations: O-5): the one post-insert write the contract foresees, made only
+through Core by the retention code in :mod:`app.privacy`; the ORM guard refuses it. Nothing
+writes either column yet.
+
 Portable types only; CHECKs rendered from the Python vocabularies.
 """
 
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    DateTime,
     ForeignKey,
     Integer,
     String,
@@ -63,6 +74,7 @@ from app.core.actor_snapshot import ACTOR_SNAPSHOT_MAX_LENGTH
 from app.core.enums import ClaimRisk, CreativeChannel
 from app.db.append_only import append_only
 from app.db.base import Base, CreatedAtMixin, UUIDPrimaryKeyMixin
+from app.jurisdiction.codes import JURISDICTION_CODE_MAX_LENGTH, jurisdiction_code_check_sql
 from app.llm.models import USD
 
 
@@ -101,6 +113,10 @@ class CreativeDraft(Base, UUIDPrimaryKeyMixin, CreatedAtMixin):
         CheckConstraint("draft_version >= 1", name="ck_creative_draft_version"),
         CheckConstraint(channel_sql(), name="ck_creative_draft_channel"),
         CheckConstraint(DRAFT_USAGE_SQL, name="ck_creative_draft_usage"),
+        CheckConstraint(
+            jurisdiction_code_check_sql(nullable=True),
+            name="ck_creative_draft_jurisdiction_code",
+        ),
     )
 
     # --- Scope -------------------------------------------------------------------
@@ -165,6 +181,12 @@ class CreativeDraft(Base, UUIDPrimaryKeyMixin, CreatedAtMixin):
         String(ACTOR_SNAPSHOT_MAX_LENGTH), nullable=False
     )
 
+    # --- Jurisdiction snapshot and retention marker (W21 CF-3) -----------------------
+    #: The resolved jurisdiction at generation; NULL when none was captured (5D).
+    jurisdiction_code: Mapped[str | None] = mapped_column(String(JURISDICTION_CODE_MAX_LENGTH))
+    #: Soft-delete marker of the 5E retention mechanism; set only through Core (privacy).
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
 
 @append_only
 class ContentReview(Base, UUIDPrimaryKeyMixin, CreatedAtMixin):
@@ -177,6 +199,10 @@ class ContentReview(Base, UUIDPrimaryKeyMixin, CreatedAtMixin):
         CheckConstraint(risk_level_sql(), name="ck_content_review_risk_level"),
         CheckConstraint(REVIEW_BLOCKED_SQL, name="ck_content_review_blocked"),
         CheckConstraint(REVIEW_PASSED_SQL, name="ck_content_review_passed"),
+        CheckConstraint(
+            jurisdiction_code_check_sql(nullable=True),
+            name="ck_content_review_jurisdiction_code",
+        ),
     )
 
     # --- Explicit tenant scope (never only through creative_drafts) ------------------
@@ -203,6 +229,12 @@ class ContentReview(Base, UUIDPrimaryKeyMixin, CreatedAtMixin):
     required_disclaimers: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     disclaimers_resolved: Mapped[bool] = mapped_column(Boolean, nullable=False)
     passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+
+    # --- Jurisdiction and retention marker (W21 CF-3) ----------------------------------
+    #: The jurisdiction the review was evaluated under; NULL when none was captured (5D).
+    jurisdiction_code: Mapped[str | None] = mapped_column(String(JURISDICTION_CODE_MAX_LENGTH))
+    #: Soft-delete marker of the 5E retention mechanism; set only through Core (privacy).
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 __all__ = [

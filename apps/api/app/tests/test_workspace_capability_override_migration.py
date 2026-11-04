@@ -35,7 +35,7 @@ import pytest
 API_DIR = Path(__file__).resolve().parents[2]
 # Revision immediately before the workspace_capability_overrides migration.
 PREV = "4945b98229e6"
-HEAD = "a7d2e9f4c1b8"
+HEAD = "c3f8e1a6d2b9"
 TABLE = "workspace_capability_overrides"
 
 
@@ -196,6 +196,7 @@ def test_all_capability_flags_remain_dark() -> None:
     assert settings.connector_rss_enabled is False
     assert settings.recommendation_briefs_enabled is False  # Project Phase 5 CF-1
     assert settings.creative_generation_enabled is False  # Project Phase 5 CF-2
+    assert settings.content_export_enabled is False  # Project Phase 5 CF-3
     # And every registry-bound flag is dark.
     for capability in iter_capabilities():
         assert getattr(settings, get_policy(capability).global_flag_attr) is False
