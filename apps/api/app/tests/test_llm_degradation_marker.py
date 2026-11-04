@@ -188,7 +188,7 @@ def seeded(tmp_path_factory):
 
 def _rerun(factory, monkeypatch, service: LLMService) -> tuple[list[Opportunity], list]:
     """Re-run the first seeded scout request with ``service``; return what this run created."""
-    monkeypatch.setattr(pipeline, "llm_service", service)
+    monkeypatch.setattr("app.llm.service.llm_service", service)
     # The run's P6-LLM-4 meter (cap, budget) reads the pipeline's settings: pin them too.
     monkeypatch.setattr(pipeline, "get_settings", offline_settings)
     with factory() as db:

@@ -826,9 +826,7 @@ def test_pause_issued_mid_run_is_honoured_by_the_retry(world, monkeypatch):
 # --------------------------------------------------------------------------- #
 def _priced(monkeypatch) -> PricedMock:
     provider = PricedMock(park_first=True)
-    monkeypatch.setattr(
-        pipeline,
-        "llm_service",
+    monkeypatch.setattr("app.llm.service.llm_service",
         LLMService(provider, sleep=lambda _s: None, settings=offline_settings()),
     )
     return provider

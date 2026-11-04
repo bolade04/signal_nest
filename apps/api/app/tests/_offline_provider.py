@@ -1,7 +1,8 @@
 """Offline LLM provider pin for the API test session (FU-237-F1, part 2). Not a test module.
 
 ``Settings`` reads ``LLM_*`` from the environment (and ``.env``), and ``app.llm.service``
-builds ``llm_service`` from them at *import*; ``pipeline`` binds that object by name. On a
+builds ``llm_service`` from them at *import*; every call site reaches that object through
+``get_llm_service()`` (Phase 5A; ``pipeline`` used to bind it by name). On a
 machine with a real provider configured, any test that reaches the pipeline would send real,
 keyed requests. This module (1) removes provider selection and credentials from
 ``os.environ`` for the test process, before the application is imported, (2) forces the
@@ -38,7 +39,6 @@ def scrub_environment() -> None:
 def verify_and_swap() -> None:
     """Rebuild cached settings, verify they are offline, and swap import-time services."""
     from app.core.config import get_settings
-    from app.jobs import pipeline
     from app.llm import service as service_module
     from app.llm.mock import MockLLMProvider
     from app.llm.service import LLMService
@@ -58,7 +58,6 @@ def verify_and_swap() -> None:
             settings=settings,
         )
     service_module.llm_service = _pinned["service"]
-    pipeline.llm_service = _pinned["service"]
 
 
 class RealProviderWindow:
@@ -69,24 +68,19 @@ class RealProviderWindow:
 
     def __enter__(self) -> RealProviderWindow:
         from app.core.config import get_settings
-        from app.jobs import pipeline
         from app.llm import service as service_module
 
         self._saved = {
             "env": {k: os.environ.get(k) for k in [*_removed, "LLM_PROVIDER"]},
-            "pipeline": pipeline.llm_service,
             "module": service_module.llm_service,
         }
         os.environ.update(_removed)
         get_settings.cache_clear()
-        fresh = service_module.LLMService()
-        service_module.llm_service = fresh
-        pipeline.llm_service = fresh
+        service_module.llm_service = service_module.LLMService()
         return self
 
     def __exit__(self, *exc: object) -> None:
         from app.core.config import get_settings
-        from app.jobs import pipeline
         from app.llm import service as service_module
 
         for k, v in self._saved["env"].items():
@@ -96,4 +90,3 @@ class RealProviderWindow:
                 os.environ[k] = v
         get_settings.cache_clear()
         service_module.llm_service = self._saved["module"]
-        pipeline.llm_service = self._saved["pipeline"]
