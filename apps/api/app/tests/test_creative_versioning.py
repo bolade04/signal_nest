@@ -399,13 +399,42 @@ def test_postgres_concurrent_generations_take_distinct_contiguous_versions_per_b
     still inside the attempt's transaction and locks), so attempts of one brief that are not
     serialized are certain to meet there (the unique key then fails one as
     ``version_conflict``). Under the generation locks the hold only adds latency, and the
-    recorded windows of one brief never overlap."""
+    recorded windows of one brief never overlap.
+
+    The provider is priced (an offline fake with the real adapter's ``prepare``), so the
+    meter writes the budget ledger on its own short-lived session — the shared-ledger path a
+    real provider takes. On the mock's same-session path ``meter.flush`` updates the
+    workspace's ``llm_budget_periods`` row inside the attempt's transaction, *before* the
+    allocation, and that row lock alone serializes every attempt of the workspace until it
+    commits: a test on the mock passes with every generation lock removed (the reviewer's
+    RV10), so it cannot tell whether the locks hold."""
     import time
 
+    from app.llm.base import LLMResponse, LLMUsage
     from app.tests._creative_support import postgres_creative_world
 
     for name, value in GENEROUS.items():
         monkeypatch.setattr(get_settings(), name, value)
+
+    class _Priced:
+        name, model = "anthropic", "claude-sonnet-4-6"
+
+        def prepare(self, request):
+            from app.llm.providers_real import AnthropicProvider
+
+            return AnthropicProvider("k", self.model, 5).prepare(request)
+
+        def generate(self, request, prompt_name, prompt_version):
+            out = MockLLMProvider().generate(request, prompt_name, prompt_version).output
+            return LLMResponse(task=request.task, provider=self.name, model=self.model,
+                               output=out, usage=LLMUsage(input_tokens=1000, output_tokens=200),
+                               prompt_name=prompt_name, prompt_version=prompt_version)
+
+    prices = {_Priced.model: [3.0, 15.0]}
+    for settings in (get_settings(), service_module.llm_service._settings):
+        monkeypatch.setattr(settings, "llm_prices_usd_per_mtok", prices)
+    monkeypatch.setattr(get_settings(), "llm_workspace_monthly_budget_usd", 50.0)
+    monkeypatch.setattr(service_module.llm_service, "_provider", _Priced())
     windows: list[tuple[str, float, float]] = []
     real_next_version = creative_service._next_version
 
