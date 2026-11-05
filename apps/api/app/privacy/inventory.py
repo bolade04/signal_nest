@@ -124,6 +124,24 @@ TABLES: dict[str, TableEntry] = {
         # cascades with its draft, so it is never kept beyond the draft it judges (bounded,
         # not indefinite: the O-6 rider). No retention class of its own; no duration decided.
         TableEntry("content_reviews", Category.COMPLIANCE),
+        # Project Phase 5E audited manual exports (W21 CF-3; dark until the 5E service writes
+        # them): append-only records of who exported which approved draft version, in which
+        # format and jurisdiction, with FK-less organization/workspace columns, so a record
+        # survives its scope's deletion like approvals (O-6). Deleting the organization
+        # anonymises them; deleting the exporting account clears the snapshot naming it
+        # (``app.privacy.erasure``). O-6 rider: they share the ``audit_logs`` retention
+        # class (compliance records), whose duration is unset and undecided (O-5).
+        TableEntry("exports", Category.COMPLIANCE, retention_class=RetentionClass.AUDIT_LOGS),
+        # Project Phase 5E in-app notifications and per-user preferences (W21 CF-3; dark until
+        # the 5E service writes them): one account's own feed (event code, subject id, read
+        # and soft-delete instants - no text) and its per-event opt-outs in a workspace. The
+        # account's own data: listed in its account export, never in the organization export
+        # (another member's feed is not the organization's to take). Deleted with the account,
+        # the workspace or the organization (every key CASCADE). No time-based retention
+        # class: whether the feed is purged after a duration is undecided (O-5); the
+        # ``notifications.deleted_at`` marker is the 5E mechanism's, and no duration is set.
+        TableEntry("notifications", Category.ACCOUNT, exported=False),
+        TableEntry("notification_preferences", Category.ACCOUNT, exported=False),
         TableEntry("workspaces", _TENANT),
         TableEntry("workspace_capability_overrides", _TENANT),
         TableEntry("brands", _TENANT),
@@ -139,6 +157,10 @@ TABLES: dict[str, TableEntry] = {
         TableEntry("source_preferences", _TENANT),
         TableEntry("channel_preferences", _TENANT),
         TableEntry("campaigns", _TENANT),
+        # Project Phase 5D campaign membership (W21 CF-3, O-8): campaign/location id pairs of
+        # one workspace (ids only), back-filled from ``campaigns.location_ids``. Exported with
+        # the organization; deleted with its campaign, location, workspace or organization.
+        TableEntry("campaign_locations", _TENANT),
         TableEntry("scout_requests", _TENANT),
         TableEntry("scout_schedules", _TENANT),
         TableEntry("raw_signals", _COLLECTED, retention_class=RetentionClass.SIGNAL_EVIDENCE),

@@ -111,7 +111,10 @@ FINDING = "e7b3c5a9d1f4"
 CF1 = "f3a9c1e7b2d5"
 # Project Phase 5 CF-2 (W21): creative_drafts, content_reviews, approvals.draft_id, claims
 # soft retirement, capability CHECK widened.
-CODE_HEAD = "a7d2e9f4c1b8"
+CF2 = "a7d2e9f4c1b8"
+# Project Phase 5 CF-3 (W21): campaign hardening, campaign_locations, jurisdiction columns,
+# exports, notifications, retention markers, capability CHECK widened.
+CODE_HEAD = "c3f8e1a6d2b9"
 
 
 # --------------------------------------------------------------------------- #
@@ -263,7 +266,8 @@ def _insert(con, table: str, id_: str, *, user: str = "u-1", **kw) -> None:
 def test_this_revision_follows_invitations_and_precedes_the_single_head() -> None:
     script = _script()
     assert [r.revision for r in script.get_revisions("heads")] == [CODE_HEAD]
-    assert script.get_revision(CODE_HEAD).down_revision == CF1
+    assert script.get_revision(CODE_HEAD).down_revision == CF2
+    assert script.get_revision(CF2).down_revision == CF1
     assert script.get_revision(CF1).down_revision == FINDING
     assert script.get_revision(FINDING).down_revision == RECOVERY
     assert script.get_revision(RECOVERY).down_revision == EXECCTL

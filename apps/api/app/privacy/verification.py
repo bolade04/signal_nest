@@ -27,9 +27,9 @@ database schema** and asks the database two questions about the subject:
 A report is ``verified`` only when the content was scanned and both come back empty. The
 single declared exception is the organization's own compliance records, which ``O-6`` keeps
 after the organization is gone: for an organization subject, ``audit_logs`` rows — and, since
-W21 CF-1, Project Phase 5B ``approvals`` rows — whose ``organization_id`` is the subject are
-reported as *retained*, and each must have every identifying column cleared, or it is a
-finding. Nothing here writes.
+W21 CF-1, Project Phase 5B ``approvals`` rows and, since CF-3, Project Phase 5E ``exports``
+rows — whose ``organization_id`` is the subject are reported as *retained*, and each must have
+every identifying column cleared, or it is a finding. Nothing here writes.
 
 Cost: the content scan reads every text column of every table (359 at this writing) once
 per identifier. That is acceptable for an operator tool and for the pilot's data volume; it
@@ -241,8 +241,16 @@ _APPROVAL_IDENTIFYING = ("decided_by", "note", "brief_id", "draft_id")
 #: The marker the deletion writes over an erased snapshot. Repeated here rather than imported,
 #: so this module stays independent of the deletion code; a test pins the two equal.
 _ERASED_MARKER = "[erased]"
+#: The columns of an organization's retained exports (Project Phase 5E, W21 CF-3) that must
+#: all be NULL; their ``exported_by_snapshot`` must be the erased marker.
+_EXPORT_IDENTIFYING = ("exported_by", "draft_id")
 #: Tables whose rows ``O-6`` keeps after their organization is deleted (FK-less scope columns).
-_O6_RETAINED = ("audit_logs", "approvals")
+_O6_RETAINED = ("audit_logs", "approvals", "exports")
+#: For the Phase 5 compliance records: (table, columns that must be NULL, snapshot column).
+_PHASE5_RETAINED = (
+    ("approvals", _APPROVAL_IDENTIFYING, "decided_by_snapshot"),
+    ("exports", _EXPORT_IDENTIFYING, "exported_by_snapshot"),
+)
 
 
 def verify_organization_erased(
@@ -266,7 +274,6 @@ def verify_organization_erased(
     workspace_ids = list(workspace_ids)
     by_name = {t.name: t for t in tables}
     audit = by_name.get("audit_logs")
-    approvals = by_name.get("approvals")
     skip: set[tuple[str, str]] = set()
     for table in tables:
         checks = [(c, [organization_id]) for c in _reference_columns(
@@ -304,20 +311,23 @@ def verify_organization_erased(
         )
         if rows:
             report.reference_findings.append(Finding("audit_logs", "context", rows))
-    if approvals is not None:
-        skip |= {("approvals", "organization_id"), ("approvals", "workspace_id")}
-        scope = approvals.c.organization_id == organization_id
-        retained = _count(db, approvals, scope)
+    for name, identifying, snapshot_name in _PHASE5_RETAINED:
+        retained_table = by_name.get(name)
+        if retained_table is None:
+            continue
+        skip |= {(name, "organization_id"), (name, "workspace_id")}
+        scope = retained_table.c.organization_id == organization_id
+        retained = _count(db, retained_table, scope)
         if retained:
-            report.retained_anonymised.append(Finding("approvals", "organization_id", retained))
-        for name in _APPROVAL_IDENTIFYING:
-            rows = _count(db, approvals, scope, approvals.c[name].is_not(None))
+            report.retained_anonymised.append(Finding(name, "organization_id", retained))
+        for column_name in identifying:
+            rows = _count(db, retained_table, scope, retained_table.c[column_name].is_not(None))
             if rows:
-                report.reference_findings.append(Finding("approvals", name, rows))
-        snapshot = approvals.c.decided_by_snapshot
-        rows = _count(db, approvals, scope, snapshot != _ERASED_MARKER)
+                report.reference_findings.append(Finding(name, column_name, rows))
+        snapshot = retained_table.c[snapshot_name]
+        rows = _count(db, retained_table, scope, snapshot != _ERASED_MARKER)
         if rows:
-            report.reference_findings.append(Finding("approvals", "decided_by_snapshot", rows))
+            report.reference_findings.append(Finding(name, snapshot_name, rows))
     if content:
         subject = Subject(ids=(organization_id, *workspace_ids))
         (

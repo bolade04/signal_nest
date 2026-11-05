@@ -28,6 +28,10 @@ _provider.scrub_environment()
 
 from app.jobs import registry as _registry  # noqa: E402
 
+# Fixture modules (Project Phase 5 plan §6.3: each registered here at its CF-* gate). The
+# Phase 5E analytics seeded fixture is lane 5E-W1's module, registered at W21 CF-3.
+from app.tests.fixtures.analytics import *  # noqa: E402, F401, F403
+
 
 @pytest.fixture(autouse=True)
 def _preserve_job_registry() -> Iterator[None]:
@@ -173,3 +177,16 @@ def mock_llm_service(mock_llm_provider, mock_llm_sleeps):
         sleep=mock_llm_sleeps.append,
         settings=offline_settings(llm_mock_seed=MOCK_LLM_SEED),
     )
+
+
+@pytest.fixture
+def mock_llm_recorder():
+    """The seeded ``MockLLMProvider`` that also records every request it is sent (5A-W4).
+
+    Same seed as :func:`mock_llm_provider`, so its outputs are the seeded mock's; the recorded
+    :class:`~app.llm.base.LLMRequest` objects show what reached the provider after the
+    service's boundary sanitization (``app.tests.fixtures.llm.RecordingMock``).
+    """
+    from app.tests.fixtures.llm import RecordingMock
+
+    return RecordingMock(model="mock-1", seed=MOCK_LLM_SEED)

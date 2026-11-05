@@ -34,6 +34,16 @@ SignalIntelligenceRecord` discipline (Phase 5A plan §2):
 * **No status column.** A brief's display status (draft / superseded / approved /
   rejected) is derived at read time from the approval spine and the ``parent_brief_id``
   chain; no status vocabulary is frozen (Phase 5A plan §2).
+* **Jurisdiction snapshot (Project Phase 5D, W21 CF-3).** ``jurisdiction_code`` is the
+  resolved jurisdiction captured with the brief (:mod:`app.jurisdiction.codes`), written once
+  at insert. It is **nullable**: ``NULL`` means no resolution was captured (every brief
+  written before 5D-W3 adds the capture), which the 5E export service refuses explicitly;
+  the resolver's ``UNRESOLVED`` is never stored (the CHECK refuses it).
+* **Retention marker (Project Phase 5E, W21 CF-3).** ``deleted_at`` is the soft-delete
+  marker of the 5E retention mechanism (plan 5E §2; durations are operator decision O-5).
+  It is the one post-insert write the contract foresees, and it is made only through Core
+  by the retention code in :mod:`app.privacy` (the sanctioned writer above): the ORM guard
+  refuses it like any other update. Nothing writes it and nothing filters on it yet.
 
 Tenancy: ``organization_id`` / ``workspace_id`` / ``opportunity_id`` /
 ``intelligence_record_id`` cascade, so a brief is deleted with its workspace and is a
@@ -45,9 +55,12 @@ native enums).
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    DateTime,
     ForeignKey,
     Integer,
     String,
@@ -60,6 +73,7 @@ from sqlalchemy.types import JSON
 from app.core.actor_snapshot import ACTOR_SNAPSHOT_MAX_LENGTH
 from app.db.append_only import append_only
 from app.db.base import Base, CreatedAtMixin, UUIDPrimaryKeyMixin
+from app.jurisdiction.codes import JURISDICTION_CODE_MAX_LENGTH, jurisdiction_code_check_sql
 
 
 @append_only
@@ -75,6 +89,10 @@ class RecommendationBrief(Base, UUIDPrimaryKeyMixin, CreatedAtMixin):
             name="uq_recommendation_brief_version",
         ),
         CheckConstraint("brief_version >= 1", name="ck_recommendation_brief_version"),
+        CheckConstraint(
+            jurisdiction_code_check_sql(nullable=True),
+            name="ck_recommendation_brief_jurisdiction_code",
+        ),
     )
 
     # --- Scope (isolation-preserving typed FKs) ------------------------------
@@ -144,6 +162,12 @@ class RecommendationBrief(Base, UUIDPrimaryKeyMixin, CreatedAtMixin):
     risk_notes: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     # --- Content (facts: pointers into the evidence) ----------------------------
     evidence_refs: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+
+    # --- Jurisdiction snapshot and retention marker (W21 CF-3) -------------------
+    #: The resolved jurisdiction at capture; NULL when none was captured (5D).
+    jurisdiction_code: Mapped[str | None] = mapped_column(String(JURISDICTION_CODE_MAX_LENGTH))
+    #: Soft-delete marker of the 5E retention mechanism; set only through Core (privacy).
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 __all__ = ["RecommendationBrief"]

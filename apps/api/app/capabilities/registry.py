@@ -48,6 +48,8 @@ class Capability(StrEnum):
     RECOMMENDATION_BRIEFS = "recommendation_briefs"
     #: Project Phase 5C text creative generation. Added at CF-2.
     CREATIVE_GENERATION = "creative_generation"
+    #: Project Phase 5E audited manual export of approved creative text. Added at CF-3.
+    CONTENT_EXPORT = "content_export"
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +151,19 @@ _POLICIES: tuple[CapabilityPolicy, ...] = (
         subject_to_safety_ceiling=True,
         requires_workspace_context=True,
         future_activation_phase="5C",
+    ),
+    CapabilityPolicy(
+        capability=Capability.CONTENT_EXPORT,
+        label="Content Export",
+        global_flag_attr="content_export_enabled",
+        # Operator decision O-3: enableable per workspace, global default False.
+        # Activation additionally needs O-5 and the verified NULL-jurisdiction export
+        # refusal (Project Phase 5 plan §10); nothing here activates it.
+        workspace_enableable=True,
+        workspace_disableable=True,
+        subject_to_safety_ceiling=True,
+        requires_workspace_context=True,
+        future_activation_phase="5E",
     ),
 )
 

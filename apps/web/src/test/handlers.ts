@@ -407,6 +407,15 @@ const capabilityRegistryItems = [
     workspace_disableable: true,
     future_activation_phase: '5C',
   },
+  {
+    // Project Phase 5E (W21 CF-3): enableable per workspace (O-3), dark by default.
+    capability: 'content_export',
+    label: 'Content Export',
+    global_flag_attr: 'content_export_enabled',
+    workspace_enableable: true,
+    workspace_disableable: true,
+    future_activation_phase: '5E',
+  },
 ] as const;
 
 interface OverrideRow {
@@ -1294,7 +1303,7 @@ export const handlers = [
       is_local_mode: true,
       all_configured: true,
       // Every registered capability ships dark by default, mirroring the server
-      // flags (`config.py`: all five default False). Tests that need a
+      // flags (`config.py`: all six default False). Tests that need a
       // capability ON install a per-test `server.use(...)` override rather than
       // changing this shared default — so the dark path is what renders unless a
       // test explicitly opts out of it.
@@ -1304,6 +1313,7 @@ export const handlers = [
         connector_rss_enabled: false,
         recommendation_briefs_enabled: false,
         creative_generation_enabled: false,
+        content_export_enabled: false,
       },
     }),
   ),

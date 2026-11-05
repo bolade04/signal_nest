@@ -266,8 +266,9 @@ The contract **requires**, throughout INFRA implementation and environment setup
 
 - `opportunity_feedback_enabled=False`, `scout_scheduling_enabled=False`,
   `connector_rss_enabled=False`, `recommendation_briefs_enabled=False`,
-  `creative_generation_enabled=False` (all five global flags remain `False`; the fourth was
-  added by Project Phase 5 CF-1 and the fifth by CF-2, each defaulting `False`). The four
+  `creative_generation_enabled=False`, `content_export_enabled=False` (all six global flags
+  remain `False`; the fourth was added by Project Phase 5 CF-1, the fifth by CF-2 and the
+  sixth by CF-3, each defaulting `False`). The four
   Project Phase 5C ceilings (`llm_daily_cost_ceiling_usd_global`,
   `llm_daily_cost_ceiling_usd_per_workspace`, `llm_max_calls_per_workspace_per_day`,
   `llm_max_output_tokens_per_call`) stay unset: no value is approved, and 5C generation

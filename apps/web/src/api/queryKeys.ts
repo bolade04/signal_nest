@@ -135,6 +135,33 @@ export const queryKeys = {
   draftApprovals: (workspaceId: string, draftId: string) =>
     ['workspaces', workspaceId, 'drafts', draftId, 'approvals'] as const,
 
+  // Project Phase 5D/5E (W21 CF-3; the routes land with the 5D/5E build lanes).
+  // 5D: one campaign (`GET /workspaces/{ws}/campaigns/{id}`, 5D-W1) is keyed under the
+  // campaign collection's own key (`context(ws, 'campaigns')`), so invalidating the list
+  // reaches every campaign of that workspace and no other.
+  campaign: (workspaceId: string, campaignId: string) =>
+    ['workspaces', workspaceId, 'context', 'campaigns', campaignId] as const,
+  // 5E: a draft's export history (`/workspaces/{ws}/drafts/{draft}/exports`) under that
+  // draft's key; workspace-effective export availability has its own per-workspace key.
+  draftExports: (workspaceId: string, draftId: string) =>
+    ['workspaces', workspaceId, 'drafts', draftId, 'exports'] as const,
+  exportCapability: (workspaceId: string) =>
+    ['workspaces', workspaceId, 'export-capability'] as const,
+  // 5E status analytics: workspace- AND location-scoped (null = the whole workspace), so a
+  // per-location view never shares an entry with the workspace view or another location.
+  analytics: (workspaceId: string, locationId: string | null) =>
+    ['workspaces', workspaceId, 'analytics', { locationId }] as const,
+  // 5E notifications: the PER-USER scope dimension. Every key above is at most
+  // workspace-scoped; a notification feed is one user's, so its keys embed the user id
+  // after the workspace and a user switch inside one workspace can never be served another
+  // user's cached feed. This is a change to an isolation control (R-5E reviews it as such).
+  userScope: (workspaceId: string, userId: string) =>
+    ['workspaces', workspaceId, 'users', userId] as const,
+  notifications: (workspaceId: string, userId: string) =>
+    ['workspaces', workspaceId, 'users', userId, 'notifications'] as const,
+  notificationPreferences: (workspaceId: string, userId: string) =>
+    ['workspaces', workspaceId, 'users', userId, 'notification-preferences'] as const,
+
   // Workspace-effective feedback availability (P6-UI-005). Deliberately NOT
   // `runtimeSummary`: that key carries the raw global flags, has no workspace in
   // it, and is shared at a 60s staleTime — putting a per-workspace answer there

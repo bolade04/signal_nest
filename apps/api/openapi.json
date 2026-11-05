@@ -146,6 +146,14 @@
             "title": "Email Verification Requests",
             "type": "array"
           },
+          "exports_performed": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Exports Performed",
+            "type": "array"
+          },
           "feedback_submitted": {
             "items": {
               "additionalProperties": true,
@@ -180,6 +188,22 @@
               "type": "object"
             },
             "title": "Memberships",
+            "type": "array"
+          },
+          "notification_preferences": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Notification Preferences",
+            "type": "array"
+          },
+          "notifications_received": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Notifications Received",
             "type": "array"
           },
           "password_reset_requests": {
@@ -228,7 +252,10 @@
           "audit_events_performed",
           "briefs_authored",
           "approvals_decided",
-          "drafts_authored"
+          "drafts_authored",
+          "exports_performed",
+          "notifications_received",
+          "notification_preferences"
         ],
         "title": "AccountExportOut",
         "type": "object"
@@ -610,7 +637,8 @@
           "claims_library_entry.created",
           "claims_library_entry.updated",
           "claims_library_entry.retired",
-          "creative_draft.created"
+          "creative_draft.created",
+          "creative_draft.exported"
         ],
         "title": "AuditAction",
         "type": "string"
@@ -1401,9 +1429,8 @@
             "type": "array"
           },
           "mode": {
-            "default": "per_location",
-            "title": "Mode",
-            "type": "string"
+            "$ref": "#/components/schemas/CampaignMode",
+            "default": "per_location"
           },
           "name": {
             "minLength": 1,
@@ -1411,9 +1438,8 @@
             "type": "string"
           },
           "status": {
-            "default": "active",
-            "title": "Status",
-            "type": "string"
+            "$ref": "#/components/schemas/CampaignStatus",
+            "default": "active"
           }
         },
         "required": [
@@ -1421,6 +1447,16 @@
         ],
         "title": "CampaignIn",
         "type": "object"
+      },
+      "CampaignMode": {
+        "enum": [
+          "same_for_all",
+          "per_location",
+          "grouped",
+          "recommend"
+        ],
+        "title": "CampaignMode",
+        "type": "string"
       },
       "CampaignPatch": {
         "properties": {
@@ -1444,8 +1480,7 @@
             "type": "array"
           },
           "mode": {
-            "title": "Mode",
-            "type": "string"
+            "$ref": "#/components/schemas/CampaignMode"
           },
           "name": {
             "minLength": 1,
@@ -1453,12 +1488,23 @@
             "type": "string"
           },
           "status": {
-            "title": "Status",
-            "type": "string"
+            "$ref": "#/components/schemas/CampaignStatus"
           }
         },
         "title": "CampaignPatch",
         "type": "object"
+      },
+      "CampaignStatus": {
+        "description": "The closed lifecycle vocabulary of a campaign (Phase 5D campaign hardening).\n\nValidated at the schema layer and by ``ck_campaign_status``. The plan names the enum, not\nits members: these are CF-3's proposal, accepted by the coordinator and disclosed as\nPROPOSED. ``active`` is the default, as it was for the free-string column. Nothing in the\nproduct reads a campaign's status yet; the members are a vocabulary, not behaviour.",
+        "enum": [
+          "draft",
+          "active",
+          "paused",
+          "completed",
+          "archived"
+        ],
+        "title": "CampaignStatus",
+        "type": "string"
       },
       "CapabilitiesOut": {
         "properties": {
@@ -1508,7 +1554,8 @@
           "scout_scheduling",
           "connector_rss",
           "recommendation_briefs",
-          "creative_generation"
+          "creative_generation",
+          "content_export"
         ],
         "title": "Capability",
         "type": "string"
@@ -3030,6 +3077,10 @@
             "title": "Connector Rss Enabled",
             "type": "boolean"
           },
+          "content_export_enabled": {
+            "title": "Content Export Enabled",
+            "type": "boolean"
+          },
           "creative_generation_enabled": {
             "title": "Creative Generation Enabled",
             "type": "boolean"
@@ -3052,7 +3103,8 @@
           "scout_scheduling_enabled",
           "connector_rss_enabled",
           "recommendation_briefs_enabled",
-          "creative_generation_enabled"
+          "creative_generation_enabled",
+          "content_export_enabled"
         ],
         "title": "FeatureFlagsOut",
         "type": "object"
