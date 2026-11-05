@@ -441,6 +441,40 @@ class Cases(unittest.TestCase):
         self.assertIn("vendored", names)
         self.assertEqual(len(names), 17)          # 17 installed + 1 vendored, one installed distribution removed
 
+    def test_a_vendored_copy_at_the_same_name_and_version_is_not_the_installed_distributions_scanned_entry(self):
+        # setuptools >= 84 ships packaging-26.3.dist-info under setuptools/_vendor, so the .locktools scan lists packaging 26.3
+        # twice and the inventory once (CI run 41884523786: "the scanned entry of packaging 26.3 was not found exactly once").
+        # The cases that act on an installed distribution's scanned entry select it by its exact dist-info path under the
+        # environment root, as the gate reconciles the inventory — never by a path suffix a vendored copy also carries. The
+        # twin is listed FIRST, as Trivy orders a vendored copy of a name that sorts after "setuptools".
+        d = self.dirs["backend"]
+        doc = json.loads((d / "trivy-locktools-vuln.json").read_text())
+        first = json.loads((d / "locktools-installed.json").read_text())["installed"][0]       # the distribution both cases act on
+        n, v = first["metadata"]["name"], first["metadata"]["version"]
+        own = f"{SITE}/{n.replace('-', '_')}-{v}.dist-info/METADATA"
+        vendored = f"{SITE}/setuptools/_vendor/{n.replace('-', '_')}-{v}.dist-info/METADATA"
+        doc["Results"][0]["Packages"].insert(0, {"Name": n, "Version": v, "FilePath": vendored, "Identifier": {"UID": "vendored-twin"}})
+        (d / "trivy-locktools-vuln.json").write_text(json.dumps(doc))
+        ctl.build_case("backend-locktools-version-differs-from-the-lock", d, self.root / "w")
+        built = json.loads((self.root / "w" / "backend-locktools-version-differs-from-the-lock.report.json").read_text())
+        self.assertEqual({p["FilePath"]: p["Version"] for p in built["Results"][0]["Packages"] if p["Name"] == n},
+                         {own: v + ".post999", vendored: v})
+        ctl.build_case("backend-locktools-package-not-scanned", d, self.root / "w")
+        built = json.loads((self.root / "w" / "backend-locktools-package-not-scanned.report.json").read_text())
+        self.assertEqual({p["FilePath"]: p["Version"] for p in built["Results"][0]["Packages"] if p["Name"] == n}, {vendored: v})
+        self.assertEqual(self.main("check", "backend", str(d)), 0)      # every backend case still reaches its outcome
+
+    def test_two_scanned_entries_at_the_same_path_are_a_genuine_ambiguity_and_refuse_the_case(self):
+        d = self.dirs["backend"]
+        doc = json.loads((d / "trivy-locktools-vuln.json").read_text())
+        pkgs = doc["Results"][0]["Packages"]
+        pkgs.append(dict(pkgs[0], Identifier={"UID": "same-path-twin"}))        # the same name, version AND exact path twice
+        (d / "trivy-locktools-vuln.json").write_text(json.dumps(doc))
+        for case in ("backend-locktools-version-differs-from-the-lock", "backend-locktools-package-not-scanned"):
+            with self.subTest(case), self.assertRaisesRegex(ctl.ControlError, r"was found 2 times, expected exactly once"):
+                ctl.build_case(case, d, self.root / "w")
+        self.assertEqual(self.main("check", "backend", str(d)), gate.EXIT_REPORT)
+
     def test_the_vendored_and_binary_cases_change_only_their_own_target(self):
         ctl.build_case("reader-syspy-vendored-pin-not-scanned", self.reports, self.root / "w")
         built = json.loads((self.root / "w" / "reader-syspy-vendored-pin-not-scanned.vendored.json").read_text())
