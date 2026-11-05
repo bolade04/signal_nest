@@ -10,7 +10,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from fastapi import Depends, Header
+from fastapi import Depends, Header, Security
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -35,6 +36,20 @@ _ROLE_RANK = {
 
 #: A session id (``auth_sessions.id``, the ``sid`` claim): 32 lowercase hex characters.
 _SID = re.compile(r"[0-9a-f]{32}")
+
+#: The bearer scheme as the OpenAPI document declares it (P6-PLAT-5): it adds
+#: ``components.securitySchemes.bearerAuth`` and a ``security`` requirement to exactly the
+#: operations that depend on :func:`get_authenticated_session`, so generated clients and
+#: the docs UI describe the authentication this module enforces. It is documentation only:
+#: with ``auto_error=False`` it never refuses a request, and its value is not read -- the
+#: ``authorization`` header below stays the single source of the token, so every status
+#: and message of :func:`get_authenticated_session` is unchanged.
+BEARER_SCHEME = HTTPBearer(
+    scheme_name="bearerAuth",
+    bearerFormat="JWT",
+    description="A SignalNest access token, sent as `Authorization: Bearer <token>`.",
+    auto_error=False,
+)
 
 
 @dataclass(frozen=True)
@@ -65,6 +80,7 @@ class OrganizationContext:
 def get_authenticated_session(
     db: Session = Depends(get_db),
     authorization: str | None = Header(default=None),
+    _declared_scheme: HTTPAuthorizationCredentials | None = Security(BEARER_SCHEME),
 ) -> AuthenticatedSession:
     """Authenticate a request: a valid token bound to a live session of an active user.
 

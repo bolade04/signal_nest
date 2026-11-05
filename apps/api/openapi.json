@@ -8623,6 +8623,14 @@
         "title": "WorkspaceOut",
         "type": "object"
       }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "bearerFormat": "JWT",
+        "description": "A SignalNest access token, sent as `Authorization: Bearer <token>`.",
+        "scheme": "bearer",
+        "type": "http"
+      }
     }
   },
   "info": {
@@ -8838,6 +8846,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Confirm Email Verification",
         "tags": [
           "auth"
@@ -8891,6 +8904,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Request Email Verification",
         "tags": [
           "auth"
@@ -8951,6 +8969,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Accept Invitation",
         "tags": [
           "auth"
@@ -9118,6 +9141,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Logout",
         "tags": [
           "auth"
@@ -9161,6 +9189,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Logout All",
         "tags": [
           "auth"
@@ -9211,6 +9244,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Me",
         "tags": [
           "auth"
@@ -9334,6 +9372,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Change Password",
         "tags": [
           "auth"
@@ -9444,6 +9487,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Geocode Address",
         "tags": [
           "locations"
@@ -9493,6 +9541,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Internal Capabilities",
         "tags": [
           "internal"
@@ -9579,6 +9632,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Internal Capability Effective",
         "tags": [
           "internal"
@@ -9657,6 +9715,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Internal Capability Override Clear",
         "tags": [
           "internal"
@@ -9748,6 +9811,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Internal Capability Overrides",
         "tags": [
           "internal"
@@ -9806,6 +9874,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Internal Capability Override Set",
         "tags": [
           "internal"
@@ -9856,6 +9929,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Internal Capability Registry",
         "tags": [
           "internal"
@@ -10095,6 +10173,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Internal Jobs",
         "tags": [
           "internal"
@@ -10168,6 +10251,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Internal Jobs Dead Letter",
         "tags": [
           "internal"
@@ -10337,6 +10425,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Internal Jobs List",
         "tags": [
           "internal"
@@ -10410,6 +10503,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Internal Jobs Stuck",
         "tags": [
           "internal"
@@ -10469,6 +10567,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Internal Job Detail",
         "tags": [
           "internal"
@@ -10544,6 +10647,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Internal Job Events",
         "tags": [
           "internal"
@@ -10594,6 +10702,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Internal Overview",
         "tags": [
           "internal"
@@ -10643,6 +10756,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Internal Readiness",
         "tags": [
           "internal"
@@ -10732,6 +10850,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Internal Schedules",
         "tags": [
           "internal"
@@ -10782,6 +10905,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Internal Telemetry",
         "tags": [
           "internal"
@@ -10844,6 +10972,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Internal Workers",
         "tags": [
           "internal"
@@ -10897,6 +11030,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "List Organizations",
         "tags": [
           "organizations"
@@ -11184,6 +11322,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "List Invitations",
         "tags": [
           "organizations"
@@ -11250,6 +11393,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Create Invitation",
         "tags": [
           "organizations"
@@ -11310,6 +11458,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Revoke Invitation",
         "tags": [
           "organizations"
@@ -11372,6 +11525,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "List Members",
         "tags": [
           "organizations"
@@ -11432,6 +11590,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Remove Member",
         "tags": [
           "organizations"
@@ -11510,6 +11673,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Change Member Role",
         "tags": [
           "organizations"
@@ -11572,6 +11740,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "List Workspaces",
         "tags": [
           "organizations"
@@ -11638,6 +11811,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Create Workspace",
         "tags": [
           "organizations"
@@ -11687,6 +11865,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "System Capabilities",
         "tags": [
           "system"
@@ -11787,6 +11970,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Get Workspace",
         "tags": [
           "organizations"
@@ -11981,6 +12169,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "List Audiences",
         "tags": [
           "campaign-context",
@@ -12050,6 +12243,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Create Audiences",
         "tags": [
           "campaign-context",
@@ -12111,6 +12309,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Delete Audiences",
         "tags": [
           "campaign-context",
@@ -12385,6 +12588,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "List Audit Logs",
         "tags": [
           "audit"
@@ -12497,6 +12705,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "List Brand-Voice",
         "tags": [
           "campaign-context",
@@ -12566,6 +12779,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Create Brand-Voice",
         "tags": [
           "campaign-context",
@@ -12627,6 +12845,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Delete Brand-Voice",
         "tags": [
           "campaign-context",
@@ -12768,6 +12991,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "List Brands",
         "tags": [
           "brands"
@@ -12826,6 +13054,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Get Business Profile",
         "tags": [
           "brands"
@@ -12892,6 +13125,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Update Business Profile",
         "tags": [
           "brands"
@@ -13004,6 +13242,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "List Campaigns",
         "tags": [
           "campaign-context",
@@ -13073,6 +13316,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Create Campaigns",
         "tags": [
           "campaign-context",
@@ -13134,6 +13382,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Delete Campaigns",
         "tags": [
           "campaign-context",
@@ -13325,6 +13578,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "List Channel-Preferences",
         "tags": [
           "campaign-context",
@@ -13394,6 +13652,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Create Channel-Preferences",
         "tags": [
           "campaign-context",
@@ -13455,6 +13718,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Delete Channel-Preferences",
         "tags": [
           "campaign-context",
@@ -13646,6 +13914,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "List Claims",
         "tags": [
           "campaign-context",
@@ -13715,6 +13988,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Create Claims",
         "tags": [
           "campaign-context",
@@ -13776,6 +14054,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Delete Claims",
         "tags": [
           "campaign-context",
@@ -13967,6 +14250,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "List Competitors",
         "tags": [
           "campaign-context",
@@ -14036,6 +14324,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Create Competitors",
         "tags": [
           "campaign-context",
@@ -14097,6 +14390,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Delete Competitors",
         "tags": [
           "campaign-context",
@@ -14235,6 +14533,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Whether opportunity feedback is available for this workspace",
         "tags": [
           "opportunity-feedback"
@@ -14364,6 +14667,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "List Jobs",
         "tags": [
           "jobs"
@@ -14431,6 +14739,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Get Job",
         "tags": [
           "jobs"
@@ -14499,6 +14812,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Cancel Job",
         "tags": [
           "jobs"
@@ -14570,6 +14888,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "List Job Events",
         "tags": [
           "jobs"
@@ -14632,6 +14955,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "List Locations",
         "tags": [
           "locations"
@@ -14698,6 +15026,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Create Location",
         "tags": [
           "locations"
@@ -14775,6 +15108,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Update Location",
         "tags": [
           "locations"
@@ -14910,6 +15248,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Get Geo Coverage",
         "tags": [
           "locations"
@@ -14985,6 +15328,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Upsert Geo Coverage",
         "tags": [
           "locations"
@@ -15165,6 +15513,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "List Offers",
         "tags": [
           "campaign-context",
@@ -15234,6 +15587,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Create Offers",
         "tags": [
           "campaign-context",
@@ -15295,6 +15653,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Delete Offers",
         "tags": [
           "campaign-context",
@@ -15442,6 +15805,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Onboard",
         "tags": [
           "brands"
@@ -15731,6 +16099,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "List Opportunities",
         "tags": [
           "opportunities"
@@ -15798,6 +16171,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Get Opportunity",
         "tags": [
           "opportunities"
@@ -16074,6 +16452,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "List Opportunity Feedback",
         "tags": [
           "opportunity-feedback"
@@ -16150,6 +16533,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Submit Opportunity Feedback",
         "tags": [
           "opportunity-feedback"
@@ -16218,6 +16606,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Get Opportunity Intelligence Route",
         "tags": [
           "opportunities"
@@ -16295,6 +16688,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Update Opportunity Status",
         "tags": [
           "opportunities"
@@ -16407,6 +16805,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "List Products",
         "tags": [
           "campaign-context",
@@ -16476,6 +16879,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Create Products",
         "tags": [
           "campaign-context",
@@ -16537,6 +16945,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Delete Products",
         "tags": [
           "campaign-context",
@@ -16803,6 +17216,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "List Scout Requests",
         "tags": [
           "scout-requests"
@@ -16869,6 +17287,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Create Scout Request",
         "tags": [
           "scout-requests"
@@ -16936,6 +17359,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Get Scout Request",
         "tags": [
           "scout-requests"
@@ -17012,6 +17440,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Update Scout Request",
         "tags": [
           "scout-requests"
@@ -17079,6 +17512,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Pause Scout Request",
         "tags": [
           "scout-requests"
@@ -17146,6 +17584,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Resume Scout Request",
         "tags": [
           "scout-requests"
@@ -17214,6 +17657,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Run Scout Request Endpoint",
         "tags": [
           "scout-requests"
@@ -17305,6 +17753,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "List Scout Request Runs",
         "tags": [
           "scout-requests"
@@ -17366,6 +17819,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Delete Scout Schedule",
         "tags": [
           "scout-requests"
@@ -17432,6 +17890,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Get Scout Schedule",
         "tags": [
           "scout-requests"
@@ -17508,6 +17971,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Create Scout Schedule",
         "tags": [
           "scout-requests"
@@ -17576,6 +18044,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Pause Scout Schedule",
         "tags": [
           "scout-requests"
@@ -17644,6 +18117,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Resume Scout Schedule",
         "tags": [
           "scout-requests"
@@ -17756,6 +18234,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "List Source-Preferences",
         "tags": [
           "campaign-context",
@@ -17825,6 +18308,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Create Source-Preferences",
         "tags": [
           "campaign-context",
@@ -17886,6 +18374,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "summary": "Delete Source-Preferences",
         "tags": [
           "campaign-context",
