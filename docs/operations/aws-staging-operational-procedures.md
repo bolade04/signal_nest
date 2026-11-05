@@ -21,6 +21,11 @@
   endpoint hostname, VPC/subnet/SG id, or secret value (including encodings,
   hashes, or fragments) may ever appear in this document, in evidence derived
   from it, or in any revision of it. Examples use `<PLACEHOLDER>` tokens only.
+- **P6-INF-14 additions (2026-11-01):** §5.6 (per-secret index), §5.7
+  (`SECRET_KEY` generation and length check) and §5.8 (metadata-only existence,
+  version and rotation-status reads). Same status as the rest of this document:
+  definitions only. Nothing was executed, read, populated or rotated to write
+  them.
 
 ---
 
@@ -68,7 +73,7 @@ KMS key.
 
 | Logical key | Consumers (§26.7) | Staging requirement | Format contract | Rotation class |
 | --- | --- | --- | --- | --- |
-| `SECRET_KEY` | api (functional), worker + migration (construction) | Required; startup fails closed on empty/dev default | Non-empty, strong, newly generated for staging; never the dev default | Hard cutover (§5.1) |
+| `SECRET_KEY` | api (functional), worker + migration (construction) | Required; startup fails closed on empty/dev default | Non-empty, strong, newly generated for staging; never the dev default; generated and length-checked per §5.7 | Hard cutover (§5.1) |
 | `DATABASE_URL` | api, worker, migration (all three — one shared credential) | Required | `postgresql+psycopg://<APP_ROLE>:<ENCODED_PASSWORD>@<DB_ENDPOINT>:5432/<DB_NAME>?sslmode=require` (credentials percent-encoded; `sslmode=require` minimum) | Application-role rotation (§5.2) |
 | `REDIS_URL` | api, worker only — **migration excluded** (§26.7) | Required — the composed root pins `QUEUE_BACKEND=redis` / `CACHE_BACKEND=redis` for api and worker (`infra/aws/main.tf` env maps), so the Redis path is selected in staging | `rediss://<REDIS_ENDPOINT>:6379/0` — TLS scheme mandatory (`transit_encryption_mode = "required"`); **no credential component exists** (Option A: no auth token) | No rotatable credential (§5.3) |
 | `LLM_API_KEY` | api + worker (functional), migration (construction) | Required; staging forbids `llm_provider=mock` and dev fallback | Provider key for the configured `openai`/`anthropic` provider; dedicated staging key with a low provider-side spend cap (runtime contract) | Provider rotation (§5.4) |
@@ -194,7 +199,7 @@ document defines when it is required, not permission to do it.
 ### 5.1 `SECRET_KEY` — hard cutover
 The application holds a single signing key (no dual-key window), so rotation
 **immediately invalidates all outstanding signed tokens/sessions** once tasks
-restart. Procedure: generate a new strong value → §3 population → restart
+restart. Procedure: generate a new value per §5.7 → §3 population → restart
 API/worker tasks in one window → expect forced re-authentication. Schedule
 deliberately; this is not a zero-downtime rotation. (Key-versioning support
 would be a separate application change.) `SECRET_KEY` is also the HMAC key of
@@ -202,7 +207,12 @@ the opaque per-workspace tenant reference sent to the LLM provider
 (`app.llm.metering.tenant_reference`), so rotating it **changes every tenant
 reference**: the provider sees each workspace under a new identifier from the
 first call a new task makes. Usage rows (`llm_usage_events`) carry workspace
-ids, not the reference, so metering and budgets are unaffected.
+ids, not the reference, so metering and budgets are unaffected. The
+pagination-cursor HMAC key also derives from it (`app.core.pagination`), so
+an outstanding cursor is refused with `422 "Invalid cursor."` and the client
+starts the listing again. Password-reset, e-mail-verification and invitation
+links do not depend on it: those tokens are stored as plain SHA-256 digests
+(`app.auth.account_tokens`, `app.organizations.invitations`).
 
 ### 5.2 `DATABASE_URL` — application-role credential rotation
 
@@ -444,6 +454,173 @@ severity, communication, and the incident runbook that decides *when* to
 rotate. Per the inventory §6: a suspected exposure triggers immediate rotation
 of the affected entry and redeployment, and the exposed value is treated as
 compromised — the mechanics for that response are §§5.1–5.4.
+
+### 5.6 Per-secret index (P6-INF-14)
+
+`P6-INF-14` asks, for each secret, for a documented out-of-band population
+procedure, version existence verified by a metadata read (never the value),
+and either configured rotation or a documented rotation procedure. This index
+binds each runtime secret, and the two AWS-managed items beside them, to those
+procedures. The consumers are the ECS secret subsets in
+`infra/aws/modules/ecs/main.tf`: api and worker receive all four, and the
+one-shot migration task receives `DATABASE_URL` only (it runs under
+`SN_MIGRATION_MODE`). The §2 consumer column and the inventory's §4 matrix
+still describe migration as a construction-time holder of `SECRET_KEY` and
+`LLM_API_KEY`; the module is what injects.
+
+| Secret | The value comes from | Populate | Automatic rotation | Rotation procedure | Replace after a change | Verify (metadata only, §5.8) |
+| --- | --- | --- | --- | --- | --- | --- |
+| `SECRET_KEY` | Generated by the operator (§5.7) | §3 | None. Secrets Manager rotation needs a rotation function, and the application holds one key with no dual-key window | §5.1 hard cutover, with a value from §5.7 | Every api and worker task | One `AWSCURRENT`; the §5.7 generation record |
+| `DATABASE_URL` | Composed inside the bootstrap task from a password it generates (§6.1); §6.2 is the fallback | §6.1 (default); §6.2 then §3 (fallback) | None. The value is a composed URL, not the JSON credential shape that AWS's database rotation functions rotate | §5.2 (the §6.1 recovery mode preferred) | Every api and worker task; the next migration run reads it at start | One `AWSCURRENT`; §6.1 exit code 0, which includes a fresh TLS round trip |
+| `REDIS_URL` | Composed from the replication-group endpoint; no credential component (Option A) | §3 | Not applicable: nothing to rotate | §5.3 (repopulate only when the endpoint changes) | Every api and worker task | One `AWSCURRENT` |
+| `LLM_API_KEY` | Issued at the provider: a dedicated staging key with a provider-side spend cap | §3 | None. It is a third-party key; AWS can neither issue nor revoke it | §5.4 (restart-based; revoke the old key last) | Every api and worker task, including one-off tasks | One `AWSCURRENT` |
+| RDS master credential (the RDS-managed secret; not one of the four containers) | Created and held by RDS (`manage_master_user_password = true`); never part of `DATABASE_URL` | Never populated by hand | RDS-managed rotation | None by hand; §5.8 reads its status only | Nothing in the application path (§6: administrative only) | §5.8 RDS reads |
+| Secrets CMK (`alias/<name_prefix>/secrets`) | Created by the `secrets` module | Not applicable | Yearly key-material rotation (`enable_key_rotation = true` in the module) | None by hand | Nothing: rotation keeps the key id and still decrypts older versions | §5.8 KMS reads |
+
+**No rotation interval is set.** No document sets a scheduled interval for
+these secrets, and this one does not invent one. Until the operator sets
+intervals, rotation is event-driven: immediately on a suspected exposure
+(§5.5), on a provider requirement, when administrative access changes hands,
+and for an unverified value (below and §5.7).
+
+**Values that predate these procedures.** The `secrets` module README records
+a read-only observation of 2026-10-13: each container already held one current
+version, last changed 2026-07-28. How those values were produced is not
+recorded in this repository, so they are unverified against §3 and §5.7: a
+metadata read shows that a version exists, not how the value was made or how
+long it is. Whether to repopulate them through §3 (and `SECRET_KEY` through
+§5.7) before any pilot use is an operator decision.
+
+### 5.7 `SECRET_KEY` generation and length check (P6-INF-14; carried from P6-PLAT-4 / E12)
+
+**Why a length.** `SECRET_KEY` signs access tokens with HS256
+(`app.core.security.ALGORITHM`), and RFC 7518 §3.2 requires an HS256 key at
+least as long as the hash output: 256 bits, 32 bytes. The application does not
+enforce this. In staging, `Settings` rejects only the development default and
+an empty value, and the token code leaves PyJWT's `enforce_minimum_key_length`
+option at its default (off), so PyJWT 2.15.1 only warns
+(`InsecureKeyLengthWarning`) below 32 bytes. The same key also derives the
+pagination-cursor HMAC key (`app.core.pagination`) and the opaque LLM tenant
+reference (`app.llm.metering`). Length and entropy are therefore settled when
+the value is generated, by this procedure.
+
+**Generate** in the §3 interactive shell, without echoing the value:
+
+```bash
+install -m 600 /dev/null "$F"      # F on a tmpfs path, as in §3
+python3 -c 'import secrets, sys; sys.stdout.write(secrets.token_urlsafe(48))' > "$F"
+```
+
+`secrets.token_urlsafe(48)` takes 48 bytes (384 bits) from the operating
+system's CSPRNG and encodes them as 64 URL-safe base64 characters. The
+application uses the key as those 64 bytes: twice the 32-byte minimum, and
+exactly the SHA-256 block size, so HMAC uses the key as is instead of hashing
+it first. §6.1 uses the same generator for the database password.
+
+**Check before populating.** The check prints a fixed word, never the value:
+
+```bash
+if [ "$(wc -c < "$F" | tr -d ' ')" -eq 64 ] && LC_ALL=C grep -Eqx '[A-Za-z0-9_-]{64}' "$F"; then
+  echo SECRET_KEY_FORMAT_OK; else echo SECRET_KEY_FORMAT_FAIL; fi
+```
+
+`SECRET_KEY_FORMAT_FAIL` stops the procedure: destroy `$F` and generate again.
+On `SECRET_KEY_FORMAT_OK`, populate per §3 and destroy `$F`.
+
+**Entropy belongs to the generator, not to the value.** No measurement of one
+64-character string establishes its entropy, and a hash, prefix or encoding of
+the value is still the value (§10). The sanitized evidence of a generation is
+exactly: the logical key, the generator (`secrets.token_urlsafe(48)`), the
+length (64), `SECRET_KEY_FORMAT_OK`, and the resulting version id and its
+timestamp.
+
+**A value already in the container** (for example the 2026-07-28 version,
+§5.6) cannot be length-checked by any metadata read. There are two ways to
+settle it, and the choice is an operator decision:
+
+1. Replace it: a §5.1 hard cutover with a value generated here. While no pilot
+   user depends on a session, the cost is a restart of the api and worker
+   tasks.
+2. Measure it in place: a separately authorized one-off task that reads the
+   setting inside its own process and emits only `SECRET_KEY_FORMAT_OK` or
+   `SECRET_KEY_FORMAT_FAIL`. No such task exists in the repository today.
+
+An `InsecureKeyLengthWarning` in an api or worker log proves that the deployed
+key is shorter than 32 bytes. Its absence proves nothing, because a warning
+filter can suppress it.
+
+**A future production environment** gets its own key from this procedure. A
+staging value is never reused (§10).
+
+### 5.8 Metadata-only reads: existence, versions and rotation status
+
+These reads satisfy "version existence verified by metadata read (never
+value)". None of them is `get-secret-value`. Each runs under the then-current
+read-only authorization and records only the fields named.
+
+**Each of the four containers:**
+
+```bash
+aws secretsmanager describe-secret --secret-id "<name_prefix>/<LOGICAL_KEY>" \
+  --query '{Name:Name,KmsKeyId:KmsKeyId,Deleted:DeletedDate,RotationEnabled:RotationEnabled,Changed:LastChangedDate,Stages:VersionIdsToStages}' \
+  --output json
+aws kms describe-key --key-id "alias/<name_prefix>/secrets" --query 'KeyMetadata.Arn' --output text
+```
+
+Pass when all of these hold:
+
+- `Deleted` is absent (the container is not scheduled for deletion);
+- exactly one version carries `AWSCURRENT` (at most one more carries
+  `AWSPREVIOUS`);
+- `KmsKeyId` equals the ARN that the `describe-key` read returns for the
+  module's alias. Compare the two; record only "match" or "mismatch", never
+  the ARN;
+- `RotationEnabled` is false or absent. No rotation function exists for these
+  four, so `true` is a finding: establish who configured it before anything
+  else.
+
+Record the logical key, the version id(s), the stage labels, the change date
+and pass or fail.
+
+**RDS master credential:**
+
+```bash
+aws rds describe-db-instances --db-instance-identifier "<DB_INSTANCE_ID>" \
+  --query 'DBInstances[0].{Status:DBInstanceStatus,SecretStatus:MasterUserSecret.SecretStatus}' --output json
+aws secretsmanager describe-secret --secret-id "<MASTER_SECRET_ARN>" \
+  --query '{RotationEnabled:RotationEnabled,Rules:RotationRules,LastRotated:LastRotatedDate,NextRotation:NextRotationDate}' \
+  --output json
+```
+
+`<MASTER_SECRET_ARN>` is `MasterUserSecret.SecretArn` from the instance read:
+use it, never record it. Pass: the instance is `available`, `SecretStatus` is
+`active`, `RotationEnabled` is true and `LastRotated` falls within the rotation
+schedule. The `data_sql` README records the opposite on 2026-10-13: instance
+status `inaccessible-encryption-credentials-recoverable`, and the managed
+rotation failing hourly since 2026-10-12, cause UNKNOWN. A failing managed
+rotation on an instance in that state is an RDS recovery matter under its own
+authorization. This document never runs `rotate-secret`,
+`cancel-rotate-secret` or `modify-db-instance --manage-master-user-password`
+against it: none of them is a read, and the master credential is in no
+application path (§6).
+
+**Secrets CMK:**
+
+```bash
+aws kms describe-key --key-id "alias/<name_prefix>/secrets" \
+  --query 'KeyMetadata.{State:KeyState,Manager:KeyManager,KeyId:KeyId}' --output json
+aws kms get-key-rotation-status --key-id "<KEY_ID from the describe-key read>" --output json
+```
+
+`get-key-rotation-status` takes a key id or key ARN, not an alias, hence the
+first read. Use the key id; never record it. Pass: `State` is `Enabled`,
+`Manager` is `CUSTOMER` and `KeyRotationEnabled` is true. A denied read is
+recorded as DENIED, never as enabled.
+
+**Before any service start** (§1 step 4, until G5 is implemented), the four
+container reads must all pass. A missing or deleted container, no
+`AWSCURRENT` version or the wrong key is what G5-05 and G5-06 name, and it
+blocks the start.
 
 ## 6. Database-initialization procedure (definition)
 
