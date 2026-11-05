@@ -421,11 +421,14 @@ def test_suppression_survives_erasure_anonymisation_and_expiry_of_every_metadata
     with world.session() as s:
         _assert_still_suppressed(s, step="actor deleted")
 
-    # 2. The per-workspace audit rows are anonymised (actor NULL, context cleared).
+    # 2. The per-workspace audit rows are anonymised (actor NULL, context cleared). A Core
+    # statement on the table, as the privacy anonymisation writes it: audit records are
+    # append-only to the ORM (W21 CF-1).
+    logs = AuditLog.__table__
     with world.session() as s:
         s.execute(
-            update(AuditLog)
-            .where(AuditLog.action == AUDIT_ACTION)
+            update(logs)
+            .where(logs.c.action == AUDIT_ACTION)
             .values(actor_user_id=None, context={}, new_state={}, reason=None)
         )
         s.commit()
@@ -433,10 +436,11 @@ def test_suppression_survives_erasure_anonymisation_and_expiry_of_every_metadata
         assert s.scalars(select(AuditLog).where(AuditLog.action == AUDIT_ACTION)).all()
         _assert_still_suppressed(s, step="audit rows anonymised")
 
-    # 3. Every audit row for the source is deleted (audit expiry).
+    # 3. Every audit row for the source is deleted (audit expiry; Core on the table, as the
+    # retention purge deletes).
     with world.session() as s:
-        s.execute(delete(AuditLog).where(AuditLog.action == AUDIT_ACTION))
-        s.execute(delete(AuditLog).where(AuditLog.entity_type == "source_takedown"))
+        s.execute(delete(logs).where(logs.c.action == AUDIT_ACTION))
+        s.execute(delete(logs).where(logs.c.entity_type == "source_takedown"))
         s.commit()
     with world.session() as s:
         assert s.scalars(select(AuditLog)).all() == []
@@ -492,10 +496,12 @@ def test_suppression_survives_the_retention_sweep_expiring_the_audit_rows(world:
     with world.session() as s:
         entries = s.scalars(select(AuditLog).where(AuditLog.action == AUDIT_ACTION)).all()
         assert len(entries) == 2
-        # Older than any cut-off the sweep can compute from the smallest duration.
+        # Older than any cut-off the sweep can compute from the smallest duration. Core on
+        # the table: audit records are append-only to the ORM (W21 CF-1).
+        logs = AuditLog.__table__
         s.execute(
-            update(AuditLog)
-            .where(AuditLog.action == AUDIT_ACTION)
+            update(logs)
+            .where(logs.c.action == AUDIT_ACTION)
             .values(created_at=datetime.now(UTC) - timedelta(days=400))
         )
         s.commit()

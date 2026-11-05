@@ -760,7 +760,11 @@ class TestOpenApiContract:
         # /internal/system/data-sources routes.
         # 126 -> 127 (D-9e): GET /internal/system/data-sources/{source_key}/cases, the
         # operator-only read of the restricted takedown case record.
-        assert count == 127
+        # 127 -> 130 (Phase 5B, W21 P5B): POST and GET
+        # /workspaces/{workspace_id}/opportunities/{opportunity_id}/briefs/{brief_id}/approvals
+        # and GET /workspaces/{workspace_id}/approval-queue -- customer routes (exact-role,
+        # capability-gated), none an account-mail operation of this module.
+        assert count == 130
 
     def test_no_token_in_any_path_query_or_header_anywhere(self, doc: dict):
         for path, item in doc["paths"].items():
