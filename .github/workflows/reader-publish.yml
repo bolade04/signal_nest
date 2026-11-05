@@ -156,7 +156,7 @@ jobs:
             --out reader-assurance/establishment.json
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Compute build metadata
         id: meta
