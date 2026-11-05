@@ -91,7 +91,9 @@ FENCE = "b5e0c7a3d2f1"
 EXECCTL = "c6f1d8e2a4b7"
 RECOVERY = "d4a8f2c6b9e1"
 # W16 customer repairs (PROPOSED): opportunities.finding_key and opportunity_observations.
-CODE_HEAD = "e7b3c5a9d1f4"
+FINDING = "e7b3c5a9d1f4"
+# Project Phase 5 CF-1 (W21): recommendation_briefs, approvals, capability CHECK widened.
+CODE_HEAD = "f3a9c1e7b2d5"
 UNAUTHORIZED = (401, "unauthorized", "Invalid or expired token.")
 ORGANIZATIONS = f"{API}/organizations"
 LIFETIME = timedelta(minutes=720)
@@ -653,7 +655,8 @@ class TestMigration:
 
         script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
         assert [r.revision for r in script.get_revisions("heads")] == [CODE_HEAD]
-        assert script.get_revision(CODE_HEAD).down_revision == RECOVERY
+        assert script.get_revision(CODE_HEAD).down_revision == FINDING
+        assert script.get_revision(FINDING).down_revision == RECOVERY
         assert script.get_revision(RECOVERY).down_revision == EXECCTL
         assert script.get_revision(EXECCTL).down_revision == FENCE
         assert script.get_revision(FENCE).down_revision == BUDGET

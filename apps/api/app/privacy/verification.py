@@ -25,10 +25,11 @@ database schema** and asks the database two questions about the subject:
    operator to look.
 
 A report is ``verified`` only when the content was scanned and both come back empty. The
-single declared exception is the organization's own audit records, which ``O-6`` keeps after
-the organization is gone: for an organization subject, ``audit_logs`` rows whose
-``organization_id`` is the subject are reported as *retained* — and each must have every
-identifying column cleared, or it is a finding. Nothing here writes.
+single declared exception is the organization's own compliance records, which ``O-6`` keeps
+after the organization is gone: for an organization subject, ``audit_logs`` rows — and, since
+W21 CF-1, Project Phase 5B ``approvals`` rows — whose ``organization_id`` is the subject are
+reported as *retained*, and each must have every identifying column cleared, or it is a
+finding. Nothing here writes.
 
 Cost: the content scan reads every text column of every table (359 at this writing) once
 per identifier. That is acceptable for an operator tool and for the pilot's data volume; it
@@ -234,6 +235,14 @@ def verify_subject_erased(
 
 #: The columns of an organization's retained audit records that must all be cleared.
 _AUDIT_IDENTIFYING = ("actor_user_id", "entity_id", "reason", "previous_state", "new_state")
+#: The columns of an organization's retained approvals (Project Phase 5B, W21 CF-1) that must
+#: all be NULL; their ``decided_by_snapshot`` must be the erased marker.
+_APPROVAL_IDENTIFYING = ("decided_by", "note", "brief_id")
+#: The marker the deletion writes over an erased snapshot. Repeated here rather than imported,
+#: so this module stays independent of the deletion code; a test pins the two equal.
+_ERASED_MARKER = "[erased]"
+#: Tables whose rows ``O-6`` keeps after their organization is deleted (FK-less scope columns).
+_O6_RETAINED = ("audit_logs", "approvals")
 
 
 def verify_organization_erased(
@@ -257,6 +266,7 @@ def verify_organization_erased(
     workspace_ids = list(workspace_ids)
     by_name = {t.name: t for t in tables}
     audit = by_name.get("audit_logs")
+    approvals = by_name.get("approvals")
     skip: set[tuple[str, str]] = set()
     for table in tables:
         checks = [(c, [organization_id]) for c in _reference_columns(
@@ -267,14 +277,14 @@ def verify_organization_erased(
                 table, "workspaces", ("workspace_id",)
             )]
         for column, values in checks:
-            if table is audit and column.name in ("organization_id", "workspace_id"):
+            if table.name in _O6_RETAINED and column.name in ("organization_id", "workspace_id"):
                 continue  # the declared O-6 exception, checked below
             report.reference_columns_checked += 1
             rows = _count(db, table, column.in_(values))
             if rows:
                 report.reference_findings.append(Finding(table.name, column.name, rows))
     if audit is not None:
-        skip = {("audit_logs", "organization_id"), ("audit_logs", "workspace_id")}
+        skip |= {("audit_logs", "organization_id"), ("audit_logs", "workspace_id")}
         scope = audit.c.organization_id == organization_id
         retained = _count(db, audit, scope)
         if retained:
@@ -294,6 +304,20 @@ def verify_organization_erased(
         )
         if rows:
             report.reference_findings.append(Finding("audit_logs", "context", rows))
+    if approvals is not None:
+        skip |= {("approvals", "organization_id"), ("approvals", "workspace_id")}
+        scope = approvals.c.organization_id == organization_id
+        retained = _count(db, approvals, scope)
+        if retained:
+            report.retained_anonymised.append(Finding("approvals", "organization_id", retained))
+        for name in _APPROVAL_IDENTIFYING:
+            rows = _count(db, approvals, scope, approvals.c[name].is_not(None))
+            if rows:
+                report.reference_findings.append(Finding("approvals", name, rows))
+        snapshot = approvals.c.decided_by_snapshot
+        rows = _count(db, approvals, scope, snapshot != _ERASED_MARKER)
+        if rows:
+            report.reference_findings.append(Finding("approvals", "decided_by_snapshot", rows))
     if content:
         subject = Subject(ids=(organization_id, *workspace_ids))
         (

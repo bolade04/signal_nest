@@ -288,8 +288,8 @@ test(flow.title, async ({ page }) => {
     // Bounded, observable wait: the page polls the request while it is queued/running
     // and the badge settles on Completed only after the worker finished the job.
     await expect(header.getByText('Completed', { exact: true })).toBeVisible({ timeout: RUN_TIMEOUT_MS });
-    const statLine = await header.getByText(/opportunities ·/).innerText();
-    const shownCount = Number(/^(\d+) opportunities/.exec(statLine)?.[1]);
+    const statLine = await header.getByText(/opportunit(?:y|ies) ·/).innerText();
+    const shownCount = Number(/^(\d+) opportunit(?:y|ies)/.exec(statLine)?.[1]);
     expect(shownCount, `opportunity count shown: ${statLine}`).toBeGreaterThanOrEqual(1);
 
     // One manual run, completed, with exactly the count the page shows.

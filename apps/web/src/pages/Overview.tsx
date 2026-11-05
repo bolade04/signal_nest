@@ -28,7 +28,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { classificationLabels, label } from '@/lib/labels';
-import { formatStat, sumStat } from '@/lib/scout-stats';
+import { formatCount, formatStat, sumStat } from '@/lib/scout-stats';
 import { formatRelative } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
 
@@ -179,7 +179,7 @@ function OverviewInner({ workspaceId }: { workspaceId: string }) {
           hint={sampled ? `${byMarket.length} markets in the ${opps.length} shown` : `${byMarket.length} markets`}
         />
         <StatCard icon={Gauge} label="Avg relevance" value={avg('relevance_score')} hint={`Avg confidence ${avg('confidence_score')}`} />
-        <StatCard icon={ShieldAlert} label="High-risk / claims" value={riskCount} hint={`${formatStat(noiseFiltered)} noise filtered · ${formatStat(signalsAnalyzed)} signals`} />
+        <StatCard icon={ShieldAlert} label="High-risk / claims" value={riskCount} hint={`${formatStat(noiseFiltered)} noise filtered · ${formatCount(signalsAnalyzed, 'signal', 'signals')}`} />
       </div>
 
       {sampled ? (
