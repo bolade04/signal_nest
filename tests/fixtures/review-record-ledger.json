@@ -3,7 +3,7 @@
   "_note": "A digest pin is honoured only while it cites an ACTIVE record here. Superseding a record instantly REDs every pin that cited it until re-reviewed.",
   "_root_of_trust": "This ledger is the smallest independently-reviewable surface. It pins the canonical digests of the two authored maps (assurance registry + review-pin registry) that decide what is governed and against what baseline; changing either without re-reviewing this file fails closed. Reviewed end-to-end on every change.",
   "governed_files": {
-    "critical-list-contract.json": "sha256:e3343486a6575ab129b1624420eba10e4965e6546b16cb9437749548f4b39203",
+    "critical-list-contract.json": "sha256:05dc383bc0acaaf42382ac4aeae3da57fddc59850dcd614541dcb6517608190a",
     "readonly-verifier-ceiling.json": "sha256:4810b5d694b31fe3eacb823aef09395f5274fe2e3b07da2adf009c1945fbe5fa",
     "review-pin-registry.json": "sha256:f37766181616f9f7b04cb811029955b0dc25a407e1ceddfe27a702190b24f41f",
     "security-assurance-registry.json": "sha256:d01c591f7a5d0f84298eeae4b45525661ab0cc22c4f9b245c521de962eb765ce",
@@ -12,6 +12,12 @@
     "site-coverage-requirement-exclusions.json": "sha256:c7d4b724f00a74f83f792af84c8f2bb005c4ab4c844401b5eefc9c414c9b4375"
   },
   "review_records": {
+    "REV-2026-11-01-P6-INF15-BOUNDARY-PRECHECK": {
+        "approver": "P6-W21-OPSPREP-01 lane draft (W21 batch 2, coordinator signalnest-27, 2026-11-01; local commit only, no PR; the coordinator commissions the independent review; this record is not itself an approval artifact)",
+        "established": "2026-11-01",
+        "scope": "P6-INF-15 Stage-A permissions-boundary precheck, REPOSITORY PART ONLY (no AWS call, no infra/aws change, no workflow change, no relaxed gate): new scripts/boundary_precheck.py (read-only: iam:GetPolicy and iam:GetPolicyVersion through the AWS CLI, run only by an operator under SIGNALNEST_ANCHOR_TIER=TIER_2_PROTECTED; offline evaluation of a saved-plan JSON and a recorded inventory otherwise) and tests/test_boundary_precheck.py (stubbed responses). Governance of its one collection constant, by the repository's own derivations: boundary_precheck.py::INVENTORY_READS classified NON_SECURITY_CONFIGURATION in tests/fixtures/critical-list-contract.json (evaluate() only echoes it into the report; scripts/enforcement_path.py finds no gating caller; the client issues the two reads as literals, and the tests pin the tuple, its READ_ONLY classification by scripts/action_classifier.py and its equality with the issued commands), the critical-list-contract governed_files digest re-derived with security_collection_assurance._canonical_file_digest, and the consolidated collection count in tests/test_i28bh_a5_cache_leak_adjudication.py moved by +1. No assurance-registry, review-pin or SECURITY count change.",
+        "status": "ACTIVE"
+    },
     "REV-2026-10-29-P6-CI-MILESTONE-POLICY": {
         "approver": "P6-W8-CIPOLICY-01 draft tranche (operator instruction received 2026-10-29T04:22Z: preparation of the milestone-based post-merge CI policy approved, activation pending; coordinator signalnest-cb; lane W8-CIPOLICY-IMPL as the single implementation owner of the shared workflow and governance files; this record is not itself an approval artifact)",
         "established": "2026-10-29",
