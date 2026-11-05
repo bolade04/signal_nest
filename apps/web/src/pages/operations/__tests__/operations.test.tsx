@@ -44,13 +44,19 @@ describe('operations page — operator access', () => {
 
     expect(await screen.findByText('Capability activation')).toBeInTheDocument();
 
-    // All three registered capabilities render with the dark default explained:
-    // disabled, decided by the global configuration.
-    for (const label of ['Opportunity Feedback', 'Scout Scheduling', 'RSS Connector']) {
+    // All four registered capabilities render with the dark default explained:
+    // disabled, decided by the global configuration. (The fourth, Recommendation
+    // Briefs, joined the registry at Project Phase 5 CF-1.)
+    for (const label of [
+      'Opportunity Feedback',
+      'Scout Scheduling',
+      'RSS Connector',
+      'Recommendation Briefs',
+    ]) {
       expect(await screen.findByText(label)).toBeInTheDocument();
     }
-    expect(screen.getAllByText('Disabled')).toHaveLength(3);
-    expect(screen.getAllByText('Global configuration')).toHaveLength(3);
+    expect(screen.getAllByText('Disabled')).toHaveLength(4);
+    expect(screen.getAllByText('Global configuration')).toHaveLength(4);
 
     // Queue health from the composed overview read.
     expect(await screen.findByText('Stuck jobs')).toBeInTheDocument();

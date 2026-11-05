@@ -17,7 +17,11 @@ Phase-5 resolution ``O-6`` keeps compliance records when their scope is deleted,
 to the future ``O-5`` retention policy). They are therefore *anonymised*, not deleted, by
 both deletions: account deletion clears every value that names the account; organization
 deletion clears every identifying column of the organization's records. The time-based
-purge of the ``audit_logs`` retention class removes them. A value names a subject only where
+purge of the ``audit_logs`` retention class removes them. The Project Phase 5 compliance
+records follow the same rule (W21 CF-1): ``approvals`` (FK-less scope, like ``audit_logs``)
+survive organization deletion anonymised, and the actor snapshots on ``approvals`` and
+``recommendation_briefs`` are cleared when the account they name is deleted, while the rows
+are kept. A value names a subject only where
 the shared matcher (:mod:`app.privacy.matching`, also the verifier's) finds its id or address
 ``WHOLE``; an occurrence that some registrable address could contain is left, because it may be
 another person's.
@@ -49,8 +53,10 @@ from typing import Any, NamedTuple
 from sqlalchemy import Column, Table, delete, func, null, or_, select, update
 from sqlalchemy.orm import Session
 
+from app.approvals.models import Approval
 from app.audit.models import AuditLog
 from app.auth.account_tokens import _lock_user
+from app.briefs.models import RecommendationBrief
 from app.core.enums import Role
 from app.core.errors import AuthError, ConflictError, PermissionDeniedError, ValidationDomainError
 from app.core.security import verify_password
@@ -323,6 +329,97 @@ def anonymise_organization_audit(db: Session, *, organization_id: str) -> int:
     return result.rowcount or 0
 
 
+def anonymise_phase5_records_for_subject(
+    db: Session, *, user_id: str | None, email: str | None
+) -> Counter:
+    """Clear every value of a Phase 5 compliance record that names the account; keep the rows.
+
+    Operator decision ``O-6`` as this module already applies it to ``audit_logs``: the record
+    survives, the values naming the subject go. ``recommendation_briefs.created_by_snapshot``
+    and ``approvals.decided_by_snapshot`` become :data:`ERASED` when the row was made by
+    ``user_id`` or the snapshot names the subject; an ``approvals.note`` naming the subject
+    becomes NULL. The ``created_by`` / ``decided_by`` foreign keys are cleared afterwards by
+    the foreign-key walk (``SET NULL``). Run it before the user row goes. Returns the rows
+    changed per table.
+    """
+    changed: Counter = Counter()
+    subject = Subject(
+        ids=(user_id,) if user_id else (),
+        addresses=(email,) if email else (),
+        existing=existing_addresses(db),
+    )
+    if not subject:
+        return changed
+    briefs = RecommendationBrief.__table__
+    clauses = [prefilter(briefs.c.created_by_snapshot, subject)]
+    if user_id:
+        clauses.append(briefs.c.created_by == user_id)
+    for row in db.execute(
+        select(briefs.c.id, briefs.c.created_by, briefs.c.created_by_snapshot).where(
+            or_(*clauses)
+        )
+    ).all():
+        mine = bool(user_id) and row.created_by == user_id
+        if row.created_by_snapshot != ERASED and (
+            mine or _names(row.created_by_snapshot, subject)
+        ):
+            db.execute(
+                update(briefs)
+                .where(briefs.c.id == row.id)
+                .values(created_by_snapshot=ERASED)
+                .execution_options(synchronize_session=False)
+            )
+            changed["recommendation_briefs"] += 1
+    approvals = Approval.__table__
+    clauses = [prefilter(c, subject) for c in (approvals.c.decided_by_snapshot, approvals.c.note)]
+    if user_id:
+        clauses.append(approvals.c.decided_by == user_id)
+    for row in db.execute(
+        select(
+            approvals.c.id,
+            approvals.c.decided_by,
+            approvals.c.decided_by_snapshot,
+            approvals.c.note,
+        ).where(or_(*clauses))
+    ).all():
+        values: dict[str, Any] = {}
+        mine = bool(user_id) and row.decided_by == user_id
+        if row.decided_by_snapshot != ERASED and (
+            mine or _names(row.decided_by_snapshot, subject)
+        ):
+            values["decided_by_snapshot"] = ERASED
+        if row.note and _names(row.note, subject):
+            values["note"] = None
+        if values:
+            db.execute(
+                update(approvals)
+                .where(approvals.c.id == row.id)
+                .values(values)
+                .execution_options(synchronize_session=False)
+            )
+            changed["approvals"] += 1
+    return changed
+
+
+def anonymise_organization_approvals(db: Session, *, organization_id: str) -> int:
+    """Clear every identifying column of the organization's approvals; keep the rows (O-6).
+
+    Kept: ``organization_id``, ``workspace_id`` (opaque ids of deleted scopes), the subject
+    (type, id, version), the decision, its sequence, reason code and decided role, the
+    simulation flag and ``created_at``. Cleared: ``decided_by`` (NULL), ``decided_by_snapshot``
+    (:data:`ERASED`) and the free-text ``note`` (NULL). ``brief_id`` is cleared by the
+    foreign-key walk when the organization's briefs are deleted.
+    """
+    table = Approval.__table__
+    result = db.execute(
+        update(table)
+        .where(table.c.organization_id == organization_id)
+        .values(decided_by=None, decided_by_snapshot=ERASED, note=None)
+        .execution_options(synchronize_session=False)
+    )
+    return result.rowcount or 0
+
+
 # --------------------------------------------------------------------------- #
 # Organization deletion
 # --------------------------------------------------------------------------- #
@@ -366,6 +463,9 @@ def erase_organization(db: Session, *, organization_id: str) -> OrganizationEras
     )
     counts = ErasureCounts()
     counts.anonymised["audit_logs"] += anonymise_organization_audit(
+        db, organization_id=organization_id
+    )
+    counts.anonymised["approvals"] += anonymise_organization_approvals(
         db, organization_id=organization_id
     )
     counts.merge(delete_rows(db, Organization.__table__, [organization_id]))
@@ -579,6 +679,7 @@ def delete_account(
     counts.anonymised["audit_logs"] += anonymise_audit_for_subject(
         db, user_id=user_id, email=email, invitations=accepted
     )
+    counts.anonymised.update(anonymise_phase5_records_for_subject(db, user_id=user_id, email=email))
     counts.merge(delete_rows(db, User.__table__, [user_id]))
     db.flush()
     db.expunge_all()
@@ -611,6 +712,7 @@ def erase_invitee_email(db: Session, *, email: str) -> ErasureCounts:
         )
     counts = erase_invitations_addressed_to(db, email=email)
     counts.anonymised["audit_logs"] += anonymise_audit_for_subject(db, user_id=None, email=email)
+    counts.anonymised.update(anonymise_phase5_records_for_subject(db, user_id=None, email=email))
     db.flush()
     return counts
 
@@ -627,7 +729,9 @@ __all__ = [
     "OrganizationErasure",
     "UnsupportedDeleteRule",
     "anonymise_audit_for_subject",
+    "anonymise_organization_approvals",
     "anonymise_organization_audit",
+    "anonymise_phase5_records_for_subject",
     "delete_account",
     "delete_organization",
     "delete_rows",

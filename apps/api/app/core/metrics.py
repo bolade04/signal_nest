@@ -80,6 +80,51 @@ LLM_COST_BOUND_VIOLATIONS_TOTAL = "llm_cost_bound_violations_total"
 #: A settlement arrived for a reservation whose workspace or organization was deleted
 LLM_SETTLEMENTS_ORPHANED_TOTAL = "llm_settlements_orphaned_total"
 
+# LLM calls (Project Phase 5A, W21 CF-1 amendment; the 5A seam lane emits them). Dedicated
+# names, NOT dependency_operation_total: an LLM provider failure must not silently join the
+# generic dependency-failure alert (alerts.md, dependency_operation_total{outcome="failure"}).
+# Label values are closed (see the vocabularies below); no tenant label is allowed.
+#: Counter. Labels: dependency, operation, outcome, error_class.
+LLM_CALLS_TOTAL = "llm_calls_total"
+#: Histogram (ms). Labels: dependency, operation, outcome.
+LLM_CALL_DURATION_MS = "llm_call_duration_ms"
+#: Counter (tokens). Labels: dependency, operation.
+LLM_INPUT_TOKENS_TOTAL = "llm_input_tokens_total"
+#: Counter (tokens). Labels: dependency, operation.
+LLM_OUTPUT_TOKENS_TOTAL = "llm_output_tokens_total"
+
+#: The label keys each LLM call metric carries (all in :data:`ALLOWED_LABELS`).
+LLM_METRIC_LABELS: dict[str, frozenset[str]] = {
+    LLM_CALLS_TOTAL: frozenset({"dependency", "operation", "outcome", "error_class"}),
+    LLM_CALL_DURATION_MS: frozenset({"dependency", "operation", "outcome"}),
+    LLM_INPUT_TOKENS_TOTAL: frozenset({"dependency", "operation"}),
+    LLM_OUTPUT_TOKENS_TOTAL: frozenset({"dependency", "operation"}),
+}
+# Closed label values of the LLM call metrics:
+# * ``dependency`` - the configured provider: one of ``app.core.config.LLMProvider``
+#   ("mock", "openai", "anthropic");
+# * ``operation`` - the LLM task: one key of ``app.llm.schemas.TASK_SCHEMAS`` (a code-defined
+#   registry; it grows only by a reviewed task addition);
+# * ``outcome`` and ``error_class`` - the two sets below.
+#: ``outcome`` of an LLM call.
+LLM_METRIC_OUTCOMES: frozenset[str] = frozenset({"success", "failure"})
+#: ``error_class`` of an LLM call: ``none`` on success; otherwise the class of the failure in
+#: the ``app.llm`` error taxonomy (timeout, rate limit, refusal, malformed reply, provider
+#: unavailable, other provider error, budget exceeded), and ``other`` for anything outside it.
+LLM_METRIC_ERROR_CLASSES: frozenset[str] = frozenset(
+    {
+        "none",
+        "timeout",
+        "rate_limit",
+        "refusal",
+        "malformed",
+        "unavailable",
+        "provider_error",
+        "budget_exceeded",
+        "other",
+    }
+)
+
 # Dependencies (Redis / object store / database)
 REDIS_NOTIFY_TOTAL = "redis_notify_total"
 DEPENDENCY_OPERATION_TOTAL = "dependency_operation_total"
@@ -113,6 +158,10 @@ METRIC_NAMES: frozenset[str] = frozenset(
         LLM_SETTLEMENTS_AFTER_RELEASE_TOTAL,
         LLM_COST_BOUND_VIOLATIONS_TOTAL,
         LLM_SETTLEMENTS_ORPHANED_TOTAL,
+        LLM_CALLS_TOTAL,
+        LLM_CALL_DURATION_MS,
+        LLM_INPUT_TOKENS_TOTAL,
+        LLM_OUTPUT_TOKENS_TOTAL,
         REDIS_NOTIFY_TOTAL,
         DEPENDENCY_OPERATION_TOTAL,
         DEPENDENCY_OPERATION_DURATION_MS,
