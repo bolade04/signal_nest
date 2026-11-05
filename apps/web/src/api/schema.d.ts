@@ -184,7 +184,25 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Login */
+        /**
+         * Login
+         * @description Sign in with a password; audited (Phase 5B login auditing).
+         *
+         *     * **Success:** one ``auth.login_succeeded`` row per organization of the account,
+         *       committed in the same transaction as the new session (``_fresh_session``), so a
+         *       session never exists without its audit rows and vice versa.
+         *     * **Lock order:** the success rows are written after the session row, not before it.
+         *       Each row references the account (``actor_user_id``), so its foreign-key check locks
+         *       the user row (``FOR KEY SHARE``). Until it opens its session, a sign-in that has
+         *       verified the password must hold no lock on that row, because a concurrent password
+         *       change locks it ``FOR UPDATE`` and must be able to complete in that window (U17-C03).
+         *     * **Refusal:** the answer is the unchanged 401. When the address belongs to an account,
+         *       one ``auth.login_failed`` row per organization of that account (no actor: the caller
+         *       is not authenticated, so no user row is locked) records the closed failure reason,
+         *       and is committed before the 401 is raised (``get_db`` rolls back on an error, so it
+         *       would otherwise be lost). An address that belongs to no account has no organization
+         *       to record against.
+         */
         post: operations["login_api_v1_auth_login_post"];
         delete?: never;
         options?: never;
@@ -1039,7 +1057,14 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Change Member Role */
+        /**
+         * Change Member Role
+         * @description Change a member's role. The role is organization-wide: it applies in every workspace
+         *     of the organization (there are no workspace-scoped roles). Granting ``reviewer`` therefore
+         *     makes the member an approver of recommendation briefs in every workspace (Phase 5B, O-2).
+         *     Exactly OWNER or ADMIN; nobody changes their own role, assigns a role above their own,
+         *     or grants or changes ``owner`` unless they are an owner; the last owner stays. Audited.
+         */
         put: operations["change_member_role_api_v1_organizations__organization_id__members__user_id__role_put"];
         post?: never;
         delete?: never;
@@ -1126,6 +1151,28 @@ export interface paths {
         };
         /** Get Workspace */
         get: operations["get_workspace_api_v1_workspaces__workspace_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/approval-queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Approval Queue
+         * @description The workspace's briefs awaiting a decision, oldest first: the latest version of each
+         *     opportunity's brief whose controlling decision is absent or ``revoked``. Approver role
+         *     only (the approver's work list). Read-only.
+         */
+        get: operations["list_approval_queue_api_v1_workspaces__workspace_id__approval_queue_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1692,6 +1739,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/opportunities/{opportunity_id}/briefs/{brief_id}/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Brief Decisions
+         * @description The brief version's append-only decisions, newest ``decision_seq`` first: the first
+         *     item, when present, is the controlling decision. Read-only.
+         */
+        get: operations["list_brief_decisions_api_v1_workspaces__workspace_id__opportunities__opportunity_id__briefs__brief_id__approvals_get"];
+        put?: never;
+        /**
+         * Decide On Brief
+         * @description Record one append-only decision (approve / reject / revoke) on the brief's exact
+         *     version. Approver role only; never the brief's author; ``subject_version`` must be the
+         *     brief's version (409 otherwise); ``revoked`` only withdraws a controlling approval.
+         */
+        post: operations["decide_on_brief_api_v1_workspaces__workspace_id__opportunities__opportunity_id__briefs__brief_id__approvals_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/opportunities/{opportunity_id}/feedback": {
         parameters: {
             query?: never;
@@ -2162,8 +2236,16 @@ export interface components {
          * @description Everything stored about the signed-in account (schema version 1).
          */
         AccountExportOut: {
+            /** Approvals Decided */
+            approvals_decided: {
+                [key: string]: unknown;
+            }[];
             /** Audit Events Performed */
             audit_events_performed: {
+                [key: string]: unknown;
+            }[];
+            /** Briefs Authored */
+            briefs_authored: {
                 [key: string]: unknown;
             }[];
             /** Capability Overrides Set */
@@ -2209,6 +2291,93 @@ export interface components {
             }[];
             subject: components["schemas"]["ExportSubjectOut"];
         };
+        /**
+         * ApprovalDecision
+         * @description The closed decision vocabulary of an append-only approval row (Phase 5B).
+         *
+         *     A change of mind is a new row, never an edit: ``revoked`` withdraws an earlier
+         *     approval of the same subject version. The controlling decision for a subject version
+         *     is the row with the highest ``decision_seq``; consumers gate on that latest row,
+         *     never on "an approved row exists".
+         * @enum {string}
+         */
+        ApprovalDecision: "approved" | "rejected" | "revoked";
+        /**
+         * ApprovalDecisionCreate
+         * @description Strict request body recording one decision on one exact subject version.
+         */
+        ApprovalDecisionCreate: {
+            decision: components["schemas"]["ApprovalDecision"];
+            /** Note */
+            note?: string | null;
+            reason_code?: components["schemas"]["ApprovalReason"] | null;
+            /** Subject Version */
+            subject_version: number;
+        };
+        /**
+         * ApprovalHistoryOut
+         * @description Bounded page of the decisions on one subject, newest ``decision_seq`` first.
+         */
+        ApprovalHistoryOut: {
+            /** Items */
+            items: components["schemas"]["ApprovalOut"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
+        /**
+         * ApprovalOut
+         * @description One stored, immutable decision.
+         */
+        ApprovalOut: {
+            /** Brief Id */
+            brief_id: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Decided By */
+            decided_by: string | null;
+            /** Decided By Snapshot */
+            decided_by_snapshot: string;
+            decided_role: components["schemas"]["Role"];
+            decision: components["schemas"]["ApprovalDecision"];
+            /** Decision Seq */
+            decision_seq: number;
+            /** Id */
+            id: string;
+            /** Is Simulated */
+            is_simulated: boolean;
+            /** Note */
+            note: string | null;
+            reason_code: components["schemas"]["ApprovalReason"] | null;
+            /** Subject Id */
+            subject_id: string;
+            subject_type: components["schemas"]["ApprovalSubjectType"];
+            /** Subject Version */
+            subject_version: number;
+            /** Workspace Id */
+            workspace_id: string;
+        };
+        /**
+         * ApprovalReason
+         * @description Why a decider approved, rejected or revoked a subject version.
+         * @enum {string}
+         */
+        ApprovalReason: "evidence_sufficient" | "aligned_with_strategy" | "approved_other" | "insufficient_evidence" | "off_strategy" | "brand_or_compliance_risk" | "inaccurate" | "rejected_other" | "superseded" | "circumstances_changed" | "approved_in_error" | "revoked_other";
+        /**
+         * ApprovalSubjectType
+         * @description What an approval decides on (Phase 5B).
+         *
+         *     Closed: only recommendation briefs at CF-1. ``creative_draft`` joins at CF-2
+         *     (Phase 5C), together with the widening migration of the matching CHECK.
+         * @enum {string}
+         */
+        ApprovalSubjectType: "recommendation_brief";
         /** AudienceIn */
         AudienceIn: {
             /** Demographics */
@@ -2242,6 +2411,48 @@ export interface components {
             motivations?: string[];
             /** Objections */
             objections?: string[];
+        };
+        /**
+         * AuditAction
+         * @description The closed set of audit actions. The value is the stored ``audit_logs.action``.
+         * @enum {string}
+         */
+        AuditAction: "auth.register" | "auth.login_succeeded" | "auth.login_failed" | "onboarding.completed" | "business_profile.updated" | "organization_member.role_changed" | "organization_member.removed" | "organization_invitation.created" | "organization_invitation.accepted" | "organization_invitation.revoked" | "location.created" | "location.deactivated" | "location.reactivated" | "geo_coverage.updated" | "scout_request.created" | "scout_request.updated" | "scout_request.paused" | "scout_request.resumed" | "scout_request.run" | "scout_schedule.created" | "scout_schedule.paused" | "scout_schedule.resumed" | "scout_schedule.deleted" | "scout_admission.reconciled" | "opportunity.new" | "opportunity.saved" | "opportunity.monitoring" | "opportunity.ignored" | "opportunity.actioned" | "opportunity_feedback.created" | "workspace_capability_override.created" | "workspace_capability_override.updated" | "workspace_capability_override.cleared" | "workspace_capability_override.rejected" | "data_source.taken_down" | "recommendation_brief.created" | "approval.approved" | "approval.rejected" | "approval.revoked";
+        /**
+         * AuditLogOut
+         * @description One audit record as an owner, admin or compliance reviewer reads it.
+         */
+        AuditLogOut: {
+            action: components["schemas"]["AuditAction"];
+            /** Actor User Id */
+            actor_user_id: string | null;
+            /** Context */
+            context: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Entity Id */
+            entity_id: string | null;
+            /** Entity Type */
+            entity_type: string | null;
+            /** Id */
+            id: string;
+            /** New State */
+            new_state: {
+                [key: string]: unknown;
+            } | null;
+            /** Previous State */
+            previous_state: {
+                [key: string]: unknown;
+            } | null;
+            /** Reason */
+            reason: string | null;
+            /** Workspace Id */
+            workspace_id: string | null;
         };
         /** BrandOut */
         BrandOut: {
@@ -2453,7 +2664,7 @@ export interface components {
          *     registry below.
          * @enum {string}
          */
-        Capability: "opportunity_feedback" | "scout_scheduling" | "connector_rss";
+        Capability: "opportunity_feedback" | "scout_scheduling" | "connector_rss" | "recommendation_briefs";
         /**
          * CapabilityEffectiveListOut
          * @description Effective state for a workspace, one item per resolved capability.
@@ -2962,6 +3173,8 @@ export interface components {
             connector_rss_enabled: boolean;
             /** Opportunity Feedback Enabled */
             opportunity_feedback_enabled: boolean;
+            /** Recommendation Briefs Enabled */
+            recommendation_briefs_enabled: boolean;
             /** Scout Scheduling Enabled */
             scout_scheduling_enabled: boolean;
         };
@@ -4331,6 +4544,73 @@ export interface components {
             schema_migrated: boolean;
             /** Unconfigured */
             unconfigured: string[];
+        };
+        /**
+         * RecommendationBriefListOut
+         * @description Bounded, newest-version-first page of an opportunity's briefs.
+         */
+        RecommendationBriefListOut: {
+            /** Items */
+            items: components["schemas"]["RecommendationBriefOut"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
+        /**
+         * RecommendationBriefOut
+         * @description Customer-safe projection of one stored brief version.
+         */
+        RecommendationBriefOut: {
+            /** Analysis Version */
+            analysis_version: string;
+            /** Brief Version */
+            brief_version: number;
+            /** Campaign Id */
+            campaign_id: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string | null;
+            /** Created By Snapshot */
+            created_by_snapshot: string;
+            /** Evidence Refs */
+            evidence_refs?: string[];
+            /** Id */
+            id: string;
+            /** Intelligence Record Id */
+            intelligence_record_id: string;
+            /** Is Simulated */
+            is_simulated: boolean;
+            /** Location Id */
+            location_id: string | null;
+            /** Model Identifier */
+            model_identifier: string;
+            /** Opportunity Id */
+            opportunity_id: string;
+            /** Parent Brief Id */
+            parent_brief_id: string | null;
+            /** Prompt Name */
+            prompt_name: string;
+            /** Prompt Version */
+            prompt_version: string;
+            /** Rationale */
+            rationale: string;
+            /** Recommended Actions */
+            recommended_actions?: string[];
+            /** Risk Notes */
+            risk_notes?: string[];
+            /** Scoring Version */
+            scoring_version: string;
+            /** Suggested Angles */
+            suggested_angles?: string[];
+            /** Summary */
+            summary: string;
         };
         /** RegisterRequest */
         RegisterRequest: {
@@ -6872,6 +7152,42 @@ export interface operations {
             };
         };
     };
+    list_approval_queue_api_v1_workspaces__workspace_id__approval_queue_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecommendationBriefListOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_audiences_api_v1_workspaces__workspace_id__audiences_get: {
         parameters: {
             query?: {
@@ -7030,6 +7346,13 @@ export interface operations {
             query?: {
                 limit?: number;
                 cursor?: string | null;
+                action?: components["schemas"]["AuditAction"] | null;
+                entity_type?: string | null;
+                entity_id?: string | null;
+                /** @description Inclusive lower bound on created_at (UTC if no offset). */
+                created_from?: string | null;
+                /** @description Exclusive upper bound on created_at (UTC if no offset). */
+                created_before?: string | null;
             };
             header?: {
                 authorization?: string | null;
@@ -7051,9 +7374,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": components["schemas"]["AuditLogOut"][];
                 };
             };
             /** @description Validation Error */
@@ -8620,6 +8941,83 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OpportunityDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_brief_decisions_api_v1_workspaces__workspace_id__opportunities__opportunity_id__briefs__brief_id__approvals_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                opportunity_id: string;
+                brief_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalHistoryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_on_brief_api_v1_workspaces__workspace_id__opportunities__opportunity_id__briefs__brief_id__approvals_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                opportunity_id: string;
+                brief_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApprovalDecisionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalOut"];
                 };
             };
             /** @description Validation Error */

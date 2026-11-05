@@ -17,8 +17,8 @@ Mechanics, identical for every class:
   (:func:`app.privacy.erasure.delete_rows`) — re-running a batch deletes nothing more, so
   every step is idempotent;
 * **platform classes** (no workspace: sessions, account tokens, invitations, audit
-  records) are purged by the sweep itself, each batch in its own committed transaction,
-  up to ``retention_purge_max_batches`` batches per class per sweep;
+  records and approvals) are purged by the sweep itself, each batch in its own committed
+  transaction, up to ``retention_purge_max_batches`` batches per class per sweep;
 * **workspace classes** (signals, opportunities, job history) are purged by the
   ``retention.purge`` durable job, enqueued once per workspace per class per day (the
   idempotency key carries the cut-off), purging only inside its own tenant scope; a full
@@ -43,6 +43,7 @@ from typing import Any
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.approvals.models import Approval
 from app.audit.models import AuditLog
 from app.auth.models import AuthSession, EmailVerificationToken, PasswordResetToken
 from app.core.config import Settings, get_settings
@@ -103,7 +104,11 @@ _ROOTS: dict[RetentionClass, tuple[tuple[Any, Callable[[datetime], Any]], ...]] 
             lambda c: (Job.updated_at < c) & Job.status.in_([s.value for s in TERMINAL_STATUSES]),
         ),
     ),
-    RetentionClass.AUDIT_LOGS: ((AuditLog, lambda c: AuditLog.created_at < c),),
+    # Approvals are compliance records of the same class (W21 CF-1; O-6 rider).
+    RetentionClass.AUDIT_LOGS: (
+        (AuditLog, lambda c: AuditLog.created_at < c),
+        (Approval, lambda c: Approval.created_at < c),
+    ),
 }
 
 
