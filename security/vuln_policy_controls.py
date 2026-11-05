@@ -324,6 +324,28 @@ def _result(doc: dict, target: str) -> dict:
     return hits[0]
 
 
+def _norm(name: object) -> str:
+    return re.sub(r"[-_.]+", "-", str(name)).lower()  # the gate's own normalisation (gate._norm_dist)
+
+
+def _scanned_entry(name: str, report: dict, item: dict, root: str) -> tuple[dict, dict]:
+    """(result, package): the scanned entry of ONE installed distribution — the python-pkg package whose FilePath is the
+    METADATA file of the distribution's own dist-info, relative to the environment root, as the gate reconciles the
+    inventory (gate._installed_dists). The match is the exact path: a suffix match on `<dist-info>/METADATA` also takes
+    a vendored copy at the same name and version (setuptools >= 84 ships packaging-26.3.dist-info under
+    setuptools/_vendor, as the scan lists), and a case built on the wrong copy, or refused for it, tests nothing. Any
+    count other than one at that exact path is a genuine ambiguity, and refuses the case."""
+    meta, version = item["metadata"], item["metadata"]["version"]
+    rel = os.path.relpath(os.path.realpath(item["metadata_location"]), root).replace(os.sep, "/")
+    hit = [(res, p) for res in report.get("Results") or [] if res.get("Type") == "python-pkg"
+           for p in res.get("Packages") or []
+           if _norm(p.get("Name")) == _norm(meta["name"]) and p.get("Version") == version
+           and str(p.get("FilePath") or "").replace(os.sep, "/") == f"{rel}/METADATA"]
+    if len(hit) != 1:
+        raise ControlError(f"{name}: the scanned entry of {meta['name']} {version} at {rel}/METADATA was found {len(hit)} times, expected exactly once")
+    return hit[0]
+
+
 def build_case(name: str, reports_dir: pathlib.Path, out_dir: pathlib.Path) -> tuple[list[str], pathlib.Path, dict]:
     group, key, change, _, token = CASES[name]
     rep_name, args, inv_name, vend_name, man_name = REPORTS[key]
@@ -359,21 +381,12 @@ def build_case(name: str, reports_dir: pathlib.Path, out_dir: pathlib.Path) -> t
         report["Results"].append({"Target": "tools/requirements-control.txt", "Class": "lang-pkgs", "Type": "pip",
                                   "Packages": [{"Name": "control", "Version": "1.0", "Identifier": {"UID": "control-uid"}}]})
     elif kind == "drop-scanned":
-        # Remove the scanned entry of an INSTALLED distribution (matched by name, version and its own
-        # dist-info path) — removing a vendored copy pip never inventoried would test nothing.
-        norm = lambda s: re.sub(r"[-_.]+", "-", str(s)).lower()  # the gate's own normalisation (gate._norm_dist)
-        wanted = {(norm(it["metadata"]["name"]), it["metadata"]["version"], pathlib.Path(it["metadata_location"]).name) for it in inventory["installed"]}
-        dropped = False
-        for res in report.get("Results") or []:
-            if res.get("Type") != "python-pkg" or dropped:
-                continue
-            for pkg in list(res.get("Packages") or []):
-                fp = str(pkg.get("FilePath") or "")
-                if any((norm(pkg.get("Name")), pkg.get("Version")) == (n, v) and fp.endswith(f"/{d}/METADATA") for n, v, d in wanted):
-                    res["Packages"].remove(pkg); dropped = True
-                    break
-        if not dropped:
-            raise ControlError(f"{name}: no scanned package corresponds to an installed distribution")
+        # Remove the scanned entry of an INSTALLED distribution (matched by name, version and the exact path of its own
+        # dist-info under the environment root) — removing a vendored copy pip never inventoried would test nothing.
+        if not inventory["installed"]:
+            raise ControlError(f"{name}: the real inventory lists no installed distribution")
+        res, pkg = _scanned_entry(name, report, inventory["installed"][0], os.path.realpath(_arg(args, "--env-root")))
+        res["Packages"].remove(pkg)
     elif kind == "inventory":
         items = inventory["installed"]
         if change[1] == "add":
@@ -433,7 +446,7 @@ def build_case(name: str, reports_dir: pathlib.Path, out_dir: pathlib.Path) -> t
         res.setdefault("Packages", []).append({"Name": "pip", "Version": "25.0.1", "Identifier": {"UID": "control-pip-uid"},
                                                "FilePath": "usr/local/lib/python3.12/site-packages/pip-25.0.1.dist-info/METADATA"})
     elif kind == "unlocked":
-        norm = lambda s: re.sub(r"[-_.]+", "-", str(s)).lower()  # the gate's own normalisation (gate._norm_dist)
+        norm = _norm
         root = os.path.realpath(_arg(args, "--env-root"))
         extras = {norm(args[i + 1]) for i, a in enumerate(args) if a == "--locked-extra"}
         res = next((r for r in report.get("Results") or [] if r.get("Type") == "python-pkg"), None)
@@ -451,13 +464,9 @@ def build_case(name: str, reports_dir: pathlib.Path, out_dir: pathlib.Path) -> t
             if it is None:
                 raise ControlError(f"{name}: no locked distribution to change")
             old = it["metadata"]["version"]
+            _, pkg = _scanned_entry(name, report, it, root)      # its own scanned entry, not a vendored copy at the same version
             it["metadata"]["version"] = old + ".post999"
-            dist = pathlib.Path(it["metadata_location"]).name
-            hit = [p for p in res.get("Packages") or [] if norm(p.get("Name")) == norm(it["metadata"]["name"]) and p.get("Version") == old
-                   and str(p.get("FilePath") or "").endswith(f"/{dist}/METADATA")]
-            if len(hit) != 1:
-                raise ControlError(f"{name}: the scanned entry of {it['metadata']['name']} {old} was not found exactly once")
-            hit[0]["Version"] = old + ".post999"
+            pkg["Version"] = old + ".post999"
     elif kind in ("drop-binary", "drop-stdlib"):
         res = _result(report, change[1])
         if kind == "drop-binary":
