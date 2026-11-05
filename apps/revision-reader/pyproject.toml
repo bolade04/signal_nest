@@ -29,7 +29,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "pytest==8.3.3",
+    "pytest==9.0.3",
     "ruff==0.14.4",
     # TEST-ONLY, and never installed into the image (the Dockerfile installs the base
     # dependencies alone). tests/test_ecs_override_model.py reads botocore's bundled ECS
