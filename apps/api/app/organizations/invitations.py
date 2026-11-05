@@ -45,6 +45,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.audit.actions import AuditAction
 from app.audit.service import record_audit
 from app.auth.dependencies import OrganizationContext
 from app.core.config import get_settings
@@ -350,7 +351,7 @@ def _record_accepted(db: Session, invitation: OrganizationInvitation, *, user_id
         db,
         organization_id=invitation.organization_id,
         actor_user_id=user_id,
-        action="organization_invitation.accepted",
+        action=AuditAction.ORGANIZATION_INVITATION_ACCEPTED,
         entity_type="organization_invitation",
         entity_id=invitation.id,
         new_state={
@@ -418,7 +419,7 @@ def create_invitation(
                 db,
                 organization_id=organization_id,
                 actor_user_id=ctx.user.id,
-                action="organization_invitation.revoked",
+                action=AuditAction.ORGANIZATION_INVITATION_REVOKED,
                 entity_type="organization_invitation",
                 entity_id=existing.id,
                 reason="Expired invitation superseded by a new invitation.",
@@ -454,7 +455,7 @@ def create_invitation(
         db,
         organization_id=organization_id,
         actor_user_id=ctx.user.id,
-        action="organization_invitation.created",
+        action=AuditAction.ORGANIZATION_INVITATION_CREATED,
         entity_type="organization_invitation",
         entity_id=invitation.id,
         new_state=_audit_state(invitation),
@@ -502,7 +503,7 @@ def revoke_invitation(
         db,
         organization_id=invitation.organization_id,
         actor_user_id=ctx.user.id,
-        action="organization_invitation.revoked",
+        action=AuditAction.ORGANIZATION_INVITATION_REVOKED,
         entity_type="organization_invitation",
         entity_id=invitation.id,
         previous_state=_audit_state(invitation),
