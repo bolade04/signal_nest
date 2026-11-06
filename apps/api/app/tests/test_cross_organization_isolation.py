@@ -1423,7 +1423,8 @@ class TestCreativeDrafts:
         a, b = pov.a, pov.b
         mine, theirs = creative_rows[a.key], creative_rows[b.key]
         own = pov.send("GET", _ws_path(world, a, "/creative-capability"))
-        assert own.status_code == 200 and own.json() == {"enabled": True}
+        assert own.status_code == 200
+        assert own.json() == {"enabled": True, "generation_configured": True}
         _assert_membership_403(pov.send("GET", _ws_path(world, b, "/creative-capability")))
         # List: own brief lists only its own draft; the foreign brief id is a scoped 404.
         listed = pov.send("GET", _ws_path(world, a, f"/briefs/{mine.brief_id}/drafts"))

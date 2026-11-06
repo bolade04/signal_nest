@@ -90,6 +90,7 @@ from app.creative.service import (
     reviews_by_draft,
 )
 from app.db.session import get_db
+from app.llm.quota import unusable_ceilings
 
 logger = get_logger(__name__)
 
@@ -148,8 +149,11 @@ def read_creative_capability(
     ctx: TenantContext = Depends(get_tenant_context),
 ) -> CreativeGenerationCapabilityOut:
     """Customer-facing, workspace-effective availability (any member). Advisory only: every
-    draft endpoint re-decides and answers 503 while disabled."""
+    draft endpoint re-decides and answers 503 while disabled. ``generation_configured`` uses
+    the generate route's own ceiling check, and is false whenever ``enabled`` is (I-5C)."""
     resolution = _resolve_creative_capability(db, ctx)
+    enabled = resolution.effective_enabled is True
+    configured = enabled and not unusable_ceilings(get_settings())
     log_event(
         logger,
         "creative_generation_capability_reflected",
@@ -159,7 +163,7 @@ def read_creative_capability(
         workspace_id=ctx.workspace.id,
         effective_enabled=resolution.effective_enabled,
     )
-    return CreativeGenerationCapabilityOut(enabled=resolution.effective_enabled)
+    return CreativeGenerationCapabilityOut(enabled=enabled, generation_configured=configured)
 
 
 @router.post(

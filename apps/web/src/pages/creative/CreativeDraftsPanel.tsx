@@ -9,8 +9,10 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { canEditWorkspace } from '@/lib/roles';
 import { useStatusPolling } from '@/lib/status-polling';
 import { formatRelative } from '@/lib/utils';
+import { useBriefDecisions } from '@/pages/approvals/useApprovals';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
 import { BlockedState } from './BlockedState';
+import { DraftDecisions } from './DraftDecisions';
 import { DraftEditor } from './DraftEditor';
 import { ReviewWarningsPanel } from './ReviewWarningsPanel';
 import { VersionHistory } from './VersionHistory';
@@ -24,12 +26,33 @@ import { useBriefDrafts, useCreativeCapability, useGenerateDraft, useGenerationJ
  *
  * Dark until the workspace-effective `creative_generation` reflection says enabled: while
  * it is off, unknown or resolving, the panel renders nothing and issues no draft request.
- * Mounted at I-5C (with the brief panel); this lane mounts nothing.
+ *
+ * Mounted at I-5C on the `/creative/:briefId` page. Generate is offered only when the API
+ * would accept it (I-5C): an editor (owner / admin / marketer), every daily ceiling usable
+ * (the reflection's `generation_configured`, battery O-5) and the brief's controlling decision
+ * an approval (read from the brief's decision history, which every editor may read; it needs
+ * the brief's `opportunityId`). Unknown never offers it; the route's 422/503/429 answers stay
+ * handled for a stale client. Each version shows its decisions (`DraftDecisions`).
  */
-export function CreativeDraftsPanel({ workspaceId, briefId }: { workspaceId: string; briefId: string }) {
+export function CreativeDraftsPanel({
+  workspaceId,
+  briefId,
+  opportunityId = null,
+}: {
+  workspaceId: string;
+  briefId: string;
+  opportunityId?: string | null;
+}) {
   const capability = useCreativeCapability(workspaceId);
   if (!capability.isEnabled) return null;
-  return <DraftsInner workspaceId={workspaceId} briefId={briefId} />;
+  return (
+    <DraftsInner
+      workspaceId={workspaceId}
+      briefId={briefId}
+      opportunityId={opportunityId}
+      generationConfigured={capability.generationConfigured}
+    />
+  );
 }
 
 function errorCode(error: unknown): string | null {
@@ -54,11 +77,42 @@ function requestFailureMessage(error: unknown): string {
   }
 }
 
-function DraftsInner({ workspaceId, briefId }: { workspaceId: string; briefId: string }) {
+function DraftsInner({
+  workspaceId,
+  briefId,
+  opportunityId,
+  generationConfigured,
+}: {
+  workspaceId: string;
+  briefId: string;
+  opportunityId: string | null;
+  generationConfigured: boolean;
+}) {
   const { memberships } = useAuth();
   const { organizationId } = useWorkspace();
   const role = memberships.find((m) => m.organization_id === organizationId)?.role;
-  const canGenerate = canEditWorkspace(role);
+  const isEditor = canEditWorkspace(role);
+  // The brief's controlling decision (5B: the highest decision_seq). Only an editor needs it,
+  // and every editor may read the history.
+  const briefHistory = useBriefDecisions({
+    workspaceId,
+    opportunityId: opportunityId ?? '',
+    briefId,
+    enabled: isEditor && generationConfigured && Boolean(opportunityId),
+  });
+  const briefApproved = briefHistory.data?.items[0]?.decision === 'approved';
+  const canGenerate = isEditor && generationConfigured && briefApproved;
+  const generateUnavailable: string | null = !isEditor
+    ? null
+    : !generationConfigured
+      ? "Generating drafts isn't available in this workspace yet."
+      : !opportunityId
+        ? 'Open this brief from its opportunity to generate drafts.'
+        : briefHistory.isPending
+          ? null
+          : !briefApproved
+            ? 'Approve this brief before generating drafts from it.'
+            : null;
 
   const drafts = useBriefDrafts(workspaceId, briefId, true);
   const generate = useGenerateDraft(workspaceId, briefId);
@@ -109,6 +163,12 @@ function DraftsInner({ workspaceId, briefId }: { workspaceId: string; briefId: s
     <section aria-labelledby="drafts-heading" className="space-y-4">
       <DraftsHeading />
 
+      {generateUnavailable && (
+        <p role="note" className="text-sm text-muted-foreground">
+          {generateUnavailable}
+        </p>
+      )}
+
       {canGenerate && (
         <div className="space-y-2">
           <DraftEditor selected={selected} busy={generating} onGenerate={onGenerate} />
@@ -148,7 +208,7 @@ function DraftsInner({ workspaceId, briefId }: { workspaceId: string; briefId: s
       ) : (
         <div className="grid gap-4 md:grid-cols-[minmax(0,14rem)_1fr]">
           <VersionHistory drafts={items} selectedId={selected?.id ?? null} onSelect={setSelectedId} />
-          {selected && <DraftView draft={selected} />}
+          {selected && <DraftView workspaceId={workspaceId} draft={selected} />}
         </div>
       )}
     </section>
@@ -163,7 +223,7 @@ function DraftsHeading() {
   );
 }
 
-function DraftView({ draft }: { draft: CreativeDraftOut }) {
+function DraftView({ workspaceId, draft }: { workspaceId: string; draft: CreativeDraftOut }) {
   return (
     <article aria-label={`Draft version ${draft.draft_version}`} className="space-y-3">
       <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -184,6 +244,8 @@ function DraftView({ draft }: { draft: CreativeDraftOut }) {
       ) : (
         <p className="text-sm text-muted-foreground">The content review is not available yet.</p>
       )}
+      {/* I-5C: this version's decisions (every role but viewer); the reviewer's controls. */}
+      <DraftDecisions key={draft.id} workspaceId={workspaceId} draft={draft} />
     </article>
   );
 }

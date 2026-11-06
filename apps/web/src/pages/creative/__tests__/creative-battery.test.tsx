@@ -4,7 +4,7 @@ import { delay, http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { API_PREFIX } from '@/api/config';
 import { queryKeys } from '@/api/queryKeys';
-import type { ContentReviewOut, CreativeChannel, CreativeDraftOut } from '@/api/types';
+import type { ApprovalHistoryOut, ContentReviewOut, CreativeChannel, CreativeDraftOut } from '@/api/types';
 import { useAuth } from '@/auth/AuthContext';
 import { CreativeDraftsPanel } from '@/pages/creative/CreativeDraftsPanel';
 import { CHANNELS } from '@/pages/creative/creativeLabels';
@@ -19,9 +19,19 @@ import { useWorkspace } from '@/workspace/WorkspaceContext';
 //
 // * generating is `require_role(OWNER, ADMIN, MARKETER)` (apps/api/app/creative/routes.py,
 //   `EDITORS`); reading drafts is every member; deciding on a draft is the 5B reviewer route,
-//   which this panel does not offer (the decision UI is an I-5C follow-up);
+//   offered by I-5C's `DraftDecisions` only once a version's decision history has loaded. This
+//   battery leaves that route at its dark default (503), on which nothing is rendered, so no
+//   decision control may appear here for any role; the decision UI itself is verified in
+//   pages/__tests__/i5c-creative-integration.test.tsx;
 // * every draft route answers 503 while `creative_generation` is not enabled for the
-//   workspace, so the panel must render nothing and send nothing then.
+//   workspace, so the panel must render nothing and send nothing then;
+// * at I-5C the panel is mounted at /creative/:briefId?opportunity=… and offers Generate only
+//   when the API would accept it: an editor, the reflection's `generation_configured` true
+//   and the brief's controlling decision an approval (read from the brief's history, which
+//   needs the brief's opportunity). The backend here reports generation configured whenever
+//   it is enabled and answers the brief's history as approved, so the editor's presence is
+//   decided by the role and the capability state alone, as the API's rules above say; the
+//   I-5C gate itself (unconfigured, unapproved, no opportunity) is tested in pages/__tests__.
 //
 // The UI must never offer a control the API refuses, never send a body the API's strict
 // schema refuses, and never render stored text as markup.
@@ -37,9 +47,12 @@ import { useWorkspace } from '@/workspace/WorkspaceContext';
 
 const WS = 'ws-1';
 const BRIEF = 'brief-1';
+const OPP = 'opp-1';
 const P = (path: string) => `*${API_PREFIX}${path}`;
 const DRAFTS = P(`/workspaces/${WS}/briefs/${BRIEF}/drafts`);
 const CAPABILITY = P('/workspaces/:workspaceId/creative-capability');
+/** The brief's decision history (5B), which I-5C reads to decide whether Generate is offered. */
+const BRIEF_HISTORY = P(`/workspaces/${WS}/opportunities/${OPP}/briefs/${BRIEF}/approvals`);
 
 /** The roles the generate route admits (apps/api/app/creative/routes.py `EDITORS`). */
 const API_GENERATORS = new Set(['owner', 'admin', 'marketer']);
@@ -134,8 +147,38 @@ function backend(
           { status: 403 },
         );
       }
-      return HttpResponse.json({ enabled: state === 'enabled' || state === 'list503' });
+      // I-5C: generation is configured whenever it is enabled here (the panel tests' fixture).
+      const enabled = state === 'enabled' || state === 'list503';
+      return HttpResponse.json({ enabled, generation_configured: enabled });
     }),
+    // I-5C: the brief's controlling decision is an approval, so an editor is offered Generate.
+    http.get(BRIEF_HISTORY, () =>
+      HttpResponse.json({
+        items: [
+          {
+            id: 'appr-1',
+            workspace_id: WS,
+            subject_type: 'recommendation_brief',
+            subject_id: BRIEF,
+            subject_version: 1,
+            brief_id: BRIEF,
+            draft_id: null,
+            decision: 'approved',
+            decision_seq: 1,
+            reason_code: null,
+            note: null,
+            decided_by: 'user-reviewer',
+            decided_by_snapshot: 'user-reviewer Rhea Reviewer <rhea@example.com>',
+            decided_role: 'reviewer',
+            is_simulated: true,
+            created_at: '2026-11-01T09:00:00Z',
+          },
+        ],
+        total: 1,
+        limit: 20,
+        offset: 0,
+      } satisfies ApprovalHistoryOut),
+    ),
     http.get(DRAFTS, () => {
       log.list += 1;
       if (state === 'list503') {
@@ -180,20 +223,25 @@ function backend(
 /**
  * Reports what the panel's decision reads, from the same providers and query cache: the
  * session, the active organization, the role there (the panel's own lookup), the capability
- * reflection (the same query, shared) and the drafts list's state (read from the cache, never
- * fetched here). Test-only; renders plain text, no role.
+ * reflection (the same query, shared), the drafts list's state and, since I-5C, the brief's
+ * decision-history state (both read from the cache, never fetched here). Test-only; renders
+ * plain text, no role.
  */
 function Probe() {
   const { status, memberships } = useAuth();
   const { organizationId } = useWorkspace();
   const capability = useCreativeCapability(WS);
+  const queryClient = useQueryClient();
   const fetchingDrafts = useIsFetching({ queryKey: queryKeys.briefDrafts(WS, BRIEF) });
-  const drafts = useQueryClient().getQueryState(queryKeys.briefDrafts(WS, BRIEF));
+  const drafts = queryClient.getQueryState(queryKeys.briefDrafts(WS, BRIEF));
+  const fetchingBrief = useIsFetching({ queryKey: queryKeys.briefApprovals(WS, OPP, BRIEF) });
+  const brief = queryClient.getQueryState(queryKeys.briefApprovals(WS, OPP, BRIEF));
   const role = memberships.find((m) => m.organization_id === organizationId)?.role ?? 'none';
   const draftsState = fetchingDrafts > 0 ? 'fetching' : (drafts?.status ?? 'idle');
+  const briefState = fetchingBrief > 0 ? 'fetching' : (brief?.status ?? 'idle');
   return (
     <span data-testid="probe">
-      {`session=${status} org=${organizationId ?? '-'} role=${role} capability=${capability.status} drafts=${draftsState}`}
+      {`session=${status} org=${organizationId ?? '-'} role=${role} capability=${capability.status} drafts=${draftsState} brief=${briefState}`}
     </span>
   );
 }
@@ -201,7 +249,7 @@ function Probe() {
 function render() {
   return renderApp(
     <>
-      <CreativeDraftsPanel workspaceId={WS} briefId={BRIEF} />
+      <CreativeDraftsPanel workspaceId={WS} briefId={BRIEF} opportunityId={OPP} />
       <Probe />
     </>,
   );
@@ -211,9 +259,16 @@ const settle = () => act(() => new Promise<void>((r) => setTimeout(r, 80)));
 
 /**
  * Wait until every input of the panel's decision has landed and been rendered: the session,
- * the active organization (org-1) and the role there, the capability reflection, and the
- * drafts list's final state. Then one more tick, so the assertions that follow read the
- * committed DOM of that state — an absence after this is evidence, not a race.
+ * the active organization (org-1) and the role there, the capability reflection, the drafts
+ * list's final state and, since I-5C, the brief's decision history where the panel reads it.
+ * Then one more tick, so the assertions that follow read the committed DOM of that state —
+ * an absence after this is evidence, not a race.
+ *
+ * The panel reads the brief's history only for an editor while generation is configured
+ * (every other member never fetches it), and offers Generate only once it has landed. So an
+ * API generator in an enabled workspace waits for that read to succeed; for everyone else
+ * the history must merely not be in flight, whatever its state — a mutant that reads it for a
+ * member the API refuses then fails on the presence assertions below, not on this wait.
  */
 async function loaded(
   screen: ReturnType<typeof render>,
@@ -221,10 +276,13 @@ async function loaded(
   capability: 'enabled' | 'disabled' | 'loading',
   drafts: 'success' | 'error' | 'idle',
 ) {
+  const brief = API_GENERATORS.has(role) && capability === 'enabled' ? 'success' : '(?!fetching)\\S+';
   await waitFor(
     () =>
       expect(screen.getByTestId('probe')).toHaveTextContent(
-        `session=authenticated org=org-1 role=${role} capability=${capability} drafts=${drafts}`,
+        new RegExp(
+          `^session=authenticated org=org-1 role=${role} capability=${capability} drafts=${drafts} brief=${brief}$`,
+        ),
       ),
     { timeout: 5000 },
   );

@@ -117,7 +117,9 @@ BRIEF_NOT_FOUND = "Brief not found in this workspace."
 AUTHOR_CANNOT_DECIDE = "The author of a brief cannot decide on it."
 STALE_VERSION = "The brief version you decided on is not this brief's version."
 NOTHING_TO_REVOKE = "Only an approved brief can be revoked."
-CONCURRENT_DECISION = "Another decision on this brief was recorded at the same time. Try again."
+#: Subject-neutral since I-5C (W21-REV-P5C r2 O-r2-1): the clash answer is shared by brief and
+#: draft decisions.
+CONCURRENT_DECISION = "Another decision was recorded at the same time. Try again."
 REASON_MISMATCH = "reason_code does not match the decision"
 
 

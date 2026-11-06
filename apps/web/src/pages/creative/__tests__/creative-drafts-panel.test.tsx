@@ -2,15 +2,18 @@ import { waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { API_PREFIX } from '@/api/config';
-import type { ContentReviewOut, CreativeDraftOut, JobOut } from '@/api/types';
+import type { ApprovalHistoryOut, ContentReviewOut, CreativeDraftOut, JobOut } from '@/api/types';
 import { CreativeDraftsPanel } from '@/pages/creative/CreativeDraftsPanel';
 import { server } from '@/test/server';
 import { renderApp } from '@/test/utils';
 
 // Project Phase 5C (W21 lane P5C): the draft editor, version history, review-warnings panel
-// and blocked-state UI. The panel is not mounted in any route yet (I-5C mounts it); these
-// render it directly inside the real providers, against MSW handlers whose shapes are the
-// generated contract types (a wrong key fails the type-check).
+// and blocked-state UI, rendered directly inside the real providers, against MSW handlers whose
+// shapes are the generated contract types (a wrong key fails the type-check). I-5C mounts the
+// panel at /creative/:briefId and offers Generate only when the API would accept it (editor,
+// every ceiling usable, the brief approved): `render()` therefore passes the brief's
+// opportunity and answers its decision history as approved, and `capability(true)` reports
+// generation configured. The I-5C gate itself is tested in pages/__tests__/i5c-*.
 
 const WS = 'ws-1';
 const BRIEF = 'brief-1';
@@ -89,7 +92,7 @@ function capability(enabled: boolean) {
   server.use(
     http.get(P('/workspaces/:workspaceId/creative-capability'), () => {
       calls.get += 1;
-      return HttpResponse.json({ enabled });
+      return HttpResponse.json({ enabled, generation_configured: enabled });
     }),
   );
   return calls;
@@ -120,8 +123,44 @@ function asRole(role: string) {
   );
 }
 
+const OPP = 'opp-1';
+
+/** The brief's decision history (I-5C): approved, so an editor is offered Generate. */
+function briefApproved() {
+  server.use(
+    http.get(P(`/workspaces/${WS}/opportunities/${OPP}/briefs/${BRIEF}/approvals`), () =>
+      HttpResponse.json({
+        items: [
+          {
+            id: 'appr-1',
+            workspace_id: WS,
+            subject_type: 'recommendation_brief',
+            subject_id: BRIEF,
+            subject_version: 1,
+            brief_id: BRIEF,
+            draft_id: null,
+            decision: 'approved',
+            decision_seq: 1,
+            reason_code: null,
+            note: null,
+            decided_by: 'user-reviewer',
+            decided_by_snapshot: 'user-reviewer Rhea Reviewer <rhea@example.com>',
+            decided_role: 'reviewer',
+            is_simulated: true,
+            created_at: '2026-11-01T09:00:00Z',
+          },
+        ],
+        total: 1,
+        limit: 20,
+        offset: 0,
+      } satisfies ApprovalHistoryOut),
+    ),
+  );
+}
+
 function render() {
-  return renderApp(<CreativeDraftsPanel workspaceId={WS} briefId={BRIEF} />);
+  briefApproved();
+  return renderApp(<CreativeDraftsPanel workspaceId={WS} briefId={BRIEF} opportunityId={OPP} />);
 }
 
 describe('CreativeDraftsPanel — dark by default', () => {
@@ -280,8 +319,8 @@ describe('CreativeDraftsPanel — draft editor', () => {
     );
     const screen = render();
     await screen.findByRole('navigation', { name: 'Draft versions' });
-    await screen.user.selectOptions(screen.getByLabelText('Channel'), 'sms');
-    await screen.user.click(screen.getByRole('button', { name: 'Generate draft' }));
+    await screen.user.selectOptions(await screen.findByLabelText('Channel'), 'sms');
+    await screen.user.click(await screen.findByRole('button', { name: 'Generate draft' }));
     await waitFor(() => expect(screen.getByRole('article', { name: 'Draft version 2' })).toBeInTheDocument());
     expect(posts).toEqual([{ channel: 'sms' }]);
     expect(calls.get).toBeGreaterThanOrEqual(2); // the list was re-read after the job
@@ -301,7 +340,7 @@ describe('CreativeDraftsPanel — draft editor', () => {
     const screen = render();
     const nav = await screen.findByRole('navigation', { name: 'Draft versions' });
     await screen.user.click(within(nav).getByRole('button', { name: /Version 1/ }));
-    await screen.user.click(screen.getByRole('button', { name: 'Revise version 1' }));
+    await screen.user.click(await screen.findByRole('button', { name: 'Revise version 1' }));
     expect(await screen.findByRole('status')).toHaveTextContent('Generating a draft…');
     expect(posts).toEqual([{ channel: 'email', parent_draft_id: 'draft-1' }]);
     expect(screen.getByRole('button', { name: 'Generate draft' })).toBeDisabled();
@@ -320,7 +359,7 @@ describe('CreativeDraftsPanel — draft editor', () => {
     );
     const screen = render();
     await screen.findByText(/No drafts yet/);
-    await screen.user.click(screen.getByRole('button', { name: 'Generate draft' }));
+    await screen.user.click(await screen.findByRole('button', { name: 'Generate draft' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Approve this brief before generating drafts from it.');
   });
 
@@ -337,7 +376,7 @@ describe('CreativeDraftsPanel — draft editor', () => {
     );
     const screen = render();
     await screen.findByText(/No drafts yet/);
-    await screen.user.click(screen.getByRole('button', { name: 'Generate draft' }));
+    await screen.user.click(await screen.findByRole('button', { name: 'Generate draft' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('daily limit');
   });
 
@@ -352,7 +391,7 @@ describe('CreativeDraftsPanel — draft editor', () => {
     );
     const screen = render();
     await screen.findByText(/No drafts yet/);
-    await screen.user.click(screen.getByRole('button', { name: 'Generate draft' }));
+    await screen.user.click(await screen.findByRole('button', { name: 'Generate draft' }));
     expect(await screen.findByText(/Automatic status updates stopped/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Generate draft' })).toBeEnabled();
   });
@@ -368,7 +407,7 @@ describe('CreativeDraftsPanel — draft editor', () => {
     );
     const screen = render();
     await screen.findByText(/No drafts yet/);
-    await screen.user.click(screen.getByRole('button', { name: 'Generate draft' }));
+    await screen.user.click(await screen.findByRole('button', { name: 'Generate draft' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('did not pass the safety screen');
     expect(screen.getByRole('button', { name: 'Generate draft' })).toBeEnabled();
   });

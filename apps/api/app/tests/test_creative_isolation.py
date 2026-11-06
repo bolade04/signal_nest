@@ -19,7 +19,8 @@ criterion 9).
   another organization's parent, or another organization's requester is refused by the job
   itself before any model call.
 * **The reflection** (``GET /creative-capability``) reports only its own workspace, carries
-  nothing but ``enabled``, and agrees with every gated route for every role.
+  nothing but ``enabled`` and ``generation_configured`` (I-5C; every ceiling is set here, so
+  the second follows the first), and agrees with every gated route for every role.
 """
 
 from __future__ import annotations
@@ -426,11 +427,16 @@ def test_the_reflection_reports_its_own_workspace_and_agrees_with_every_gate(
     off = world.workspace("reflect off", enabled=False)
     world.enable(off, enabled=False)
     expected = {plain: global_flag, on: True, off: False}
+    # I-5C: the body is exactly two booleans. Every ceiling is set (the autouse fixture), so
+    # ``generation_configured`` is ``enabled`` itself: true only where generation is enabled,
+    # false for a dark workspace whatever the deployment's ceilings.
     for ws, enabled in expected.items():
         brief = world.seed_brief(ws)
         for role in ALL_ROLES:
             r = world.send("GET", f"/workspaces/{ws}/creative-capability", role)
-            assert (r.status_code, r.json()) == (200, {"enabled": enabled}), (ws, role)
+            assert (r.status_code, r.json()) == (
+                200, {"enabled": enabled, "generation_configured": enabled}
+            ), (ws, role)
             gated = [
                 world.send("GET", f"/workspaces/{ws}/briefs/{brief}/drafts", role),
                 world.send("GET", f"/workspaces/{ws}/drafts/{MISSING}", role),
@@ -447,8 +453,9 @@ def test_the_reflection_reports_its_own_workspace_and_agrees_with_every_gate(
         assert (r.status_code, r.json()["error"]["code"]) == (403, "permission_denied")
     own_b = world.send("GET", f"/workspaces/{world.ws_b}/creative-capability",
                        token=world.owner_b)
-    assert own_b.json() == {"enabled": True}
+    assert own_b.json() == {"enabled": True, "generation_configured": True}
     # Turning one workspace off never changes a sibling's reflection.
     world.enable(on, enabled=False)
     assert world.send("GET", f"/workspaces/{plain}/creative-capability",
-                      "viewer").json() == {"enabled": global_flag}
+                      "viewer").json() == {"enabled": global_flag,
+                                           "generation_configured": global_flag}

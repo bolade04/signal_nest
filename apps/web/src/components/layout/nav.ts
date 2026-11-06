@@ -5,6 +5,7 @@ import {
   LayoutDashboard,
   ListChecks,
   MapPin,
+  PenLine,
   Settings,
   Sparkles,
   Target,
@@ -31,6 +32,12 @@ export interface NavItem {
    * every approval endpoint re-decides role and capability on the server.
    */
   approverOnly?: boolean;
+  /**
+   * Creative drafts (Phase 5C, mounted at I-5C): shown only while `creative_generation`
+   * resolves enabled for the active workspace (`useCreativeVisible`). Drafts are readable by
+   * every member, so no role is filtered. The entry stays in this array for the breadcrumb.
+   */
+  creativeOnly?: boolean;
 }
 
 export const navItems: NavItem[] = [
@@ -71,6 +78,13 @@ export const navItems: NavItem[] = [
     icon: ClipboardCheck,
     description: 'Recommendation briefs awaiting a reviewer decision',
     approverOnly: true,
+  },
+  {
+    to: '/creative',
+    label: 'Creative Drafts',
+    icon: PenLine,
+    description: 'Generated marketing text, reviewed and approved',
+    creativeOnly: true,
   },
   {
     to: '/locations',

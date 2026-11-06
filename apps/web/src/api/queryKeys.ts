@@ -130,6 +130,10 @@ export const queryKeys = {
     ['workspaces', workspaceId, 'drafts', draftId] as const,
   creativeCapability: (workspaceId: string) =>
     ['workspaces', workspaceId, 'creative-capability'] as const,
+  // I-5C (W21 INT5AB): one draft version's decisions, under that draft's key, so the entry
+  // is per workspace and per draft and refreshing a draft reaches its history.
+  draftApprovals: (workspaceId: string, draftId: string) =>
+    ['workspaces', workspaceId, 'drafts', draftId, 'approvals'] as const,
 
   // Project Phase 5D/5E (W21 CF-3; the routes land with the 5D/5E build lanes).
   // 5D: one campaign (`GET /workspaces/{ws}/campaigns/{id}`, 5D-W1) is keyed under the

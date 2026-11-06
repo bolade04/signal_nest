@@ -2525,15 +2525,20 @@
         "type": "object"
       },
       "CreativeGenerationCapabilityOut": {
-        "description": "Customer-visible creative-generation availability for one workspace.\n\nExactly one field (the ``FeedbackCapabilityOut`` precedent): no governance metadata\nreaches a customer.",
+        "description": "Customer-visible creative-generation availability for one workspace.\n\nTwo booleans and nothing else (the ``FeedbackCapabilityOut`` precedent): no governance\nmetadata \u2014 no ceiling name, value, usage or override detail \u2014 reaches a customer.",
         "properties": {
           "enabled": {
             "title": "Enabled",
             "type": "boolean"
+          },
+          "generation_configured": {
+            "title": "Generation Configured",
+            "type": "boolean"
           }
         },
         "required": [
-          "enabled"
+          "enabled",
+          "generation_configured"
         ],
         "title": "CreativeGenerationCapabilityOut",
         "type": "object"
@@ -15166,7 +15171,7 @@
     },
     "/api/v1/workspaces/{workspace_id}/creative-capability": {
       "get": {
-        "description": "Customer-facing, workspace-effective availability (any member). Advisory only: every\ndraft endpoint re-decides and answers 503 while disabled.",
+        "description": "Customer-facing, workspace-effective availability (any member). Advisory only: every\ndraft endpoint re-decides and answers 503 while disabled. ``generation_configured`` uses\nthe generate route's own ceiling check, and is false whenever ``enabled`` is (I-5C).",
         "operationId": "read_creative_capability_api_v1_workspaces__workspace_id__creative_capability_get",
         "parameters": [
           {
