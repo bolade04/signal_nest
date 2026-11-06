@@ -109,6 +109,39 @@ TABLES: dict[str, TableEntry] = {
             retention_class=RetentionClass.ACCOUNT_TOKENS,
         ),
         TableEntry("audit_logs", Category.COMPLIANCE, retention_class=RetentionClass.AUDIT_LOGS),
+        # Project Phase 5B approvals (W21 CF-1; dark until the 5B service writes them):
+        # append-only decisions with FK-less organization/workspace columns, so a decision
+        # survives its scope's deletion like audit_logs (operator decision O-6). Deleting
+        # the organization anonymises them; deleting the deciding account clears the values
+        # naming it (``app.privacy.erasure``). O-6 rider - survival is subject to O-5 and
+        # must not mean indefinite retention by default: they share the ``audit_logs``
+        # retention class (compliance records), whose duration is unset and undecided; no
+        # duration is chosen here, and production refuses to start until it is set.
+        TableEntry("approvals", Category.COMPLIANCE, retention_class=RetentionClass.AUDIT_LOGS),
+        # Project Phase 5C content reviews (W21 CF-2): the output-side claim-safety review of
+        # one draft version (risk level, findings quoting the draft, blocked-claim ids,
+        # required disclaimers, passed). No actor, no account data. Explicit tenant columns;
+        # cascades with its draft, so it is never kept beyond the draft it judges (bounded,
+        # not indefinite: the O-6 rider). No retention class of its own; no duration decided.
+        TableEntry("content_reviews", Category.COMPLIANCE),
+        # Project Phase 5E audited manual exports (W21 CF-3; dark until the 5E service writes
+        # them): append-only records of who exported which approved draft version, in which
+        # format and jurisdiction, with FK-less organization/workspace columns, so a record
+        # survives its scope's deletion like approvals (O-6). Deleting the organization
+        # anonymises them; deleting the exporting account clears the snapshot naming it
+        # (``app.privacy.erasure``). O-6 rider: they share the ``audit_logs`` retention
+        # class (compliance records), whose duration is unset and undecided (O-5).
+        TableEntry("exports", Category.COMPLIANCE, retention_class=RetentionClass.AUDIT_LOGS),
+        # Project Phase 5E in-app notifications and per-user preferences (W21 CF-3; dark until
+        # the 5E service writes them): one account's own feed (event code, subject id, read
+        # and soft-delete instants - no text) and its per-event opt-outs in a workspace. The
+        # account's own data: listed in its account export, never in the organization export
+        # (another member's feed is not the organization's to take). Deleted with the account,
+        # the workspace or the organization (every key CASCADE). No time-based retention
+        # class: whether the feed is purged after a duration is undecided (O-5); the
+        # ``notifications.deleted_at`` marker is the 5E mechanism's, and no duration is set.
+        TableEntry("notifications", Category.ACCOUNT, exported=False),
+        TableEntry("notification_preferences", Category.ACCOUNT, exported=False),
         TableEntry("workspaces", _TENANT),
         TableEntry("workspace_capability_overrides", _TENANT),
         TableEntry("brands", _TENANT),
@@ -124,6 +157,10 @@ TABLES: dict[str, TableEntry] = {
         TableEntry("source_preferences", _TENANT),
         TableEntry("channel_preferences", _TENANT),
         TableEntry("campaigns", _TENANT),
+        # Project Phase 5D campaign membership (W21 CF-3, O-8): campaign/location id pairs of
+        # one workspace (ids only), back-filled from ``campaigns.location_ids``. Exported with
+        # the organization; deleted with its campaign, location, workspace or organization.
+        TableEntry("campaign_locations", _TENANT),
         TableEntry("scout_requests", _TENANT),
         TableEntry("scout_schedules", _TENANT),
         TableEntry("raw_signals", _COLLECTED, retention_class=RetentionClass.SIGNAL_EVIDENCE),
@@ -140,6 +177,19 @@ TABLES: dict[str, TableEntry] = {
         TableEntry("opportunity_scores", _COLLECTED),
         TableEntry("validation_evidence", _COLLECTED),
         TableEntry("opportunity_feedback", _COLLECTED),
+        # Project Phase 5A recommendation briefs (W21 CF-1; dark until the 5A service writes
+        # them): model-derived recommendations bound to an opportunity's evidence, plus the
+        # author snapshot. Exported with the organization; deleted with its workspace; no
+        # retention class of its own - a dependent of ``opportunities`` and of its
+        # intelligence record (CASCADE), purged with them. Deleting the author's account
+        # anonymises ``created_by_snapshot`` and keeps the brief.
+        TableEntry("recommendation_briefs", _COLLECTED),
+        # Project Phase 5C creative drafts (W21 CF-2; dark until the 5C service writes
+        # them): model-generated marketing text from a brief, plus the author snapshot.
+        # Exported with the organization; deleted with its brief/opportunity/workspace; no
+        # retention class of its own (a dependent of ``recommendation_briefs``). Deleting
+        # the author's account anonymises ``created_by_snapshot`` and keeps the draft.
+        TableEntry("creative_drafts", _COLLECTED),
         # W16 customer repairs (PROPOSED): one row per sighting of a finding by a run
         # (``first_seen`` / ``seen_again``, the run's job and cluster). Ids, a kind and instants
         # only - no content. Exported with the organization (scoped by ``organization_id``);

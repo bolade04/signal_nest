@@ -6,6 +6,7 @@ autogenerate.
 
 from __future__ import annotations
 
+from app.approvals.models import Approval  # noqa: F401
 from app.audit.models import AuditLog  # noqa: F401
 from app.auth.models import (  # noqa: F401
     AuthSession,
@@ -13,10 +14,12 @@ from app.auth.models import (  # noqa: F401
     PasswordResetToken,
 )
 from app.brands.models import Brand, BusinessProfile  # noqa: F401
+from app.briefs.models import RecommendationBrief  # noqa: F401
 from app.campaign_context.models import (  # noqa: F401
     AudienceProfile,
     BrandVoiceProfile,
     Campaign,
+    CampaignLocation,
     ChannelPreference,
     ClaimsLibraryEntry,
     CompetitorProfile,
@@ -26,7 +29,9 @@ from app.campaign_context.models import (  # noqa: F401
 )
 from app.capabilities.models import WorkspaceCapabilityOverride  # noqa: F401
 from app.connectors.models import SourceTakedown, SourceTakedownCase  # noqa: F401
+from app.creative.models import ContentReview, CreativeDraft  # noqa: F401
 from app.db.base import Base  # noqa: F401
+from app.exports.models import Export  # noqa: F401
 from app.feedback.models import OpportunityFeedback  # noqa: F401
 from app.intelligence.records import SignalIntelligenceRecord  # noqa: F401
 from app.jobs.models import Job, JobEvent  # noqa: F401
@@ -37,6 +42,7 @@ from app.llm.models import (  # noqa: F401
     LLMUsageEvent,
 )
 from app.locations.models import BusinessLocation, GeoCoverageRule  # noqa: F401
+from app.notifications.models import Notification, NotificationPreference  # noqa: F401
 from app.opportunities.models import (  # noqa: F401
     Opportunity,
     OpportunityObservation,

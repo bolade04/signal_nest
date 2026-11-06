@@ -34,6 +34,7 @@ from datetime import datetime
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.audit.actions import AuditAction
 from app.audit.service import record_audit
 from app.auth.dependencies import _ROLE_RANK, OrganizationContext
 from app.core.enums import Role
@@ -241,7 +242,7 @@ def change_member_role(
         db,
         organization_id=organization_id,
         actor_user_id=ctx.user.id,
-        action="organization_member.role_changed",
+        action=AuditAction.ORGANIZATION_MEMBER_ROLE_CHANGED,
         entity_type="organization_member",
         entity_id=target_user_id,
         previous_state={"role": current_role.value},
@@ -288,7 +289,7 @@ def remove_member(db: Session, *, ctx: OrganizationContext, target_user_id: str)
         db,
         organization_id=organization_id,
         actor_user_id=ctx.user.id,
-        action="organization_member.removed",
+        action=AuditAction.ORGANIZATION_MEMBER_REMOVED,
         entity_type="organization_member",
         entity_id=target_user_id,
         previous_state={"role": current_role.value},

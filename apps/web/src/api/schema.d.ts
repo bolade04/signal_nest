@@ -184,7 +184,25 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Login */
+        /**
+         * Login
+         * @description Sign in with a password; audited (Phase 5B login auditing).
+         *
+         *     * **Success:** one ``auth.login_succeeded`` row per organization of the account,
+         *       committed in the same transaction as the new session (``_fresh_session``), so a
+         *       session never exists without its audit rows and vice versa.
+         *     * **Lock order:** the success rows are written after the session row, not before it.
+         *       Each row references the account (``actor_user_id``), so its foreign-key check locks
+         *       the user row (``FOR KEY SHARE``). Until it opens its session, a sign-in that has
+         *       verified the password must hold no lock on that row, because a concurrent password
+         *       change locks it ``FOR UPDATE`` and must be able to complete in that window (U17-C03).
+         *     * **Refusal:** the answer is the unchanged 401. When the address belongs to an account,
+         *       one ``auth.login_failed`` row per organization of that account (no actor: the caller
+         *       is not authenticated, so no user row is locked) records the closed failure reason,
+         *       and is committed before the 401 is raised (``get_db`` rolls back on an error, so it
+         *       would otherwise be lost). An address that belongs to no account has no organization
+         *       to record against.
+         */
         post: operations["login_api_v1_auth_login_post"];
         delete?: never;
         options?: never;
@@ -1039,7 +1057,14 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Change Member Role */
+        /**
+         * Change Member Role
+         * @description Change a member's role. The role is organization-wide: it applies in every workspace
+         *     of the organization (there are no workspace-scoped roles). Granting ``reviewer`` therefore
+         *     makes the member an approver of recommendation briefs in every workspace (Phase 5B, O-2).
+         *     Exactly OWNER or ADMIN; nobody changes their own role, assigns a role above their own,
+         *     or grants or changes ``owner`` unless they are an owner; the last owner stays. Audited.
+         */
         put: operations["change_member_role_api_v1_organizations__organization_id__members__user_id__role_put"];
         post?: never;
         delete?: never;
@@ -1126,6 +1151,28 @@ export interface paths {
         };
         /** Get Workspace */
         get: operations["get_workspace_api_v1_workspaces__workspace_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/approval-queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Approval Queue
+         * @description The workspace's briefs awaiting a decision, oldest first: the latest version of each
+         *     opportunity's brief whose controlling decision is absent or ``revoked``. Approver role
+         *     only (the approver's work list). Read-only.
+         */
+        get: operations["list_approval_queue_api_v1_workspaces__workspace_id__approval_queue_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1234,6 +1281,54 @@ export interface paths {
         get: operations["list_brands_api_v1_workspaces__workspace_id__brands_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/brief-capability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether recommendation briefs are available for this workspace
+         * @description Customer-facing, workspace-effective brief availability (Phase 5A).
+         *
+         *     Workspace-scoped, not opportunity-scoped: the resolver decides per
+         *     ``(capability, workspace)``. Any member may read it, matching the brief reads. Advisory
+         *     only; the brief endpoints remain the enforcement boundary.
+         */
+        get: operations["read_brief_capability_api_v1_workspaces__workspace_id__brief_capability_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/briefs/{brief_id}/drafts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a brief's drafts, newest version first
+         * @description A bounded page of the brief's immutable draft versions, reviews embedded.
+         */
+        get: operations["list_drafts_api_v1_workspaces__workspace_id__briefs__brief_id__drafts_get"];
+        put?: never;
+        /**
+         * Generate a new draft version from an approved brief (a durable job)
+         * @description Enqueue (or join) the generation of one draft version; poll the returned job.
+         */
+        post: operations["generate_brief_draft_api_v1_workspaces__workspace_id__briefs__brief_id__drafts_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1400,6 +1495,77 @@ export interface paths {
         head?: never;
         /** Update Competitors */
         patch: operations["update_competitors_api_v1_workspaces__workspace_id__competitors__item_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/creative-capability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether creative generation is available for this workspace
+         * @description Customer-facing, workspace-effective availability (any member). Advisory only: every
+         *     draft endpoint re-decides and answers 503 while disabled. ``generation_configured`` uses
+         *     the generate route's own ceiling check, and is false whenever ``enabled`` is (I-5C).
+         */
+        get: operations["read_creative_capability_api_v1_workspaces__workspace_id__creative_capability_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/drafts/{draft_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fetch one draft version with its content review
+         * @description One draft version (any member; gated); unknown or foreign ids answer 404.
+         */
+        get: operations["get_draft_api_v1_workspaces__workspace_id__drafts__draft_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/drafts/{draft_id}/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A draft version's decisions, newest first
+         * @description The draft version's append-only decisions, newest ``decision_seq`` first: the first
+         *     item, when present, is the controlling decision. Read-only.
+         */
+        get: operations["list_draft_approvals_api_v1_workspaces__workspace_id__drafts__draft_id__approvals_get"];
+        put?: never;
+        /**
+         * Record a decision on one draft version (reviewer only)
+         * @description Record one append-only decision (approve / reject / revoke) on the draft's exact
+         *     version. Reviewer only; never the draft's author; ``subject_version`` must be the draft's
+         *     version (409 otherwise); ``revoked`` only withdraws a controlling approval; an approval
+         *     is refused (409 ``approval_review_blocked``) while the draft's content review does not
+         *     allow it.
+         */
+        post: operations["decide_on_draft_api_v1_workspaces__workspace_id__drafts__draft_id__approvals_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/workspaces/{workspace_id}/feedback-capability": {
@@ -1686,6 +1852,84 @@ export interface paths {
         get: operations["get_opportunity_api_v1_workspaces__workspace_id__opportunities__opportunity_id__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/opportunities/{opportunity_id}/briefs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List an opportunity's recommendation briefs, newest version first
+         * @description A bounded page of the opportunity's immutable brief versions (any member; gated).
+         */
+        get: operations["list_opportunity_briefs_api_v1_workspaces__workspace_id__opportunities__opportunity_id__briefs_get"];
+        put?: never;
+        /**
+         * Generate and capture a new recommendation-brief version
+         * @description Generate a brief from one of the opportunity's intelligence records (editor; gated).
+         *
+         *     The record must live in this workspace (404) and belong to this opportunity (422); an
+         *     optional campaign must belong to the workspace (404). Answers 429
+         *     ``llm_budget_exhausted`` when the workspace's AI budget is spent, 503
+         *     ``brief_generation_unavailable`` when the model call fails, 422 ``brief_withheld`` when
+         *     the output fails the safety screen, and 409 when a concurrent capture took the version;
+         *     none of these stores a brief.
+         */
+        post: operations["create_opportunity_brief_api_v1_workspaces__workspace_id__opportunities__opportunity_id__briefs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/opportunities/{opportunity_id}/briefs/{brief_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one recommendation-brief version
+         * @description One immutable brief version of this opportunity (any member; gated).
+         */
+        get: operations["get_opportunity_brief_api_v1_workspaces__workspace_id__opportunities__opportunity_id__briefs__brief_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/opportunities/{opportunity_id}/briefs/{brief_id}/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Brief Decisions
+         * @description The brief version's append-only decisions, newest ``decision_seq`` first: the first
+         *     item, when present, is the controlling decision. Read-only.
+         */
+        get: operations["list_brief_decisions_api_v1_workspaces__workspace_id__opportunities__opportunity_id__briefs__brief_id__approvals_get"];
+        put?: never;
+        /**
+         * Decide On Brief
+         * @description Record one append-only decision (approve / reject / revoke) on the brief's exact
+         *     version. Approver role only; never the brief's author; ``subject_version`` must be the
+         *     brief's version (409 otherwise); ``revoked`` only withdraws a controlling approval.
+         */
+        post: operations["decide_on_brief_api_v1_workspaces__workspace_id__opportunities__opportunity_id__briefs__brief_id__approvals_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2162,17 +2406,33 @@ export interface components {
          * @description Everything stored about the signed-in account (schema version 1).
          */
         AccountExportOut: {
+            /** Approvals Decided */
+            approvals_decided: {
+                [key: string]: unknown;
+            }[];
             /** Audit Events Performed */
             audit_events_performed: {
+                [key: string]: unknown;
+            }[];
+            /** Briefs Authored */
+            briefs_authored: {
                 [key: string]: unknown;
             }[];
             /** Capability Overrides Set */
             capability_overrides_set: {
                 [key: string]: unknown;
             }[];
+            /** Drafts Authored */
+            drafts_authored: {
+                [key: string]: unknown;
+            }[];
             email_keyed_data: components["schemas"]["EmailKeyedDataOut"];
             /** Email Verification Requests */
             email_verification_requests: {
+                [key: string]: unknown;
+            }[];
+            /** Exports Performed */
+            exports_performed: {
                 [key: string]: unknown;
             }[];
             /** Feedback Submitted */
@@ -2193,6 +2453,14 @@ export interface components {
             memberships: {
                 [key: string]: unknown;
             }[];
+            /** Notification Preferences */
+            notification_preferences: {
+                [key: string]: unknown;
+            }[];
+            /** Notifications Received */
+            notifications_received: {
+                [key: string]: unknown;
+            }[];
             /** Password Reset Requests */
             password_reset_requests: {
                 [key: string]: unknown;
@@ -2209,6 +2477,95 @@ export interface components {
             }[];
             subject: components["schemas"]["ExportSubjectOut"];
         };
+        /**
+         * ApprovalDecision
+         * @description The closed decision vocabulary of an append-only approval row (Phase 5B).
+         *
+         *     A change of mind is a new row, never an edit: ``revoked`` withdraws an earlier
+         *     approval of the same subject version. The controlling decision for a subject version
+         *     is the row with the highest ``decision_seq``; consumers gate on that latest row,
+         *     never on "an approved row exists".
+         * @enum {string}
+         */
+        ApprovalDecision: "approved" | "rejected" | "revoked";
+        /**
+         * ApprovalDecisionCreate
+         * @description Strict request body recording one decision on one exact subject version.
+         */
+        ApprovalDecisionCreate: {
+            decision: components["schemas"]["ApprovalDecision"];
+            /** Note */
+            note?: string | null;
+            reason_code?: components["schemas"]["ApprovalReason"] | null;
+            /** Subject Version */
+            subject_version: number;
+        };
+        /**
+         * ApprovalHistoryOut
+         * @description Bounded page of the decisions on one subject, newest ``decision_seq`` first.
+         */
+        ApprovalHistoryOut: {
+            /** Items */
+            items: components["schemas"]["ApprovalOut"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
+        /**
+         * ApprovalOut
+         * @description One stored, immutable decision.
+         */
+        ApprovalOut: {
+            /** Brief Id */
+            brief_id: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Decided By */
+            decided_by: string | null;
+            /** Decided By Snapshot */
+            decided_by_snapshot: string;
+            decided_role: components["schemas"]["Role"];
+            decision: components["schemas"]["ApprovalDecision"];
+            /** Decision Seq */
+            decision_seq: number;
+            /** Draft Id */
+            draft_id: string | null;
+            /** Id */
+            id: string;
+            /** Is Simulated */
+            is_simulated: boolean;
+            /** Note */
+            note: string | null;
+            reason_code: components["schemas"]["ApprovalReason"] | null;
+            /** Subject Id */
+            subject_id: string;
+            subject_type: components["schemas"]["ApprovalSubjectType"];
+            /** Subject Version */
+            subject_version: number;
+            /** Workspace Id */
+            workspace_id: string;
+        };
+        /**
+         * ApprovalReason
+         * @description Why a decider approved, rejected or revoked a subject version.
+         * @enum {string}
+         */
+        ApprovalReason: "evidence_sufficient" | "aligned_with_strategy" | "approved_other" | "insufficient_evidence" | "off_strategy" | "brand_or_compliance_risk" | "inaccurate" | "rejected_other" | "superseded" | "circumstances_changed" | "approved_in_error" | "revoked_other";
+        /**
+         * ApprovalSubjectType
+         * @description What an approval decides on (Phase 5B).
+         *
+         *     Closed: recommendation briefs since CF-1; ``creative_draft`` joined at CF-2 (Phase
+         *     5C), together with the widening migration of the matching CHECK.
+         * @enum {string}
+         */
+        ApprovalSubjectType: "recommendation_brief" | "creative_draft";
         /** AudienceIn */
         AudienceIn: {
             /** Demographics */
@@ -2242,6 +2599,48 @@ export interface components {
             motivations?: string[];
             /** Objections */
             objections?: string[];
+        };
+        /**
+         * AuditAction
+         * @description The closed set of audit actions. The value is the stored ``audit_logs.action``.
+         * @enum {string}
+         */
+        AuditAction: "auth.register" | "auth.login_succeeded" | "auth.login_failed" | "onboarding.completed" | "business_profile.updated" | "organization_member.role_changed" | "organization_member.removed" | "organization_invitation.created" | "organization_invitation.accepted" | "organization_invitation.revoked" | "location.created" | "location.deactivated" | "location.reactivated" | "geo_coverage.updated" | "scout_request.created" | "scout_request.updated" | "scout_request.paused" | "scout_request.resumed" | "scout_request.run" | "scout_schedule.created" | "scout_schedule.paused" | "scout_schedule.resumed" | "scout_schedule.deleted" | "scout_admission.reconciled" | "opportunity.new" | "opportunity.saved" | "opportunity.monitoring" | "opportunity.ignored" | "opportunity.actioned" | "opportunity_feedback.created" | "workspace_capability_override.created" | "workspace_capability_override.updated" | "workspace_capability_override.cleared" | "workspace_capability_override.rejected" | "data_source.taken_down" | "recommendation_brief.created" | "approval.approved" | "approval.rejected" | "approval.revoked" | "claims_library_entry.created" | "claims_library_entry.updated" | "claims_library_entry.retired" | "creative_draft.created" | "creative_draft.exported";
+        /**
+         * AuditLogOut
+         * @description One audit record as an owner, admin or compliance reviewer reads it.
+         */
+        AuditLogOut: {
+            action: components["schemas"]["AuditAction"];
+            /** Actor User Id */
+            actor_user_id: string | null;
+            /** Context */
+            context: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Entity Id */
+            entity_id: string | null;
+            /** Entity Type */
+            entity_type: string | null;
+            /** Id */
+            id: string;
+            /** New State */
+            new_state: {
+                [key: string]: unknown;
+            } | null;
+            /** Previous State */
+            previous_state: {
+                [key: string]: unknown;
+            } | null;
+            /** Reason */
+            reason: string | null;
+            /** Workspace Id */
+            workspace_id: string | null;
         };
         /**
          * BlockedScoutsOverviewOut
@@ -2422,32 +2821,40 @@ export interface components {
             goal?: string | null;
             /** Location Ids */
             location_ids?: string[];
-            /**
-             * Mode
-             * @default per_location
-             */
-            mode: string;
+            /** @default per_location */
+            mode: components["schemas"]["CampaignMode"];
             /** Name */
             name: string;
-            /**
-             * Status
-             * @default active
-             */
-            status: string;
+            /** @default active */
+            status: components["schemas"]["CampaignStatus"];
         };
+        /**
+         * CampaignMode
+         * @enum {string}
+         */
+        CampaignMode: "same_for_all" | "per_location" | "grouped" | "recommend";
         /** CampaignPatch */
         CampaignPatch: {
             /** Goal */
             goal?: string | null;
             /** Location Ids */
             location_ids?: string[];
-            /** Mode */
-            mode?: string;
+            mode?: components["schemas"]["CampaignMode"];
             /** Name */
             name?: string;
-            /** Status */
-            status?: string;
+            status?: components["schemas"]["CampaignStatus"];
         };
+        /**
+         * CampaignStatus
+         * @description The closed lifecycle vocabulary of a campaign (Phase 5D campaign hardening).
+         *
+         *     Validated at the schema layer and by ``ck_campaign_status``. The plan names the enum, not
+         *     its members: these are CF-3's proposal, accepted by the coordinator and disclosed as
+         *     PROPOSED. ``active`` is the default, as it was for the free-string column. Nothing in the
+         *     product reads a campaign's status yet; the members are a vocabulary, not behaviour.
+         * @enum {string}
+         */
+        CampaignStatus: "draft" | "active" | "paused" | "completed" | "archived";
         /** CapabilitiesOut */
         CapabilitiesOut: {
             /** All Configured */
@@ -2473,7 +2880,7 @@ export interface components {
          *     registry below.
          * @enum {string}
          */
-        Capability: "opportunity_feedback" | "scout_scheduling" | "connector_rss";
+        Capability: "opportunity_feedback" | "scout_scheduling" | "connector_rss" | "recommendation_briefs" | "creative_generation" | "content_export";
         /**
          * CapabilityEffectiveListOut
          * @description Effective state for a workspace, one item per resolved capability.
@@ -2722,6 +3129,11 @@ export interface components {
             /** Text */
             text?: string;
         };
+        /**
+         * ClaimRisk
+         * @enum {string}
+         */
+        ClaimRisk: "low" | "medium" | "high" | "blocked";
         /** CompetitorIn */
         CompetitorIn: {
             /** Known Weaknesses */
@@ -2744,6 +3156,46 @@ export interface components {
             /** Website */
             website?: string | null;
         };
+        /** ContentFindingOut */
+        ContentFindingOut: {
+            /** Category */
+            category: string;
+            /** Excerpt */
+            excerpt: string;
+            risk: components["schemas"]["ClaimRisk"];
+        };
+        /**
+         * ContentReviewOut
+         * @description The output-side review of one draft version.
+         */
+        ContentReviewOut: {
+            /** Blocked Claim Ids */
+            blocked_claim_ids: string[];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Disclaimers Resolved */
+            disclaimers_resolved: boolean;
+            /** Draft Id */
+            draft_id: string;
+            /** Draft Version */
+            draft_version: number;
+            /** Findings */
+            findings: components["schemas"]["ContentFindingOut"][];
+            /** Id */
+            id: string;
+            /** Is Blocked */
+            is_blocked: boolean;
+            /** Passed */
+            passed: boolean;
+            /** Required Disclaimers */
+            required_disclaimers: string[];
+            risk_level: components["schemas"]["ClaimRisk"];
+            /** Warnings */
+            warnings: string[];
+        };
         /**
          * CoverageReason
          * @enum {string}
@@ -2754,6 +3206,102 @@ export interface components {
          * @enum {string}
          */
         CoverageStatus: "covered" | "not_covered" | "unavailable";
+        /**
+         * CreativeChannel
+         * @description The text channel a creative draft is written for (Phase 5C; text-first: no image,
+         *     video or audio channel exists). The list is a CF-2 proposal recorded for review.
+         * @enum {string}
+         */
+        CreativeChannel: "social_post" | "email" | "search_ad" | "sms" | "landing_page";
+        /**
+         * CreativeDraftCreate
+         * @description Strict request body to generate one draft version from a brief.
+         */
+        CreativeDraftCreate: {
+            channel: components["schemas"]["CreativeChannel"];
+            /** Parent Draft Id */
+            parent_draft_id?: string | null;
+        };
+        /**
+         * CreativeDraftListOut
+         * @description Bounded, newest-version-first page of a brief's drafts.
+         */
+        CreativeDraftListOut: {
+            /** Items */
+            items: components["schemas"]["CreativeDraftOut"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
+        /**
+         * CreativeDraftOut
+         * @description Customer-safe projection of one stored draft version, with its review.
+         */
+        CreativeDraftOut: {
+            /** Body */
+            body: string;
+            /** Brief Id */
+            brief_id: string;
+            /** Call To Action */
+            call_to_action?: string | null;
+            /** Campaign Id */
+            campaign_id: string | null;
+            channel: components["schemas"]["CreativeChannel"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string | null;
+            /** Created By Snapshot */
+            created_by_snapshot: string;
+            /** Draft Version */
+            draft_version: number;
+            /** Headline */
+            headline?: string | null;
+            /** Id */
+            id: string;
+            /** Is Simulated */
+            is_simulated: boolean;
+            /** Location Id */
+            location_id: string | null;
+            /** Model Identifier */
+            model_identifier: string;
+            /** Opportunity Id */
+            opportunity_id: string;
+            /** Parent Draft Id */
+            parent_draft_id: string | null;
+            /** Prompt Name */
+            prompt_name: string;
+            /** Prompt Version */
+            prompt_version: string;
+            review?: components["schemas"]["ContentReviewOut"] | null;
+        };
+        /**
+         * CreativeGenerationCapabilityOut
+         * @description Customer-visible creative-generation availability for one workspace.
+         *
+         *     Two booleans and nothing else (the ``FeedbackCapabilityOut`` precedent): no governance
+         *     metadata — no ceiling name, value, usage or override detail — reaches a customer.
+         */
+        CreativeGenerationCapabilityOut: {
+            /** Enabled */
+            enabled: boolean;
+            /** Generation Configured */
+            generation_configured: boolean;
+        };
+        /**
+         * CreativeGenerationQueuedOut
+         * @description The generate route's answer: the durable job to poll.
+         */
+        CreativeGenerationQueuedOut: {
+            /** Job Id */
+            job_id: string;
+        };
         /** DataSourceOut */
         DataSourceOut: {
             /** Activatable */
@@ -2980,8 +3528,14 @@ export interface components {
         FeatureFlagsOut: {
             /** Connector Rss Enabled */
             connector_rss_enabled: boolean;
+            /** Content Export Enabled */
+            content_export_enabled: boolean;
+            /** Creative Generation Enabled */
+            creative_generation_enabled: boolean;
             /** Opportunity Feedback Enabled */
             opportunity_feedback_enabled: boolean;
+            /** Recommendation Briefs Enabled */
+            recommendation_briefs_enabled: boolean;
             /** Scout Scheduling Enabled */
             scout_scheduling_enabled: boolean;
         };
@@ -3682,7 +4236,7 @@ export interface components {
          *     error), so an unknown/renamed type can never silently no-op.
          * @enum {string}
          */
-        JobType: "scout_request.execute" | "scout_schedule.tick" | "retention.purge";
+        JobType: "scout_request.execute" | "scout_schedule.tick" | "retention.purge" | "creative.generate";
         /** JobsOverviewOut */
         JobsOverviewOut: {
             /** Dead Letter Count */
@@ -4224,6 +4778,15 @@ export interface components {
             slug: string;
         };
         /**
+         * PartialFetchReason
+         * @description Why a run did not read everything its sources held (``app.connectors.fetch_limits``).
+         *
+         *     ``source_held`` (W21 FU-HELD-BODY-1, PROPOSED): a source was not contacted because its last
+         *     fetch failed and it was cooling down; the copy held from its last good read was used.
+         * @enum {string}
+         */
+        PartialFetchReason: "source_failed" | "source_held" | "fetch_limit_reached";
+        /**
          * PasswordResetConfirmRequest
          * @description Set a new password with a reset token carried in the body, never in a URL.
          *
@@ -4353,6 +4916,98 @@ export interface components {
             /** Unconfigured */
             unconfigured: string[];
         };
+        /**
+         * RecommendationBriefCapabilityOut
+         * @description Customer-visible recommendation-briefs availability for one workspace.
+         *
+         *     Exactly one field (the ``FeedbackCapabilityOut`` precedent). The operator endpoint's
+         *     ``decided_by`` / ``global_flag`` / ``has_override`` / ``override_value`` are governance
+         *     metadata: they would tell a customer the platform-wide rollout posture and that an
+         *     operator intervened on their tenant. A customer needs only whether briefs (and the
+         *     approvals that act on them) are available to them. Returned by
+         *     ``GET /workspaces/{workspace_id}/brief-capability`` (added by the 5A lane).
+         */
+        RecommendationBriefCapabilityOut: {
+            /** Enabled */
+            enabled: boolean;
+        };
+        /**
+         * RecommendationBriefCreate
+         * @description Strict request body to generate and capture one brief version.
+         */
+        RecommendationBriefCreate: {
+            /** Campaign Id */
+            campaign_id?: string | null;
+            /** Intelligence Record Id */
+            intelligence_record_id: string;
+        };
+        /**
+         * RecommendationBriefListOut
+         * @description Bounded, newest-version-first page of an opportunity's briefs.
+         */
+        RecommendationBriefListOut: {
+            /** Items */
+            items: components["schemas"]["RecommendationBriefOut"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
+        /**
+         * RecommendationBriefOut
+         * @description Customer-safe projection of one stored brief version.
+         */
+        RecommendationBriefOut: {
+            /** Analysis Version */
+            analysis_version: string;
+            /** Brief Version */
+            brief_version: number;
+            /** Campaign Id */
+            campaign_id: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string | null;
+            /** Created By Snapshot */
+            created_by_snapshot: string;
+            /** Evidence Refs */
+            evidence_refs?: string[];
+            /** Id */
+            id: string;
+            /** Intelligence Record Id */
+            intelligence_record_id: string;
+            /** Is Simulated */
+            is_simulated: boolean;
+            /** Location Id */
+            location_id: string | null;
+            /** Model Identifier */
+            model_identifier: string;
+            /** Opportunity Id */
+            opportunity_id: string;
+            /** Parent Brief Id */
+            parent_brief_id: string | null;
+            /** Prompt Name */
+            prompt_name: string;
+            /** Prompt Version */
+            prompt_version: string;
+            /** Rationale */
+            rationale: string;
+            /** Recommended Actions */
+            recommended_actions?: string[];
+            /** Risk Notes */
+            risk_notes?: string[];
+            /** Scoring Version */
+            scoring_version: string;
+            /** Suggested Angles */
+            suggested_angles?: string[];
+            /** Summary */
+            summary: string;
+        };
         /** RegisterRequest */
         RegisterRequest: {
             /**
@@ -4439,7 +5094,13 @@ export interface components {
          * @description Why, in a closed customer-safe code (null where the outcome says it all).
          * @enum {string}
          */
-        RunOutcomeReason: "paused_during_run" | "another_run_active" | "another_run_took_over" | "worker_lost" | "scout_changed" | "scout_removed" | "earlier_operation_timed_out" | "too_many_signals" | "retries_exhausted" | "worker_stopped_responding" | "internal";
+        RunOutcomeReason: "paused_during_run" | "another_run_active" | "another_run_took_over" | "worker_lost" | "scout_changed" | "scout_removed" | "earlier_operation_timed_out" | "earlier_operation_unresolved" | "too_many_signals" | "retries_exhausted" | "worker_stopped_responding" | "internal";
+        /**
+         * RunRefusalReason
+         * @description Why a run was refused before analysis (P6-PLAT-1 strategy B).
+         * @enum {string}
+         */
+        RunRefusalReason: "signal_volume_above_bound";
         /**
          * RunStats
          * @description Aggregate per-run counts, sourced verbatim from the durable job's
@@ -4709,6 +5370,8 @@ export interface components {
             product_profile_id: string | null;
             /** Resolved Market */
             resolved_market: string | null;
+            /** @description The latest recorded run's outcome (PROPOSED, Q1 (a+)): what ran, what did not and one next action, lifted from stats. Null when the stats record none (no result yet, or a completed run recorded before per-source fetch facts existed). */
+            run_outcome?: components["schemas"]["ScoutRunOutcome"] | null;
             /** Source Types */
             source_types: string[];
             /** Stats */
@@ -4748,6 +5411,62 @@ export interface components {
             /** Source Types */
             source_types?: components["schemas"]["SourceType"][] | null;
         };
+        /**
+         * ScoutRunNextAction
+         * @description The one next step a customer can take in the product today.
+         *
+         *     ``narrow_request``: edit the Scout to use fewer source types or keywords, then run it again
+         *     (a refusal). ``run_again_later``: run the Scout again later (a source failed).
+         *     ``wait_for_source_retry`` (W21 FU-HELD-BODY-1, PROPOSED): a source the run did not read
+         *     (failed, or its held copy used) is cooling down after a failed fetch, until
+         *     ``ScoutRunOutcome.next_retry_at`` (``null``: not recorded) in the worker that ran the run; run
+         *     the Scout again after then, since a run before then may not reach it (another worker, or a
+         *     restarted one, may reach it sooner). ``no_action``: nothing the
+         *     customer can do changes the result (only a fetch limit clipped a source: no setting raises
+         *     it, and a re-run reads the same limit).
+         * @enum {string}
+         */
+        ScoutRunNextAction: "narrow_request" | "run_again_later" | "wait_for_source_retry" | "no_action";
+        /**
+         * ScoutRunOutcome
+         * @description The latest recorded run's outcome (Q1 (a+), W21 FU-Q1-1, PROPOSED).
+         *
+         *     Lifted read-only from ``stats``, which hold the result of the latest run that completed or
+         *     was refused at the bound (a cancelled, stopped, skipped or otherwise failed run writes no
+         *     stats; its outcome is on the job). **What ran:** ``sources`` (every consulted source, ``[]``
+         *     when none covered the market, ``null`` when the run recorded no per-source facts) and the
+         *     counts in ``stats`` (``RunStats`` keys). **What did not:** ``refusal_reason`` and ``bound``
+         *     for a refusal, ``partial_reasons`` and the clipped, failed or held ``sources``. **One next
+         *     action:** ``next_action`` (``null`` for a complete run), and ``next_retry_at`` with
+         *     ``wait_for_source_retry`` (W21 FU-HELD-BODY-1, PROPOSED): the latest ``next_retry_at`` of the
+         *     sources the run did not read, so a run after it may contact each of them again; ``null`` when
+         *     no such time was recorded, and for every other next action.
+         */
+        ScoutRunOutcome: {
+            /** Bound */
+            bound: number | null;
+            kind: components["schemas"]["ScoutRunOutcomeKind"];
+            next_action: components["schemas"]["ScoutRunNextAction"] | null;
+            /** Next Retry At */
+            next_retry_at: string | null;
+            /** Partial Reasons */
+            partial_reasons: components["schemas"]["PartialFetchReason"][];
+            refusal_reason: components["schemas"]["RunRefusalReason"] | null;
+            /** Sources */
+            sources: components["schemas"]["ScoutRunSource"][] | null;
+        };
+        /**
+         * ScoutRunOutcomeKind
+         * @description How completely the latest recorded run read its sources.
+         *
+         *     ``complete``: the run completed and every source it consulted was read in full.
+         *     ``partial``: the run completed, but at least one source was clipped by its fetch limit,
+         *     failed, or was not contacted during a failure cool-down and its held copy was used (W21
+         *     FU-HELD-BODY-1). ``refused``: the run was refused at the per-run bound before anything was
+         *     analysed.
+         * @enum {string}
+         */
+        ScoutRunOutcomeKind: "complete" | "partial" | "refused";
         /** ScoutRunResult */
         ScoutRunResult: {
             /** Scout Request Id */
@@ -4758,6 +5477,48 @@ export interface components {
             };
             /** Status */
             status: string;
+        };
+        /**
+         * ScoutRunSource
+         * @description What one consulted source delivered in the run (one ``stats.fetch_limits`` entry).
+         *
+         *     ``fetched`` entries were read within the source's limit, ``eligible_seen`` of them matched the
+         *     Scout's keywords. ``clipped`` is true when the source held more than ``max_items`` (``null``:
+         *     the source declares no limit). ``failed`` is true when the source contributed nothing because
+         *     it failed; ``failure_reason`` is then its closed code (``null`` for a code this API does not
+         *     know, so the failure itself is never dropped). Counts and codes only.
+         *
+         *     How the content was obtained (W21 FU-HELD-BODY-1, PROPOSED): ``read_mode`` (``null`` for a
+         *     failed source, and when the run did not record it - a run recorded before this fact existed,
+         *     whose sources may or may not have been read in that run). ``held`` means the source was not
+         *     contacted: its last fetch failed and it was cooling down, so the copy held from its last good
+         *     read was used; ``last_failure_reason`` is then that failure's closed code. ``last_read_at``:
+         *     when the source last answered successfully for the copy used (``null`` when not recorded: the
+         *     copy's age is then unknown). ``next_retry_at``: while the source cools down after a failed
+         *     fetch, the earliest time the worker that ran this run contacts it again (``null`` when it is
+         *     not cooling down, or this was not recorded). These times come from one worker process; another
+         *     worker, or a restarted one, keeps no such record and may contact the source sooner.
+         */
+        ScoutRunSource: {
+            /** Clipped */
+            clipped: boolean;
+            /** Eligible Seen */
+            eligible_seen: number;
+            /** Failed */
+            failed: boolean;
+            failure_reason: components["schemas"]["SourceFailureReason"] | null;
+            /** Fetched */
+            fetched: number;
+            last_failure_reason?: components["schemas"]["SourceFailureReason"] | null;
+            /** Last Read At */
+            last_read_at?: string | null;
+            /** Max Items */
+            max_items: number | null;
+            /** Next Retry At */
+            next_retry_at?: string | null;
+            read_mode?: components["schemas"]["SourceReadMode"] | null;
+            /** Source Key */
+            source_key: string;
         };
         /**
          * ScoutScheduleCreate
@@ -4822,6 +5583,12 @@ export interface components {
             token_type: string;
             user: components["schemas"]["UserOut"];
         };
+        /**
+         * SourceFailureReason
+         * @description Why one source failed and contributed nothing (``app.connectors.fetch_limits``).
+         * @enum {string}
+         */
+        SourceFailureReason: "feed_too_large" | "xml_unsafe" | "xml_malformed" | "rate_limited" | "retries_exhausted" | "response_refused" | "egress_blocked" | "fetch_error";
         /** SourcePrefIn */
         SourcePrefIn: {
             /** Config */
@@ -4847,6 +5614,19 @@ export interface components {
             /** Source Type */
             source_type?: string;
         };
+        /**
+         * SourceReadMode
+         * @description How a source that was not failed provided the content a run used (``read_mode``).
+         *
+         *     ``fetched``: the source sent its content in this run (a live ``200``, or a simulated source
+         *     read in this run). ``revalidated``: the source answered this run's conditional request with
+         *     ``304 Not Modified``, so the copy held from its last good read is current. ``reused``: the
+         *     source was not contacted, because its last read succeeded less than one politeness interval
+         *     ago. ``held``: the source was not contacted, because its last fetch failed and it is cooling
+         *     down; the copy held from its last good read was used (its age is that read's age).
+         * @enum {string}
+         */
+        SourceReadMode: "fetched" | "revalidated" | "reused" | "held";
         /**
          * SourceType
          * @enum {string}
@@ -6893,6 +7673,42 @@ export interface operations {
             };
         };
     };
+    list_approval_queue_api_v1_workspaces__workspace_id__approval_queue_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecommendationBriefListOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_audiences_api_v1_workspaces__workspace_id__audiences_get: {
         parameters: {
             query?: {
@@ -7051,6 +7867,13 @@ export interface operations {
             query?: {
                 limit?: number;
                 cursor?: string | null;
+                action?: components["schemas"]["AuditAction"] | null;
+                entity_type?: string | null;
+                entity_id?: string | null;
+                /** @description Inclusive lower bound on created_at (UTC if no offset). */
+                created_from?: string | null;
+                /** @description Exclusive upper bound on created_at (UTC if no offset). */
+                created_before?: string | null;
             };
             header?: {
                 authorization?: string | null;
@@ -7072,9 +7895,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": components["schemas"]["AuditLogOut"][];
                 };
             };
             /** @description Validation Error */
@@ -7261,6 +8082,114 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BrandOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_brief_capability_api_v1_workspaces__workspace_id__brief_capability_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecommendationBriefCapabilityOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_drafts_api_v1_workspaces__workspace_id__briefs__brief_id__drafts_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                brief_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreativeDraftListOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    generate_brief_draft_api_v1_workspaces__workspace_id__briefs__brief_id__drafts_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                brief_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreativeDraftCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreativeGenerationQueuedOut"];
                 };
             };
             /** @description Validation Error */
@@ -7943,6 +8872,148 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_creative_capability_api_v1_workspaces__workspace_id__creative_capability_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreativeGenerationCapabilityOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_draft_api_v1_workspaces__workspace_id__drafts__draft_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreativeDraftOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_draft_approvals_api_v1_workspaces__workspace_id__drafts__draft_id__approvals_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalHistoryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_on_draft_api_v1_workspaces__workspace_id__drafts__draft_id__approvals_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApprovalDecisionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalOut"];
                 };
             };
             /** @description Validation Error */
@@ -8641,6 +9712,193 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OpportunityDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_opportunity_briefs_api_v1_workspaces__workspace_id__opportunities__opportunity_id__briefs_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                opportunity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecommendationBriefListOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_opportunity_brief_api_v1_workspaces__workspace_id__opportunities__opportunity_id__briefs_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                opportunity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecommendationBriefCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecommendationBriefOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_opportunity_brief_api_v1_workspaces__workspace_id__opportunities__opportunity_id__briefs__brief_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                opportunity_id: string;
+                brief_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecommendationBriefOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_brief_decisions_api_v1_workspaces__workspace_id__opportunities__opportunity_id__briefs__brief_id__approvals_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                opportunity_id: string;
+                brief_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalHistoryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_on_brief_api_v1_workspaces__workspace_id__opportunities__opportunity_id__briefs__brief_id__approvals_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                opportunity_id: string;
+                brief_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApprovalDecisionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalOut"];
                 };
             };
             /** @description Validation Error */

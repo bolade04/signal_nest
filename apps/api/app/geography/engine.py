@@ -8,7 +8,8 @@ Testable without FastAPI or a database. Handles:
 Markets are compared by structured identity (``app.geography.markets``), never by
 substring, and coverage fails closed (P6-DATA-6): a market that cannot be placed,
 or a rule that names no place it could be compared with, is outside the scout area.
-Only an ``online`` / ``online_global`` rule admits every market.
+Exclusions are evaluated first and bind every rule (Project Phase 5D): an ``online`` /
+``online_global`` rule admits every market its exclusions do not remove.
 """
 
 from __future__ import annotations
@@ -131,19 +132,37 @@ def coverage_scopes(rule: CoverageRule) -> list[MarketIdentity]:
     return [scope for scope in scopes if scope.is_qualified]
 
 
-def market_in_coverage(rule: CoverageRule, market: str | None) -> bool:
-    """Decide whether an observed market falls inside a coverage rule (fail closed)."""
-    if rule.online_global or rule.coverage_type == "online":
-        return True
-    if parse_observed(market) is None:
-        return False
-    # Explicit exclusions always win, including over a market they cannot rule out.
+def is_excluded(rule: CoverageRule, market: str | None) -> bool:
+    """True when one of the rule's exclusions may cover the observed market.
+
+    Explicit exclusions always win, including over a market they cannot rule out: an
+    exclusion removes every market that no known component separates from it (structured
+    identity, ``may_overlap``; "York" does not remove "New York"), and a market that
+    cannot be read at all is removed by any exclusion.
+    """
     country = _context_country(rule)
     observed = parse_observed(market)
     for text in rule.excluded_markets:
         excluded = parse_market(text, default_country=country)
         if excluded is not None and may_overlap(observed, excluded):
-            return False
+            return True
+    return False
+
+
+def market_in_coverage(rule: CoverageRule, market: str | None) -> bool:
+    """Decide whether an observed market falls inside a coverage rule (fail closed).
+
+    Exclusions are evaluated **before** any short-circuit (Project Phase 5D §2, exit
+    criterion 5): an ``online_global`` rule and an ``online`` rule admit every market
+    except the ones their exclusions remove. A rule without exclusions decides exactly as
+    before.
+    """
+    if is_excluded(rule, market):
+        return False
+    if rule.online_global or rule.coverage_type == "online":
+        return True
+    if parse_observed(market) is None:
+        return False
     # Radius distance is not evaluated here: an observed market carries no
     # coordinates (see ``is_within_radius``), so the market scope stands in for it.
     return any(text_within(market, scope) for scope in coverage_scopes(rule))

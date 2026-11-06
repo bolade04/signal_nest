@@ -94,6 +94,10 @@ EDITORS = (OWNER, ADMIN, MARKETER)  # require_role(OWNER, ADMIN, MARKETER): a ra
 ORG_ADMINS = (OWNER, ADMIN)  # require_exact_organization_roles(OWNER, ADMIN)
 ORG_OWNER = (OWNER,)  # require_exact_organization_roles(OWNER) -- P6-PRIV-1
 AUDIT_READERS = (OWNER, ADMIN, COMPLIANCE)  # require_exact_roles(...) -- P6-AUTH-3
+APPROVERS = (REVIEWER,)  # require_exact_roles(REVIEWER) -- Phase 5B, O-2 (approvals.policy)
+APPROVAL_HISTORY_READERS = (OWNER, ADMIN, MARKETER, REVIEWER, COMPLIANCE)  # Phase 5B
+#: W21 CF-2: the claims library is a protected control -- exact roles, marketers excluded.
+CLAIMS_STEWARDS = (OWNER, ADMIN, COMPLIANCE)  # require_exact_roles(...) -- CF-2
 
 # Categories.
 RANK_FLOOR = "role_gated_workspace_rank_floor"
@@ -141,6 +145,9 @@ JOB_404 = "Job not found in this workspace."
 LOCATION_404 = "Location not found in this workspace."
 SCHEDULING_DARK = "Scout scheduling is not available yet."
 FEEDBACK_DARK = "Opportunity feedback is not available yet."
+BRIEFS_DARK = "Recommendation briefs are not available yet."  # Project Phase 5A
+APPROVALS_DARK = "Recommendation briefs and approvals are not available yet."  # Phase 5B
+CREATIVE_DARK = "Creative generation is not available yet."
 # New in 6B-3A. Messages are the service's; the codes are frozen by the contract (§50).
 INVITATION_NOT_FOUND = ("invitation_not_found", "Invitation not found.")
 MEMBER_NOT_FOUND = ("member_not_found", "Member not found.")
@@ -180,31 +187,45 @@ _CONTEXT = (
 _W = "/workspaces/{workspace_id}"
 _O = "/organizations/{organization_id}"
 
+
+def _writers(collection: str) -> tuple[tuple[str, ...], str]:
+    """Who may write a context collection, and the gate's category. The claims library is
+    the W21 CF-2 protected control (exact OWNER/ADMIN/COMPLIANCE_REVIEWER); every other
+    collection keeps the OWNER/ADMIN/MARKETER rank floor."""
+    if collection == "claims":
+        return CLAIMS_STEWARDS, WS_EXACT
+    return EDITORS, RANK_FLOOR
+
 #: The explicit policy table. 57 role-gated rows (39 that existed before 6B-3A + 5 new
 #: OWNER/ADMIN routes + 9 context-collection PATCH routes from P6-PLAT-9 + the location
 #: deactivate/reactivate pair of P6-UI-023), 26 membership-only rows (25 workspace,
 #: incl. the P6-UI-006 scheduling-capability reflection, + 1 new organization route; P6-PRIV-1 adds
 #: 2 OWNER-only organization routes, counted in ORG_EXACT), and
-#: the 2 GET routes whose membership check is inside the handler.
+#: the 2 GET routes whose membership check is inside the handler. Project Phase 5A adds 4:
+#: the editor-only brief capture (RANK_FLOOR), the two member-gated brief reads and the
+#: member-gated brief-capability reflection.
+#: Phase 5B adds 3 exact-set rows (WS_EXACT): recording a decision and reading the approval
+#: queue (REVIEWER exactly) and a brief's decision history (every role but viewer).
+#: W21 CF-2 moves the three claims write routes (POST, PATCH, DELETE) from the rank floor to
+#: an exact set.
 E7_POLICY: tuple[Policy, ...] = (
     # --- role-gated, workspace scope, rank floor (require_role(OWNER, ADMIN, MARKETER)) -----
     _row("POST", f"{_W}/onboarding", "workspace", EDITORS, RANK_FLOOR, _body_422()),
     _row("PUT", f"{_W}/business-profile", "workspace", EDITORS, RANK_FLOOR, _body_422()),
-    *(_row("POST", f"{_W}/{c}", "workspace", EDITORS, RANK_FLOOR, _body_422()) for c in _CONTEXT),
+    *(_row("POST", f"{_W}/{c}", "workspace", *_writers(c), _body_422()) for c in _CONTEXT),
     *(
         _row(
             "DELETE",
             f"{_W}/{c}/{{item_id}}",
             "workspace",
-            EDITORS,
-            RANK_FLOOR,
+            *_writers(c),
             _handler_404(ITEM_404),
         )
         for c in _CONTEXT
     ),
     # P6-PLAT-9: the body is validated after the gate, so an admitted role's ``[]`` is a 422.
     *(
-        _row("PATCH", f"{_W}/{c}/{{item_id}}", "workspace", EDITORS, RANK_FLOOR, _body_422())
+        _row("PATCH", f"{_W}/{c}/{{item_id}}", "workspace", *_writers(c), _body_422())
         for c in _CONTEXT
     ),
     _row("POST", f"{_W}/locations", "workspace", EDITORS, RANK_FLOOR, _body_422()),
@@ -296,6 +317,24 @@ E7_POLICY: tuple[Policy, ...] = (
         RANK_FLOOR,
         _dark_503(FEEDBACK_DARK),
     ),
+    # Project Phase 5A: brief capture is editor-only (the feedback set, a rank floor).
+    _row(
+        "POST",
+        f"{_W}/opportunities/{{opportunity_id}}/briefs",
+        "workspace",
+        EDITORS,
+        RANK_FLOOR,
+        _body_422(),
+    ),
+    # Phase 5C (W21 lane P5C): generating a draft is editor-only (the brief-capture set).
+    _row(
+        "POST",
+        f"{_W}/briefs/{{brief_id}}/drafts",
+        "workspace",
+        EDITORS,
+        RANK_FLOOR,
+        _body_422(),
+    ),
     _row(
         "POST",
         f"{_W}/jobs/{{job_id}}/cancel",
@@ -306,6 +345,43 @@ E7_POLICY: tuple[Policy, ...] = (
     ),
     # --- role-gated, workspace scope, exact set -- the P6-AUTH-3 audit-route case ----------
     _row("GET", f"{_W}/audit-logs", "workspace", AUDIT_READERS, WS_EXACT, OK_200),
+    # --- role-gated, workspace scope, exact set -- Phase 5B approvals (W21 P5B) ---------------
+    # Dark by default: an admitted role clears the gate and meets the capability's 503 (the
+    # GETs) or the body validation that FastAPI runs before the handler (the POST).
+    _row(
+        "POST",
+        f"{_W}/opportunities/{{opportunity_id}}/briefs/{{brief_id}}/approvals",
+        "workspace",
+        APPROVERS,
+        WS_EXACT,
+        _body_422(),
+    ),
+    _row(
+        "GET",
+        f"{_W}/opportunities/{{opportunity_id}}/briefs/{{brief_id}}/approvals",
+        "workspace",
+        APPROVAL_HISTORY_READERS,
+        WS_EXACT,
+        _dark_503(APPROVALS_DARK),
+    ),
+    _row(
+        "GET", f"{_W}/approval-queue", "workspace", APPROVERS, WS_EXACT, _dark_503(APPROVALS_DARK)
+    ),
+    # --- role-gated, workspace scope, exact set -- Phase 5C draft decisions (W21 P5C) ---------
+    # The 5B decision rules on a draft version, dark behind creative_generation: the reviewer
+    # decides (POST: body validation first), every role but viewer reads the history (503).
+    _row(
+        "POST", f"{_W}/drafts/{{draft_id}}/approvals", "workspace", APPROVERS, WS_EXACT,
+        _body_422(),
+    ),
+    _row(
+        "GET",
+        f"{_W}/drafts/{{draft_id}}/approvals",
+        "workspace",
+        APPROVAL_HISTORY_READERS,
+        WS_EXACT,
+        _dark_503(CREATIVE_DARK),
+    ),
     # --- role-gated, organization scope, exact set ------------------------------------------
     _row("POST", f"{_O}/workspaces", "organization", ORG_ADMINS, ORG_EXACT, _body_422()),
     _row("POST", f"{_O}/invitations", "organization", ORG_ADMINS, ORG_EXACT, _body_422()),
@@ -343,6 +419,22 @@ E7_POLICY: tuple[Policy, ...] = (
     # P6-UI-006: the workspace-effective scheduling reflection is member-gated like the
     # schedule read it describes (feedback's reflection, above, is editor-gated).
     _row("GET", f"{_W}/scheduling-capability", "workspace", ALL_ROLES, MEMBER_WS, OK_200),
+    # Phase 5C (W21 lane P5C): drafts are read by every member, like the brief they come
+    # from (so the approving reviewer can read them); dark until the capability resolves
+    # enabled. The availability reflection is member-gated like those reads.
+    _row("GET", f"{_W}/creative-capability", "workspace", ALL_ROLES, MEMBER_WS, OK_200),
+    _row(
+        "GET",
+        f"{_W}/briefs/{{brief_id}}/drafts",
+        "workspace",
+        ALL_ROLES,
+        MEMBER_WS,
+        _dark_503(CREATIVE_DARK),
+    ),
+    _row(
+        "GET", f"{_W}/drafts/{{draft_id}}", "workspace", ALL_ROLES, MEMBER_WS,
+        _dark_503(CREATIVE_DARK),
+    ),
     _row(
         "GET",
         f"{_W}/business-profile",
@@ -391,6 +483,22 @@ E7_POLICY: tuple[Policy, ...] = (
             _handler_404(JOB_404),
         )
         for tail in ("", "/events")
+    ),
+    # Project Phase 5A: the workspace-effective brief reflection, member-gated like the
+    # brief reads it describes and never 503 (it reports the capability decision).
+    _row("GET", f"{_W}/brief-capability", "workspace", ALL_ROLES, MEMBER_WS, OK_200),
+    # Project Phase 5A: brief reads are member-gated like the opportunity they belong to
+    # (a 5B reviewer reads the brief it approves); dark by default, so the probe is the 503.
+    *(
+        _row(
+            "GET",
+            f"{_W}/opportunities/{{opportunity_id}}/briefs{tail}",
+            "workspace",
+            ALL_ROLES,
+            MEMBER_WS,
+            _dark_503(BRIEFS_DARK),
+        )
+        for tail in ("", "/{brief_id}")
     ),
     # workspace_id is a QUERY parameter here; the body is the probe.
     _row("POST", "/geocode", "workspace", ALL_ROLES, MEMBER_WS, _body_422()),
@@ -557,8 +665,12 @@ class TestPolicyTableCompleteness:
             c: sum(1 for r in served if r.category == c) for c in {r.category for r in served}
         }
         assert counts == {
-            "role_gated": 58,
-            MEMBER_WS: 25,
+            # W21 P5C on the I-5AB + CF-2 base (62 / 28): +1 role-gated (POST
+            # .../briefs/{brief_id}/drafts), +3 workspace membership (the two draft reads and
+            # the creative-capability reflection). Recomputed from the served routes.
+            # +2 W21 P5C draft decisions (POST and GET .../drafts/{draft_id}/approvals).
+            "role_gated": 65,
+            MEMBER_WS: 31,
             MEMBER_ORG: 1,
             "operator": OPERATOR_ROUTE_COUNT,
             "authenticated": len(AUTHENTICATED_ONLY) + 2,
@@ -568,10 +680,17 @@ class TestPolicyTableCompleteness:
             c: sum(1 for p in E7_POLICY if p.category == c) for c in {p.category for p in E7_POLICY}
         }
         assert by_category == {
-            RANK_FLOOR: 48,
-            WS_EXACT: 1,
+            # 48 at CF-1; +1 Phase 5A (brief capture); -3 W21 CF-2 (claims writes -> WS_EXACT);
+            # +1 W21 P5C (generate a draft).
+            RANK_FLOOR: 47,
+            # 1 at CF-1 (audit-logs); +3 Phase 5B (approvals); +3 W21 CF-2 (claims writes).
+            # Both sides moved this pin from 1 to 4, so git kept one 4: the union is 7.
+            # +2 W21 P5C (the draft decision POST and its history GET).
+            WS_EXACT: 9,
             ORG_EXACT: 9,
-            MEMBER_WS: 25,
+            # 25 at N; +3 Phase 5A (brief reads, brief-capability); +3 W21 P5C (draft reads,
+            # creative-capability).
+            MEMBER_WS: 31,
             MEMBER_ORG: 1,
             MEMBER_HANDLER: 2,
         }
@@ -602,7 +721,18 @@ class TestPolicyTableCompleteness:
         # POST /internal/system/data-sources/{source_key}/takedown, both operator-only.
         # 126 -> 127 (D-9e): GET /internal/system/data-sources/{source_key}/cases, the
         # operator-only read of the restricted takedown case record.
-        assert len(served) == 127
+        # 127 -> 131 (Project Phase 5A): POST .../opportunities/{opportunity_id}/briefs, a
+        # RANK_FLOOR row; GET .../briefs, GET .../briefs/{brief_id} and
+        # GET /workspaces/{workspace_id}/brief-capability, MEMBER_WS rows.
+        # 131 -> 134 (Phase 5B, W21 P5B; I-5A/I-5B integration): POST and GET
+        # .../briefs/{brief_id}/approvals and GET /workspaces/{workspace_id}/approval-queue,
+        # each a WS_EXACT row above.
+        # 134 -> 138 (W21 P5C): POST and GET /workspaces/{workspace_id}/briefs/{brief_id}/drafts,
+        # GET /workspaces/{workspace_id}/drafts/{draft_id} and GET .../creative-capability:
+        # one RANK_FLOOR row and three MEMBER_WS rows above, all customer operations.
+        # 138 -> 140 (W21 P5C draft decisions): POST and GET
+        # /workspaces/{workspace_id}/drafts/{draft_id}/approvals, two WS_EXACT rows above.
+        assert len(served) == 140
 
     def test_one_row_per_route(self):
         keys = [p.key for p in E7_POLICY]
@@ -610,7 +740,7 @@ class TestPolicyTableCompleteness:
 
     def test_rows_are_machine_readable_and_partition_the_roles(self):
         rows = json.loads(json.dumps([asdict(p) for p in E7_POLICY]))
-        assert len(rows) == 86
+        assert len(rows) == 99  # 93 on the I-5AB + CF-2 base; +6 W21 P5C (the draft routes)
         for row in rows:
             assert set(row) == {"method", "path", "scope", "allowed", "denied", "category", "probe"}
             assert set(row["allowed"]) | set(row["denied"]) == set(ALL_ROLES)
@@ -629,7 +759,9 @@ class TestPolicyTableCompleteness:
         assert diff["membership_missing_from_table"] == [victim_member.key]
 
     def test_completeness_check_fails_when_a_role_set_drifts(self):
-        audit = next(p for p in E7_POLICY if p.category == WS_EXACT)
+        audit = next(
+            p for p in E7_POLICY if p.category == WS_EXACT and p.path.endswith("/audit-logs")
+        )
         drifted = tuple(
             _row(p.method, p.path, p.scope, (OWNER, ADMIN), p.category, p.probe)
             if p is audit
@@ -873,6 +1005,8 @@ def _url(world: World, policy: Policy) -> tuple[str, dict[str, str] | None]:
         "{job_id}",
         "{invitation_id}",
         "{user_id}",
+        "{brief_id}",  # Project Phase 5A (briefs), Phase 5B (approvals), W21 P5C (drafts)
+        "{draft_id}",  # W21 P5C
     ):
         path = path.replace(name, SENTINEL)
     assert "{" not in path, path

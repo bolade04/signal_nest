@@ -51,6 +51,7 @@ from datetime import UTC, datetime
 from sqlalchemy import BigInteger, Text, cast, delete, func, literal, select
 from sqlalchemy.orm import Session
 
+from app.audit.actions import AuditAction
 from app.audit.service import record_audit
 from app.connectors.feedcache import feed_cache
 from app.connectors.models import SourceTakedown, SourceTakedownCase
@@ -71,7 +72,7 @@ logger = get_logger("signalnest.connectors.takedown")
 
 _CHUNK = 500
 #: Audit action written in each workspace a takedown removed something from.
-AUDIT_ACTION = "data_source.taken_down"
+AUDIT_ACTION = AuditAction.DATA_SOURCE_TAKEN_DOWN
 _AUDIT_REASON = (
     "The platform operator took down a data source; content it supplied was removed "
     "from this workspace."

@@ -400,7 +400,7 @@ def seeded(tmp_path_factory):
 
 
 def _rerun(factory, monkeypatch, service):
-    monkeypatch.setattr(pipeline, "llm_service", service)
+    monkeypatch.setattr("app.llm.service.llm_service", service)
     monkeypatch.setattr(pipeline, "get_settings", offline_settings)
     with factory() as db:
         request_id = db.scalars(select(ScoutRequest.id).order_by(ScoutRequest.id)).first()
