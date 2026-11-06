@@ -49,7 +49,7 @@ from app.connectors.fetch_limits import (
     fetch_stats,
 )
 from app.core.config import get_settings
-from app.jobs import pipeline
+from app.llm import service as service_module
 from app.llm.mock import MockLLMProvider
 from app.llm.service import LLMService
 from app.scouting_requests.models import ScoutRequest
@@ -640,7 +640,9 @@ def _offline_except_origin(port: int) -> Iterator[None]:
     provider = MockLLMProvider(model=settings.llm_model or "mock-1", seed=settings.llm_mock_seed)
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(httpx.HTTPTransport, "handle_request", only_the_origin)
-        mp.setattr(pipeline, "llm_service", LLMService(provider, settings=settings))
+        # The pipeline reads the service through get_llm_service() (#291): patch it where that
+        # reads it, as offline_llm does.
+        mp.setattr(service_module, "llm_service", LLMService(provider, settings=settings))
         yield
 
 
