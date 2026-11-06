@@ -33,8 +33,8 @@ Design, mirroring the scouting-schedule route boundary:
   cross-workspace signal. Reads are a bounded, reverse-chronological projection that
   never mutates anything.
 
-Transaction ownership follows the house rule: the route/service ``flush`` and the
-request-scoped ``get_db`` override owns the commit.
+Transaction ownership: the route/service ``flush``; ``WriteDb`` (:mod:`app.db.request_tx`)
+commits before the response is sent.
 """
 
 from __future__ import annotations

@@ -863,3 +863,30 @@ class TestSequence:
 
         exc = IntegrityError("INSERT ...", {}, Exception(message))
         assert approvals_service._is_sequence_clash(exc) is clash
+
+
+class TestCommitBeforeTheAnswer:
+    def test_the_decision_and_its_audit_row_are_committed_before_the_201(self, env: Env, briefs_on):
+        """O9 / I-O9-1: durable although the request session's teardown rolls back."""
+        committed = app.dependency_overrides[get_db]
+        factory = sessionmaker(
+            bind=env.witness, autoflush=False, expire_on_commit=False, future=True
+        )
+
+        def rollback_teardown():
+            s = factory()
+            try:
+                yield s
+                s.rollback()
+            finally:
+                s.close()
+
+        env.token(REVIEWER)
+        app.dependency_overrides[get_db] = rollback_teardown
+        try:
+            r = env.decide(REVIEWER)
+        finally:
+            app.dependency_overrides[get_db] = committed
+        assert r.status_code == 201, r.text
+        assert len(env.approvals()) == 1
+        assert len(env.audit("approval.approved")) == 1

@@ -88,6 +88,16 @@ EXPLICIT_COMMIT: dict[tuple[str, str], str] = {
         "POST",
         f"{API}/workspaces/{{workspace_id}}/scout-requests/{{request_id}}/run",
     ): "D-25: the run commits its enqueue before answering",
+    # Project Phase 5C (W21 integration, I-O9-1): both commit before they answer, by the
+    # scout-run route's rule, so the job id (202) and the decision (201) are visible at once.
+    (
+        "POST",
+        f"{API}/workspaces/{{workspace_id}}/briefs/{{brief_id}}/drafts",
+    ): "5C: the generation job is committed before the 202",
+    (
+        "POST",
+        f"{API}/workspaces/{{workspace_id}}/drafts/{{draft_id}}/approvals",
+    ): "5C: the decision and its audit row are committed before the 201",
 }
 
 #: Non-GET routes that write nothing.
@@ -271,8 +281,10 @@ def test_pending_is_exactly_the_27_campaign_context_routes_blocked_on_292():
 
 
 def test_the_listed_routes_match_the_audit_counts():
-    """AUDIT §2: 21 explicit-commit routes and 2 read-only non-GET routes."""
-    assert len(EXPLICIT_COMMIT) == 21
+    """AUDIT §2: 21 explicit-commit routes and 2 read-only non-GET routes; the W21
+    integration (I-O9-1) adds the two Project Phase 5C routes that commit before they answer:
+    21 + 2 = 23."""
+    assert len(EXPLICIT_COMMIT) == 23
     assert len(READ_ONLY) == 2
 
 
