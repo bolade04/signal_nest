@@ -1,4 +1,5 @@
-import type { JobOut } from '@/api/types';
+import type { components } from '@/api/schema';
+import type { JobOut, ScoutRequestOut } from '@/api/types';
 import type { Intent } from '@/lib/labels';
 
 /**
@@ -38,7 +39,11 @@ export const runOutcomeReasons: Record<RunOutcomeReason, string> = {
   worker_lost: 'The worker lost this run.',
   scout_changed: 'The scout changed during the run.',
   scout_removed: 'The scout was removed.',
+  // W21 FU-Q1-2 (PROPOSED, pending the copy owner's sign-off): "timed out" only where the job
+  // recorded that this run waited until the earlier operation's deadline; an immediate refusal,
+  // where nothing waited, reads `earlier_operation_unresolved`, which says nothing about a wait.
   earlier_operation_timed_out: 'Waiting for an earlier operation timed out.',
+  earlier_operation_unresolved: 'An earlier operation had no confirmed outcome, so this run could not go on.',
   too_many_signals: 'The sources returned more items than one run can analyse.',
   retries_exhausted: 'It kept failing after every attempt.',
   worker_stopped_responding: 'The worker stopped responding.',
@@ -51,4 +56,167 @@ export function rawRunCodes(job: Pick<JobOut, 'status' | 'result_summary' | 'las
   return [job.status, typeof outcome === 'string' ? outcome : null, job.last_error_code]
     .filter(Boolean)
     .join(' · ');
+}
+
+// ---------------------------------------------------------------------------------------------
+// The latest run's result: what ran, what did not, one next step (W21 FU-Q1-1, Q1 (a+)).
+//
+// PROPOSED WORDING, PENDING THE COPY OWNER'S SIGN-OFF. No copy owner is named
+// (DECISION-PACK-closeout-02 Addendum v8 §C). Every customer-facing string of the run-result
+// panel (pages/scouts/RunResultPanel.tsx) is in this module, with the run labels above, so a
+// wording ruling is a one-file change. The facts come typed from `ScoutRequestOut.run_outcome`
+// (apps/api/app/scouting_requests/schemas.py); the counts from `stats` through the `RunStats`
+// keys (lib/scout-stats.ts). Each next step names something the viewing customer can do in the
+// product today: an editor gets Edit (source types, keywords) or Run now; a member who cannot edit
+// or run the Scout (the EDITORS gate, lib/roles.ts canEditWorkspace) is asked to turn to someone
+// who can (runNextActionsForNonEditors).
+// ---------------------------------------------------------------------------------------------
+export type RunResult = NonNullable<ScoutRequestOut['run_outcome']>;
+export type RunResultKind = RunResult['kind'];
+export type RunNextAction = NonNullable<RunResult['next_action']>;
+export type RunSource = components['schemas']['ScoutRunSource'];
+export type SourceFailureReason = components['schemas']['SourceFailureReason'];
+export type SourceReadMode = components['schemas']['SourceReadMode'];
+
+const items = (n: number) => `${n} ${n === 1 ? 'item' : 'items'}`;
+const sources = (n: number) => `${n} ${n === 1 ? 'source' : 'sources'}`;
+/** A formatted count (`—` when not reported) with its noun, singular only for exactly one. */
+const count = (n: string, one: string, many: string) => `${n} ${n === '1' ? one : many}`;
+
+export const runResultCopy = {
+  // Review r1 MINOR-2: `stats` hold the last run that read its sources (completed or refused); a
+  // later run that ended without a result (cancelled, stopped, skipped, failed) writes none, so
+  // the panel never calls itself the latest run's result.
+  heading: 'Result of the last run that read its sources',
+  /** Shown when `execution` says the latest run ended without a result (lib/run-result.ts). */
+  earlierRun: 'The latest run ended without a result, so this is the result of an earlier run.',
+  /**
+   * Review r1 MINOR-3: the D-25 notice's body when the panel carries a refused run's one next
+   * step and the notice's own step would be to run the scout again (lib/scout-execution.ts).
+   */
+  seeResultBelow: 'See the run result below for what to do next.',
+  whatRan: 'What ran',
+  whatDidNot: 'What did not run',
+  nextStep: 'Next step',
+  /** The counts of a run that completed (from the `RunStats` keys; `—` when not reported). */
+  counts: (collected: string, analysed: string, opportunities: string) =>
+    `${count(collected, 'item', 'items')} collected, ${count(analysed, 'signal', 'signals')} analysed, ` +
+    `${count(opportunities, 'opportunity', 'opportunities')}.`,
+  /** A refused run collected items but analysed none. */
+  refusedCounts: (collected: string) => `${count(collected, 'item', 'items')} collected; none were analysed.`,
+  sourcesRead: (read: number, consulted: number) =>
+    read === consulted ? `Read ${sources(consulted)}.` : `Read ${read} of ${sources(consulted)}.`,
+  noSource: 'No source was read.',
+  sourceRead: (label: string, fetched: number) => `${label}: ${items(fetched)} read.`,
+  // W21 FU-HELD-BODY-1 (PROPOSED, pending the copy owner's sign-off). A source whose last read
+  // failed is not contacted during its cool-down; the run uses the stored copy of its last good
+  // read. That copy is never called a read of the source: "What ran" says the items came from the
+  // stored copy, and "What did not run" says the source was not contacted, why, how old the copy
+  // is (or that this is not recorded) and when the source can be tried again.
+  sourceHeldUsed: (label: string, fetched: number) => `${label}: ${items(fetched)} from a stored copy.`,
+  held: (label: string, reason: SourceFailureReason | null, lastReadAt: string | null) =>
+    `${label}: not contacted in this run, because its last read failed ` +
+    `(${reason ? sourceFailureReasons[reason] : 'reason not recorded'}). ` +
+    (lastReadAt
+      ? `The stored copy used was last read on ${lastReadAt}.`
+      : 'When the stored copy used was last read is not recorded.'),
+  /** Appended to a failed or held source's line while the source cools down. */
+  retryAfter: (time: string) => ` It can be tried again after ${time}.`,
+  /**
+   * The summary of a complete run whose record predates the read facts: the run may have used a
+   * stored copy, and the record cannot say, so "read in full" is not claimed.
+   */
+  completeUnrecorded: 'No source failed or was cut short. This record does not say whether each source was read in that run.',
+  refusal: (bound: number | null) =>
+    bound === null
+      ? 'The run was refused: its sources returned more items than one run can analyse.'
+      : `The run was refused: its sources returned more items than one run can analyse (at most ${bound}).`,
+  clipped: (label: string, limit: number | null) =>
+    limit === null
+      ? `${label}: held more items than it reads in one run; the rest were not read.`
+      : `${label}: held more than its limit of ${items(limit)}; the rest were not read.`,
+  failed: (label: string, reason: SourceFailureReason | null) =>
+    `${label}: could not be read (${reason ? sourceFailureReasons[reason] : 'reason not recorded'}).`,
+};
+
+export const runResultLabels: Record<RunResultKind, string> = {
+  complete: 'Complete',
+  partial: 'Partial',
+  refused: 'Refused',
+};
+
+export const runResultIntent: Record<RunResultKind, Intent> = {
+  complete: 'success',
+  partial: 'warning',
+  refused: 'danger',
+};
+
+export const runResultSummaries: Record<RunResultKind, string> = {
+  complete: 'Every source was read in full.',
+  partial: 'The run finished, but not every source was read in full.',
+  refused: 'The run was refused before anything was analysed.',
+};
+
+/**
+ * The next step for a member who can edit and run the Scout (the EDITORS gate).
+ * `wait_for_source_retry` here is the step when the retry time is not recorded; with a time, the
+ * step is `runNextStepAfter` (W21 FU-HELD-BODY-1, PROPOSED).
+ */
+export const runNextActions: Record<RunNextAction, string> = {
+  narrow_request: 'Narrow this scout: edit it to use fewer source types or keywords, then run it again.',
+  run_again_later: 'Run this scout again later. A source that failed may be available then.',
+  wait_for_source_retry:
+    'Wait before running this scout again. After a failed read, a source cools down for a while, and a run during that time may not reach it.',
+  no_action: "No action needed: the results come from the items read within each source's limit.",
+};
+
+/** The next step for a member who cannot edit or run the Scout (Edit and Run now are hidden). */
+export const runNextActionsForNonEditors: Record<RunNextAction, string> = {
+  narrow_request:
+    'Ask someone who can edit this scout to use fewer source types or keywords, then run it again.',
+  run_again_later:
+    'Ask someone who can run this scout to run it again later. A source that failed may be available then.',
+  wait_for_source_retry:
+    'Ask someone who can run this scout to wait before running it again. After a failed read, a source cools down for a while, and a run during that time may not reach it.',
+  no_action: runNextActions.no_action,
+};
+
+/**
+ * `wait_for_source_retry` with its recorded time (W21 FU-HELD-BODY-1, PROPOSED): run again after
+ * it. `unread` is how many sources the run could not read (failed or held). The time is the cool-down
+ * of the worker that ran the run; another worker may reach the source sooner, so a run before then
+ * "may not" reach it - never "will not" (review W21-REV-HELDBODY r1 MINOR-1).
+ */
+export const runNextStepAfter = {
+  editor: (time: string, unread: number) =>
+    `Run this scout again after ${time}. ${coolingUntilThen(unread)}`,
+  nonEditor: (time: string, unread: number) =>
+    `Ask someone who can run this scout to run it again after ${time}. ${coolingUntilThen(unread)}`,
+};
+
+function coolingUntilThen(n: number): string {
+  return n === 1
+    ? 'The source it could not read is cooling down until then, so a run before then may not reach it.'
+    : 'The sources it could not read are cooling down until then, so a run before then may not reach them.';
+}
+
+export const sourceFailureReasons: Record<SourceFailureReason, string> = {
+  feed_too_large: 'the feed was too large',
+  xml_unsafe: 'the feed was refused for safety',
+  xml_malformed: 'the feed was not readable',
+  rate_limited: 'the source limited how often it can be read',
+  retries_exhausted: 'the source did not answer after several tries',
+  response_refused: 'the source did not send a feed',
+  egress_blocked: "the source's address is not allowed",
+  fetch_error: 'the source returned an error',
+};
+
+/** The names of the simulated sources this build reads; any other source shows its key. */
+const sourceNames = new Map<string, string>([
+  ['fixture', 'Sample library'],
+  ['rss_news', 'Sample news feed'],
+]);
+
+export function sourceLabel(key: string): string {
+  return sourceNames.get(key) ?? key;
 }

@@ -95,6 +95,16 @@ async function advance(ms: number) {
 }
 
 describe('executionNotice copy', () => {
+  it('admission_unresolved claims neither "could not start" nor a wait (W21 FU-Q1-2 fix pass, PROPOSED)', () => {
+    const n = executionNotice(exec('stopped', 'admission_unresolved', 'run_now'), 'failed');
+    expect(n?.title).toBe('The last run could not continue');
+    expect(n?.body).toBe(
+      'The last run could not continue because an earlier operation had no confirmed outcome. ' +
+        'That operation has since been confirmed as ended, so this scout can run again.',
+    );
+    expect(`${n?.title} ${n?.body}`).not.toMatch(/could not start|wait|timed out/i);
+  });
+
   it('says what needs_attention means, that Resume and Run now will not help, and that findings stay', () => {
     const n = executionNotice(exec('needs_attention', 'operation_outcome_unknown', 'contact_support'), 'failed');
     expect(n?.tone).toBe('attention');
@@ -108,7 +118,7 @@ describe('executionNotice copy', () => {
     [exec('paused', 'paused_by_user', 'resume'), 'paused', /Paused/],
     [exec('stopped', 'run_cancelled', 'run_now'), 'draft', /last run was cancelled/],
     [exec('stopped', 'run_failed', 'run_now'), 'failed', /did not complete/],
-    [exec('stopped', 'admission_unresolved', 'run_now'), 'failed', /could not start/],
+    [exec('stopped', 'admission_unresolved', 'run_now'), 'failed', /could not continue/],
     [exec('stopped', 'run_interrupted', 'contact_support'), 'queued', /interrupted/],
     [exec('in_progress', 'operation_finishing', 'wait'), 'draft', /still finishing/],
   ] as const)('%o under %s has its own notice', (e, s, title) => {
