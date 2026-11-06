@@ -78,11 +78,13 @@ from app.tests.test_run_outcome_guidance_w21 import (
     _poll,
     _rid,
     _scout,
+    _source,
     _ws,
     client,  # noqa: F401 - fixture
     committed,  # noqa: F401 - fixture
     factory,  # noqa: F401 - fixture
     flag_on,  # noqa: F401 - fixture
+    replay,  # noqa: F401 - fixture
 )
 from app.tests.test_scout_pause_promise import _NOW, API, _queue, _runner
 
@@ -672,12 +674,11 @@ class _OriginHandler(BaseHTTPRequestHandler):
         return
 
 
-def test_a_loopback_source_that_goes_good_then_failing_is_never_shown_complete(
-    factory, client, dallas_rss, monkeypatch, tmp_path: Path  # noqa: F811
-) -> None:
-    """The real gate, the real egress guard over ``127.0.0.1``, the process-wide feed cache (on a
-    fake clock), the worker and the route: a 200, then 500s; the run inside the cool-down is
-    partial with the held copy named, and contacts nothing."""
+@contextmanager
+def _loopback_live(monkeypatch, tmp_path: Path) -> Iterator[tuple[_Origin, int, Clock]]:
+    """The Dallas Scout's one live source, replayed from a synthetic capture by a scripted origin
+    on ``127.0.0.1`` and read through the real gate and egress guard, with the process-wide feed
+    cache on a fake clock. Yields the origin, its port and the clock; stopped afterwards."""
     corpus = tmp_path / "corpus"
     _write_corpus(corpus, {"loop-dallas": RSS})
     manifest = corpus / "manifest.json"
@@ -695,6 +696,21 @@ def test_a_loopback_source_that_goes_good_then_failing_is_never_shown_complete(
         monkeypatch.setattr(settings, "connector_rss_enabled", True)
         monkeypatch.setattr(settings, "connector_rss_live_enabled", True)
         monkeypatch.setattr(settings, "connector_rss_replay_origin", f"http://127.0.0.1:{port}")
+        yield origin, port, clock
+    finally:
+        origin.shutdown()
+        origin.server_close()
+        thread.join(timeout=5)
+        feed_cache.clear()
+
+
+def test_a_loopback_source_that_goes_good_then_failing_is_never_shown_complete(
+    factory, client, dallas_rss, monkeypatch, tmp_path: Path  # noqa: F811
+) -> None:
+    """The real gate, the real egress guard over ``127.0.0.1``, the process-wide feed cache (on a
+    fake clock), the worker and the route: a 200, then 500s; the run inside the cool-down is
+    partial with the held copy named, and contacts nothing."""
+    with _loopback_live(monkeypatch, tmp_path) as (origin, port, clock):
         first = _run_with_origin(factory, client, port)
         origin.failing = True
         clock.t += INTERVAL + 1
@@ -702,11 +718,6 @@ def test_a_loopback_source_that_goes_good_then_failing_is_never_shown_complete(
         clock.t += 60
         third = _run_with_origin(factory, client, port)
         hits = list(origin.hits)
-    finally:
-        origin.shutdown()
-        origin.server_close()
-        thread.join(timeout=5)
-        feed_cache.clear()
     assert hits == [200, 500, 500, 500]  # one good read; one failing fetch with its retries
     assert first["run_outcome"]["kind"] == "complete"
     assert first["run_outcome"]["sources"][0]["read_mode"] == "fetched"
@@ -728,3 +739,110 @@ def test_a_loopback_source_that_goes_good_then_failing_is_never_shown_complete(
     listed = client.get(f"{API}/workspaces/{_ws()}/scout-requests", headers=_owner()).json()
     [row] = [r for r in listed if r["id"] == _rid()]
     assert row["run_outcome"] == held  # the list carries the same outcome as the detail
+
+
+# --------------------------------------------------------------------------- #
+# 5. Older complete records state the source path they recorded (packet item 48, option B)
+# --------------------------------------------------------------------------- #
+#: The facts this change adds to a ``fetch_limits`` entry; a row written before it has none.
+_NEW_FACTS = ("read_mode", "last_read_at", "next_retry_at", "last_failure_reason")
+
+
+def _as_older(stats: dict) -> dict:
+    """``stats`` as the writer before this change wrote them: the same keys, without the new
+    per-source facts (#268's pinned shape)."""
+    older = dict(stats)
+    older["fetch_limits"] = [
+        {k: v for k, v in entry.items() if k not in _NEW_FACTS} for entry in stats["fetch_limits"]
+    ]
+    return older
+
+
+def _stored_then_read(factory, client, stats: dict) -> dict:  # noqa: F811
+    """Store ``stats`` as the Scout's latest result and read it back through the route. Reading
+    rewrites nothing: the stored row is unchanged afterwards."""
+    with factory() as session:
+        session.get(ScoutRequest, _rid()).stats = stats
+        session.commit()
+    body = _scout(client)
+    with factory() as session:
+        assert session.get(ScoutRequest, _rid()).stats == stats
+    return body
+
+
+def _facts_unknown(body: dict) -> None:
+    for source in body["run_outcome"]["sources"]:
+        assert all(source[k] is None for k in _NEW_FACTS), source
+
+
+def test_an_older_sample_feed_row_states_its_simulated_path_through_the_route(
+    factory, client, replay  # noqa: F811
+) -> None:
+    """The sample feed (``sandbox_feed``) reads its bundled content in every run and holds no copy:
+    an older complete row that recorded it keeps its reason, which the page reads (option B)."""
+    replay(_source(3, "ok"))
+    fresh = _scout(client)
+    assert fresh["run_outcome"]["kind"] == "complete"
+    assert fresh["coverage"]["reason"] == "sandbox_feed"
+    got = _stored_then_read(factory, client, _as_older(fresh["stats"]))
+    assert got["run_outcome"]["kind"] == "complete" and got["run_outcome"]["next_action"] is None
+    assert got["coverage"] == fresh["coverage"]
+    _facts_unknown(got)
+    _assert_is_the_web_fixture(got, "older_sandbox_record_without_read_facts")
+
+
+def test_an_older_replayed_live_row_states_its_live_path_through_the_route(
+    factory, client, dallas_rss, monkeypatch, tmp_path: Path  # noqa: F811
+) -> None:
+    """A run through the live connector, replaying a synthetic capture over loopback: its coverage
+    says ``live_sources`` and ``is_simulated: true`` (review r2 guardrail 1: the flag is not the
+    path). The fresh body records ``read_mode``; its older form records none, so the page must
+    qualify it (option B)."""
+    with _loopback_live(monkeypatch, tmp_path) as (origin, port, _clock):
+        fresh = _run_with_origin(factory, client, port)
+        assert list(origin.hits) == [200]
+    assert fresh["run_outcome"]["kind"] == "complete"
+    coverage = fresh["coverage"]
+    assert (coverage["reason"], coverage["is_simulated"]) == ("live_sources", True)
+    assert [s["read_mode"] for s in fresh["run_outcome"]["sources"]] == ["fetched"]
+    _assert_is_the_web_fixture(fresh, "live_complete_fetched")
+    got = _stored_then_read(factory, client, _as_older(fresh["stats"]))
+    assert got["run_outcome"]["kind"] == "complete" and got["coverage"] == fresh["coverage"]
+    _facts_unknown(got)
+    _assert_is_the_web_fixture(got, "older_live_record_without_read_facts")
+
+
+@pytest.mark.parametrize(
+    ("case", "coverage"),
+    [
+        ("older_record_without_coverage", None),
+        (
+            "older_record_unreadable_coverage",
+            {
+                "status": "covered",
+                "reason": "a future source path",
+                "is_simulated": True,
+                "sources": 0,
+                "sources_failed": 0,
+            },
+        ),
+    ],
+    ids=["missing", "unreadable"],
+)
+def test_an_older_row_without_a_readable_coverage_lifts_it_as_null(
+    factory, client, case, coverage  # noqa: F811
+) -> None:
+    """No writer since #255 omits ``coverage`` from a completed run, but a row without it, or with
+    one this API cannot read (an unknown reason), lifts ``coverage: null`` - never a guessed path -
+    and the run as before; the page then qualifies the summary (review r2 guardrail 2)."""
+    body = _run(factory, client)
+    older = _as_older(body["stats"])
+    if coverage is None:
+        del older["coverage"]
+    else:
+        older["coverage"] = coverage
+    got = _stored_then_read(factory, client, older)
+    assert got["coverage"] is None
+    assert got["run_outcome"]["kind"] == "complete" and got["run_outcome"]["next_action"] is None
+    _facts_unknown(got)
+    _assert_is_the_web_fixture(got, case)

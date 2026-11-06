@@ -250,8 +250,12 @@ data:
   per-process limit above). The held copy itself still has no maximum age: it is served for
   as long as the source keeps failing, and each run says how old it is.
 * A run recorded before W21 FU-HELD-BODY-1 has no read facts. The API returns them as
-  `null` (not recorded), and the Scout page does not say that such a complete run read
-  every source in full.
+  `null` (not recorded); nothing is backfilled. For such a complete run the Scout page keeps
+  "Every source was read in full" only when the run's own `coverage.reason` is
+  `fixture_library` or `sandbox_feed`, simulated paths that hold no copy; for any other,
+  missing or unreadable coverage it says the record does not say whether each source was read
+  (operator ruling on packet item 48, option B). This relies on a run never mixing live and
+  simulated sources (`fetch_signals` takes one path per run).
 * `robots.txt` is recorded per source at onboarding, not evaluated at fetch time.
 * No connector metrics are exported; outcomes are structured log events
   (`connector.source_read`, `connector.source_failed`, `connector.source_taken_down`).

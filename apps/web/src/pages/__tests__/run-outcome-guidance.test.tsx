@@ -593,8 +593,8 @@ describe('a stored copy used during a failure cool-down is never a complete read
     expect(runResultLines(c.run_outcome!, c.stats, true).next).toBe(runNextActions.run_again_later);
   });
 
-  it('an older record: complete as before, but "read in full" is not claimed, since the record cannot say', async () => {
-    const c = cases.older_record_without_read_facts;
+  it('an older record of a live source: complete as before, but "read in full" is not claimed, since the record cannot say', async () => {
+    const c = cases.older_live_record_without_read_facts;
     expect(c.run_outcome!.kind).toBe('complete');
     expect(c.run_outcome!.sources!.every((s) => s.read_mode == null && s.last_read_at == null)).toBe(true);
     const { panel } = await openPanel(scout(c));
@@ -603,12 +603,108 @@ describe('a stored copy used during a failure cool-down is never a complete read
     expect(sections(panel)[runResultCopy.nextStep]).toBeUndefined();
   });
 
-  it('a complete run whose sources were read in it, or revalidated, still says "read in full"', () => {
-    expect(runResultSummary(cases.complete.run_outcome!)).toBe(runResultSummaries.complete);
-    const [source] = cases.complete.run_outcome!.sources!;
-    for (const read_mode of ['fetched', 'revalidated', 'reused'] as const) {
-      const result = { ...cases.complete.run_outcome!, sources: [{ ...source!, read_mode }] };
-      expect(runResultSummary(result)).toBe(runResultSummaries.complete);
+  it('a complete run that records how its sources were read still says "read in full", simulated or live (guardrail 3)', () => {
+    expect(runResultSummary(cases.complete.run_outcome!, cases.complete.coverage)).toBe(runResultSummaries.complete);
+    const live = cases.live_complete_fetched;
+    expect(live.coverage).toMatchObject({ reason: 'live_sources' });
+    expect(runResultSummary(live.run_outcome!, live.coverage)).toBe(runResultSummaries.complete);
+    for (const c of [cases.complete, live]) {
+      const [source] = c.run_outcome!.sources!;
+      for (const read_mode of ['fetched', 'revalidated', 'reused'] as const) {
+        const result = { ...c.run_outcome!, sources: [{ ...source!, read_mode }] };
+        expect(runResultSummary(result, c.coverage)).toBe(runResultSummaries.complete);
+        expect(runResultSummary(result, null)).toBe(runResultSummaries.complete);
+      }
     }
+  });
+});
+
+/**
+ * Operator ruling on packet item 48 (option B), with review W21-REV-HELDBODY r2's four guardrails. An
+ * older complete record (no `read_mode`) keeps "Every source was read in full." only when its own
+ * recorded `coverage.reason` positively establishes an entirely simulated source path
+ * (`fixture_library`, `sandbox_feed`); live, mixed, missing, unreadable or unknown coverage gets the
+ * qualified sentence. Real bodies the route returned: the demo library, sample feed and replayed live
+ * records without read facts, a record without coverage and one whose coverage the API cannot read
+ * (lifted to null), and a fresh live record. Derived from them, as above, the shapes no writer
+ * produces: `sources_unavailable` on a complete run, a mixed or unknown reason, a contradicting
+ * `is_simulated`, and an older API that sends no `coverage` field.
+ */
+describe('older complete records: the recorded source path decides the summary (packet item 48, option B)', () => {
+  beforeEach(() => orgModel.setMembership('org-1', 'user-1', 'owner'));
+  afterEach(() => orgModel.reset());
+
+  const FULL = runResultSummaries.complete;
+  const QUALIFIED = runResultCopy.completeUnrecorded;
+  const live = cases.older_live_record_without_read_facts;
+  const withReason = (reason: string, is_simulated = live.coverage!.is_simulated) =>
+    ({ ...live.coverage!, reason, is_simulated }) as unknown as NonNullable<Case['coverage']>;
+
+  it('the real older bodies record no read facts and keep the coverage they recorded', () => {
+    for (const name of [
+      'older_record_without_read_facts',
+      'older_sandbox_record_without_read_facts',
+      'older_live_record_without_read_facts',
+      'older_record_without_coverage',
+      'older_record_unreadable_coverage',
+    ] as const) {
+      const c = cases[name];
+      expect(c.run_outcome!.kind).toBe('complete');
+      expect(c.run_outcome!.sources!.every((s) => !s.failed && s.read_mode == null)).toBe(true);
+    }
+    expect(cases.older_record_without_read_facts.coverage).toMatchObject({ reason: 'fixture_library' });
+    expect(cases.older_sandbox_record_without_read_facts.coverage).toMatchObject({ reason: 'sandbox_feed' });
+    // Guardrail 1's trap: a replayed live source records is_simulated: true.
+    expect(live.coverage).toMatchObject({ reason: 'live_sources', is_simulated: true });
+    expect(cases.older_record_without_coverage.coverage).toBeNull();
+    expect(cases.older_record_unreadable_coverage.coverage).toBeNull();
+  });
+
+  it.each([
+    ['the demo library (real body)', 'older_record_without_read_facts', undefined, FULL],
+    ['the sample feed (real body)', 'older_sandbox_record_without_read_facts', undefined, FULL],
+    ['a replayed live source (real body)', 'older_live_record_without_read_facts', undefined, QUALIFIED],
+    ['missing coverage (real body)', 'older_record_without_coverage', undefined, QUALIFIED],
+    ['unreadable coverage (real body)', 'older_record_unreadable_coverage', undefined, QUALIFIED],
+    ['live, every source failed (derived)', 'older_live_record_without_read_facts', withReason('sources_unavailable'), QUALIFIED],
+    ['no source for the market (derived)', 'older_live_record_without_read_facts', withReason('no_source_for_market'), QUALIFIED],
+    ['a mixed path (derived)', 'older_live_record_without_read_facts', withReason('fixture_library+live_sources'), QUALIFIED],
+    ['an unknown future reason (derived)', 'older_live_record_without_read_facts', withReason('a future source path'), QUALIFIED],
+    ['live with is_simulated true (derived; guardrail 1)', 'older_live_record_without_read_facts', withReason('live_sources', true), QUALIFIED],
+    ['demo library with is_simulated false (derived; guardrail 1)', 'older_live_record_without_read_facts', withReason('fixture_library', false), FULL],
+    ['sample feed with is_simulated false (derived; guardrail 1)', 'older_live_record_without_read_facts', withReason('sandbox_feed', false), FULL],
+  ] as const)('%s', (_label, name, override, summary) => {
+    const c = cases[name];
+    const coverage = override === undefined ? c.coverage : override;
+    expect(runResultSummary(c.run_outcome!, coverage)).toBe(summary);
+  });
+
+  it('an older API that sends no coverage field, or a record with no per-source facts, is qualified unless its path is simulated', () => {
+    const c = cases.older_sandbox_record_without_read_facts;
+    expect(runResultSummary(c.run_outcome!, undefined)).toBe(QUALIFIED);
+    expect(runResultSummary({ ...c.run_outcome!, sources: null }, c.coverage)).toBe(FULL);
+    expect(runResultSummary({ ...live.run_outcome!, sources: null }, live.coverage)).toBe(QUALIFIED);
+  });
+
+  it.each([
+    ['older_record_without_read_facts', FULL],
+    ['older_sandbox_record_without_read_facts', FULL],
+    ['older_live_record_without_read_facts', QUALIFIED],
+    ['older_record_without_coverage', QUALIFIED],
+    ['older_record_unreadable_coverage', QUALIFIED],
+  ] as const)('the page: %s', async (name, summary) => {
+    const { panel } = await openPanel(scout(cases[name]));
+    expect(within(panel).getByRole('status')).toHaveTextContent(`${runResultLabels.complete}${summary}`);
+    const other = summary === FULL ? QUALIFIED : FULL;
+    expect(within(panel).queryByText(other)).not.toBeInTheDocument();
+  });
+
+  it('the held copy stays Partial and a fresh live read stays "read in full", whatever the coverage', async () => {
+    const held = cases.held_copy_after_failure;
+    for (const coverage of [held.coverage, null, withReason('fixture_library')]) {
+      expect(runResultSummary(held.run_outcome!, coverage)).toBe(runResultSummaries.partial);
+    }
+    const { panel } = await openPanel(scout(cases.live_complete_fetched));
+    expect(within(panel).getByRole('status')).toHaveTextContent(`${runResultLabels.complete}${FULL}`);
   });
 });

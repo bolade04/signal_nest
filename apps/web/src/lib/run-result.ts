@@ -67,13 +67,42 @@ export function usedHeldCopy(source: RunSource): boolean {
 }
 
 /**
- * The status line's summary. A complete run whose record does not say how each source was read
- * (a run recorded before `read_mode` existed, which may have used a stored copy) does not claim
- * that every source was read in full: that uncertainty is kept, not resolved either way.
+ * The coverage reasons that positively establish an entirely simulated source path, where no copy
+ * could be held: the demo library and the sample feed read their content in every run and hold no
+ * cache (operator ruling on packet item 48, option B). A CLOSED allow-list: any other value - a live
+ * path, no source, or a reason this build does not know - is not positively simulated.
+ *
+ * Guardrail (W21-REV-HELDBODY r2): this relies on a run never mixing live and simulated sources.
+ * `fetch_signals` (apps/api/app/scouting_requests/connectors.py) takes exactly one source path per
+ * run, and only the live path holds a feed cache, so a run recorded with one of these reasons cannot
+ * have used a held copy. A change that lets one run mix live and simulated sources must revisit this
+ * rule.
  */
-export function runResultSummary(result: RunResult): string {
-  if (result.kind === 'complete' && result.sources?.some((s) => !s.failed && s.read_mode == null)) {
-    return runResultCopy.completeUnrecorded;
+const SIMULATED_ONLY_REASONS: ReadonlySet<string> = new Set(['fixture_library', 'sandbox_feed']);
+
+/**
+ * The status line's summary. A complete run whose record does not say how each source was read (a
+ * run recorded before `read_mode` existed) does not claim that every source was read in full, unless
+ * the run's own recorded coverage reason establishes an entirely simulated source path (option B):
+ *
+ * - only where `read_mode` is not recorded; a run that records it is summarised as it says;
+ * - keyed on `coverage.reason` alone, never `coverage.is_simulated` (a replayed live source records
+ *   `is_simulated: true` and could still have used a held copy);
+ * - a missing or unreadable `coverage` (the API lifts an unreadable one to `null`) keeps the
+ *   qualified summary.
+ *
+ * Only the record's own facts decide: never the current configuration or environment. No time is
+ * invented and no record is rewritten.
+ */
+export function runResultSummary(
+  result: RunResult,
+  coverage: ScoutRequestOut['coverage'] | null | undefined,
+): string {
+  if (result.kind === 'complete') {
+    // `sources: null` records no per-source facts at all, so no `read_mode` either.
+    const unrecorded = !result.sources || result.sources.some((s) => !s.failed && s.read_mode == null);
+    const simulatedOnly = typeof coverage?.reason === 'string' && SIMULATED_ONLY_REASONS.has(coverage.reason);
+    if (unrecorded && !simulatedOnly) return runResultCopy.completeUnrecorded;
   }
   return runResultSummaries[result.kind];
 }

@@ -20,7 +20,7 @@ export function RunResultPanel({
   request,
   canEdit,
 }: {
-  request: Pick<ScoutRequestOut, 'run_outcome' | 'stats' | 'execution'>;
+  request: Pick<ScoutRequestOut, 'run_outcome' | 'stats' | 'execution' | 'coverage'>;
   canEdit: boolean;
 }) {
   const headingId = useId();
@@ -49,7 +49,7 @@ export function RunResultPanel({
       {/* Announced when a finished run changes the result while the page is open. */}
       <p role="status" className="mt-1 flex flex-wrap items-center gap-2">
         <Badge intent={runResultIntent[result.kind]}>{runResultLabels[result.kind]}</Badge>
-        <span>{runResultSummary(result)}</span>
+        <span>{runResultSummary(result, request.coverage)}</span>
       </p>
       <dl className="mt-2 space-y-2">
         <div>

@@ -209,6 +209,74 @@
       },
       "status": "completed"
     },
+    "live_complete_fetched": {
+      "coverage": {
+        "is_simulated": true,
+        "reason": "live_sources",
+        "sources": 1,
+        "sources_failed": 0,
+        "status": "covered"
+      },
+      "execution": {
+        "next_action": "run_now",
+        "reason": "none",
+        "since": "2026-11-06T08:19:49.880255Z",
+        "state": "idle"
+      },
+      "run_outcome": {
+        "bound": null,
+        "kind": "complete",
+        "next_action": null,
+        "next_retry_at": null,
+        "partial_reasons": [],
+        "refusal_reason": null,
+        "sources": [
+          {
+            "clipped": false,
+            "eligible_seen": 1,
+            "failed": false,
+            "failure_reason": null,
+            "fetched": 2,
+            "last_failure_reason": null,
+            "last_read_at": "2026-11-06T08:19:49.870771Z",
+            "max_items": 100,
+            "next_retry_at": null,
+            "read_mode": "fetched",
+            "source_key": "loop-dallas"
+          }
+        ]
+      },
+      "stats": {
+        "coverage": {
+          "is_simulated": true,
+          "reason": "live_sources",
+          "sources": 1,
+          "sources_failed": 0,
+          "status": "covered"
+        },
+        "fetch_limits": [
+          {
+            "clipped": false,
+            "eligible_seen": 1,
+            "failed": false,
+            "failure_reason": null,
+            "fetched": 2,
+            "last_read_at": "2026-11-06T08:19:49.870771+00:00",
+            "max_items": 100,
+            "read_mode": "fetched",
+            "source_key": "loop-dallas"
+          }
+        ],
+        "noise_filtered": 0,
+        "opportunities": 1,
+        "opportunities_new": 1,
+        "opportunities_seen_again": 0,
+        "partial_fetch": false,
+        "scanned": 1,
+        "signals_analyzed": 1
+      },
+      "status": "completed"
+    },
     "live_source_failed_cooling": {
       "coverage": {
         "is_simulated": false,
@@ -323,6 +391,185 @@
       },
       "status": "completed"
     },
+    "older_live_record_without_read_facts": {
+      "coverage": {
+        "is_simulated": true,
+        "reason": "live_sources",
+        "sources": 1,
+        "sources_failed": 0,
+        "status": "covered"
+      },
+      "execution": {
+        "next_action": "run_now",
+        "reason": "none",
+        "since": "2026-11-06T08:19:49.880255Z",
+        "state": "idle"
+      },
+      "run_outcome": {
+        "bound": null,
+        "kind": "complete",
+        "next_action": null,
+        "next_retry_at": null,
+        "partial_reasons": [],
+        "refusal_reason": null,
+        "sources": [
+          {
+            "clipped": false,
+            "eligible_seen": 1,
+            "failed": false,
+            "failure_reason": null,
+            "fetched": 2,
+            "last_failure_reason": null,
+            "last_read_at": null,
+            "max_items": 100,
+            "next_retry_at": null,
+            "read_mode": null,
+            "source_key": "loop-dallas"
+          }
+        ]
+      },
+      "stats": {
+        "coverage": {
+          "is_simulated": true,
+          "reason": "live_sources",
+          "sources": 1,
+          "sources_failed": 0,
+          "status": "covered"
+        },
+        "fetch_limits": [
+          {
+            "clipped": false,
+            "eligible_seen": 1,
+            "failed": false,
+            "failure_reason": null,
+            "fetched": 2,
+            "max_items": 100,
+            "source_key": "loop-dallas"
+          }
+        ],
+        "noise_filtered": 0,
+        "opportunities": 1,
+        "opportunities_new": 1,
+        "opportunities_seen_again": 0,
+        "partial_fetch": false,
+        "scanned": 1,
+        "signals_analyzed": 1
+      },
+      "status": "completed"
+    },
+    "older_record_unreadable_coverage": {
+      "coverage": null,
+      "execution": {
+        "next_action": "run_now",
+        "reason": "none",
+        "since": "2026-11-06T08:19:50.553894Z",
+        "state": "idle"
+      },
+      "run_outcome": {
+        "bound": null,
+        "kind": "complete",
+        "next_action": null,
+        "next_retry_at": null,
+        "partial_reasons": [],
+        "refusal_reason": null,
+        "sources": [
+          {
+            "clipped": false,
+            "eligible_seen": 9,
+            "failed": false,
+            "failure_reason": null,
+            "fetched": 9,
+            "last_failure_reason": null,
+            "last_read_at": null,
+            "max_items": null,
+            "next_retry_at": null,
+            "read_mode": null,
+            "source_key": "fixture"
+          }
+        ]
+      },
+      "stats": {
+        "coverage": {
+          "is_simulated": true,
+          "reason": "a future source path",
+          "sources": 0,
+          "sources_failed": 0,
+          "status": "covered"
+        },
+        "fetch_limits": [
+          {
+            "clipped": false,
+            "eligible_seen": 9,
+            "failed": false,
+            "failure_reason": null,
+            "fetched": 9,
+            "max_items": null,
+            "source_key": "fixture"
+          }
+        ],
+        "noise_filtered": 1,
+        "opportunities": 3,
+        "opportunities_new": 0,
+        "opportunities_seen_again": 3,
+        "partial_fetch": false,
+        "scanned": 9,
+        "signals_analyzed": 7
+      },
+      "status": "completed"
+    },
+    "older_record_without_coverage": {
+      "coverage": null,
+      "execution": {
+        "next_action": "run_now",
+        "reason": "none",
+        "since": "2026-11-06T08:19:50.453432Z",
+        "state": "idle"
+      },
+      "run_outcome": {
+        "bound": null,
+        "kind": "complete",
+        "next_action": null,
+        "next_retry_at": null,
+        "partial_reasons": [],
+        "refusal_reason": null,
+        "sources": [
+          {
+            "clipped": false,
+            "eligible_seen": 9,
+            "failed": false,
+            "failure_reason": null,
+            "fetched": 9,
+            "last_failure_reason": null,
+            "last_read_at": null,
+            "max_items": null,
+            "next_retry_at": null,
+            "read_mode": null,
+            "source_key": "fixture"
+          }
+        ]
+      },
+      "stats": {
+        "fetch_limits": [
+          {
+            "clipped": false,
+            "eligible_seen": 9,
+            "failed": false,
+            "failure_reason": null,
+            "fetched": 9,
+            "max_items": null,
+            "source_key": "fixture"
+          }
+        ],
+        "noise_filtered": 1,
+        "opportunities": 3,
+        "opportunities_new": 0,
+        "opportunities_seen_again": 3,
+        "partial_fetch": false,
+        "scanned": 9,
+        "signals_analyzed": 7
+      },
+      "status": "completed"
+    },
     "older_record_without_read_facts": {
       "coverage": {
         "is_simulated": true,
@@ -386,6 +633,72 @@
         "partial_fetch": false,
         "scanned": 9,
         "signals_analyzed": 7
+      },
+      "status": "completed"
+    },
+    "older_sandbox_record_without_read_facts": {
+      "coverage": {
+        "is_simulated": true,
+        "reason": "sandbox_feed",
+        "sources": 0,
+        "sources_failed": 0,
+        "status": "covered"
+      },
+      "execution": {
+        "next_action": "run_now",
+        "reason": "none",
+        "since": "2026-11-06T08:19:50.626070Z",
+        "state": "idle"
+      },
+      "run_outcome": {
+        "bound": null,
+        "kind": "complete",
+        "next_action": null,
+        "next_retry_at": null,
+        "partial_reasons": [],
+        "refusal_reason": null,
+        "sources": [
+          {
+            "clipped": false,
+            "eligible_seen": 3,
+            "failed": false,
+            "failure_reason": null,
+            "fetched": 3,
+            "last_failure_reason": null,
+            "last_read_at": null,
+            "max_items": 100,
+            "next_retry_at": null,
+            "read_mode": null,
+            "source_key": "replay-ok"
+          }
+        ]
+      },
+      "stats": {
+        "coverage": {
+          "is_simulated": true,
+          "reason": "sandbox_feed",
+          "sources": 0,
+          "sources_failed": 0,
+          "status": "covered"
+        },
+        "fetch_limits": [
+          {
+            "clipped": false,
+            "eligible_seen": 3,
+            "failed": false,
+            "failure_reason": null,
+            "fetched": 3,
+            "max_items": 100,
+            "source_key": "replay-ok"
+          }
+        ],
+        "noise_filtered": 0,
+        "opportunities": 1,
+        "opportunities_new": 1,
+        "opportunities_seen_again": 0,
+        "partial_fetch": false,
+        "scanned": 3,
+        "signals_analyzed": 3
       },
       "status": "completed"
     },
