@@ -33,7 +33,7 @@ from typing import Protocol
 
 from app.connectors.base import FetchScope
 from app.connectors.coverage import Coverage, CoverageReason
-from app.connectors.fetch_limits import FetchOutcome, SourceFetchReport
+from app.connectors.fetch_limits import FetchOutcome, SourceFetchReport, SourceReadMode
 from app.core.config import Settings, get_settings
 from app.scouting_requests.fixtures import FixtureSignal, fixtures_for_market
 
@@ -75,13 +75,15 @@ class FixtureConnector:
         self, *, market: str | None, keywords: list[str], source_types: list[str]
     ) -> FetchOutcome:
         results = self.fetch(market=market, keywords=keywords, source_types=source_types)
-        # The demo library declares no fetch limit: nothing it holds is ever clipped.
+        # The demo library declares no fetch limit: nothing it holds is ever clipped. It is
+        # read in every run and holds no copy (W21 FU-HELD-BODY-1: ``read_mode`` fetched).
         report = SourceFetchReport(
             source_key=self.name,
             max_items=None,
             fetched=len(results),
             eligible_seen=len(results),
             clipped_by_fetch_limit=False,
+            read_mode=SourceReadMode.FETCHED,
         )
         return FetchOutcome(signals=results, reports=[report])
 
@@ -108,7 +110,9 @@ def fetch_with_reports(
 
 def _undeclared_limit_report(connector, signals: list) -> SourceFetchReport:
     """One source with no declared fetch limit: what a connector that does not report
-    (a test double, a future adapter) is recorded as, rather than leaving stats silent."""
+    (a test double, a future adapter) is recorded as, rather than leaving stats silent. How
+    such a connector obtained its content is not known, so no ``read_mode`` is recorded
+    (W21 FU-HELD-BODY-1: never a guessed value)."""
     return SourceFetchReport(
         source_key=getattr(connector, "name", "unknown"),
         max_items=None,

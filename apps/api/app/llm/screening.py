@@ -44,6 +44,14 @@ Explanation text is withheld (replaced by fixed copy, ``explanation_source =
 ``medium`` findings are kept and surfaced as claim warnings. Over-long fields are
 truncated rather than withheld.
 
+**Generated marketing text (Project Phase 5C, :func:`screen_creative`).** A draft's
+``headline``, ``body`` and ``call_to_action`` are put in their persisted form and capped the
+same way, and the draft is withheld (nothing stored) on the same link, contact-detail, markup
+and instruction-echo rules. The claim check is *not* a withholding rule there: a generated
+draft's claim risk, blocked claims and required disclaimers are the persisted content review
+(:func:`app.claims.engine.review_against_library`), which runs on the returned screening copy
+of exactly the persisted text, and a blocked draft is stored but cannot be approved.
+
 The registered ``check_claim_safety`` *LLM* task is deliberately not invoked
 here: it would add one paid model call per explained opportunity, it is itself
 exposed to the same injected content it would be judging, and its verdict is not
@@ -55,6 +63,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from app.claims.engine import check_claim_safety
@@ -339,3 +348,35 @@ def screen_explanation(output: dict, industry: str | None) -> ScreenedExplanatio
     screened["suggested_angles"] = angles
     warnings = [f"AI explanation: {w}" for w in safety.warnings]
     return ScreenedExplanation(screened, warnings, None)
+
+
+@dataclass(frozen=True)
+class ScreenedCreative:
+    """A generated draft's text fields after screening (Project Phase 5C)."""
+
+    #: The persisted forms (``headline``, ``body``, ``call_to_action``), or None if withheld.
+    output: dict | None
+    #: The normalised screening copy of exactly the persisted text (the review's input).
+    screening_text: str
+    withheld_reason: str | None = None
+
+
+def screen_creative(output: dict, limits: Mapping[str, int]) -> ScreenedCreative:
+    """Screen a ``generate_creative`` output; ``limits`` maps each text field to its cap.
+
+    Withheld (``output`` None) on a link, contact detail, markup or instruction echo in any
+    field, or when the body is empty once in persisted form.
+    """
+    prepared = {
+        name: _prepared(value, limit) if isinstance(value := output.get(name), str) else ("", "")
+        for name, limit in limits.items()
+    }
+    everything = "\n".join(copy for _, copy in prepared.values())
+    reason = _pattern_reason(everything)
+    if reason:
+        return ScreenedCreative(None, everything, reason)
+    persisted = {name: text for name, (text, _) in prepared.items()}
+    if not persisted.get("body"):
+        return ScreenedCreative(None, everything, "empty")
+    return ScreenedCreative(persisted, everything, None)
+

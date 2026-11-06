@@ -320,7 +320,7 @@ def _real_provider(outcome) -> AnthropicProvider:
 
 
 def _provider_error(outcome) -> LLMError:
-    request = LLMRequest(task="classify_signal", inputs={"content": "x"})
+    request = LLMRequest(task="classify_signal", inputs={"content": "x", "audiences": None})
     with pytest.raises(LLMError) as raised:
         _real_provider(outcome).generate(request, "classify_signal", "v1")
     return raised.value
@@ -394,9 +394,7 @@ def test_a_model_5xx_blocks_the_scout_until_reconciliation(world, monkeypatch, s
     w = world
     provider = _FiveXX(status)
     monkeypatch.setattr(pipeline, "fetch_signals", Sources())
-    monkeypatch.setattr(
-        pipeline,
-        "llm_service",
+    monkeypatch.setattr("app.llm.service.llm_service",
         LLMService(provider, sleep=lambda _s: None, settings=offline_settings()),
     )
     assert _start_worker(w).join_ok() is True
@@ -435,9 +433,7 @@ def test_a_fetch_5xx_reply_is_a_known_end(world, monkeypatch):
     wire = Wire({src.host: [httpx.Response(503), httpx.Response(503)]})
     conn = connector([target(src)], wire, Clock(), max_attempts=2)
     monkeypatch.setattr(live_mod, "live_connector_for", lambda **_kw: conn)
-    monkeypatch.setattr(
-        pipeline,
-        "llm_service",
+    monkeypatch.setattr("app.llm.service.llm_service",
         LLMService(
             MockLLMProvider(model="mock-1", seed=offline_settings().llm_mock_seed),
             settings=offline_settings(),

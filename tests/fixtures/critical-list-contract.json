@@ -469,7 +469,8 @@
   "gen_operator_policies.py::KEY_APPLY_WRITES": "SECURITY_CRITICAL_LIST",
   "gen_operator_policies.py::KEY_APPLY_SCOPED_CAPABILITIES": "SECURITY_CRITICAL_LIST",
   "action_classifier.py::KEY_APPLY_METADATA": "NON_SECURITY_CONFIGURATION",
-  "verify_milestone_evidence.py::REQUIRED_JOB_NAMES": "SECURITY_CRITICAL_LIST"
+  "verify_milestone_evidence.py::REQUIRED_JOB_NAMES": "SECURITY_CRITICAL_LIST",
+  "boundary_precheck.py::INVENTORY_READS": "NON_SECURITY_CONFIGURATION"
  },
  "completeness_consumers": {
   "reviewer_retrieval_state.py::STATES": {
@@ -884,7 +885,8 @@
   "gen_operator_policies.py::KEY_APPLY_WRITES": "P6-CI-6 key apply (K0-2, 2026-10-21): SECURITY_CRITICAL_SOURCE (allow). The key-apply principal's write surface (the two keys, their rotation and aliases, the kms:PutKeyPolicy the CreateKey lockout check requires (D-K1-3 = b-wide, operator decision 2026-10-23), three bucket encryptions, the trail key, the two task-role policies, the budget, the API alias record CREATE) driving its inline Allow statements; widening is caught by the INDEPENDENT operator-closure-contract section key_apply_closure (compared exactly by tests/test_key_apply_policy.py) plus the review pin.",
   "gen_operator_policies.py::KEY_APPLY_SCOPED_CAPABILITIES": "P6-CI-6 key apply (K0-2, 2026-10-21): SECURITY_CRITICAL_DERIVED (derived). Carves the key-apply principal's ten scoped capabilities OUT of its flat deny ceiling (the W0/window idiom); adding a member removes that action from the deny -> widens. Verified by emitted-policy correspondence (each member Allowed on its exact resource, absent from the flat Deny, re-denied by its NotResource fence; key_apply_closure.scoped_capabilities compared exactly) plus the review pin. kms:PutKeyPolicy IS a member since the operator decision of 2026-10-23 (D-K1-3 = b-wide): Allowed on * (expiring, region-conditioned) for the CreateKey lockout check, re-denied by the explicit Deny on the two existing CMKs and the bypass-flag Deny rather than a NotResource fence.",
   "action_classifier.py::KEY_APPLY_METADATA": "a fixed configuration value or literal set, not an enforced scope (SOURCE-1 categorisation of the key-apply principal's KMS writes from the Service Authorization Reference access levels read 2026-10-21; merged into ACTION_METADATA, whose consumer fails closed on UNKNOWN)",
-  "verify_milestone_evidence.py::REQUIRED_JOB_NAMES": "the milestone evidence verifier's required jobs: reached from main() via verify() and deciding which runs it refuses (scripts/enforcement_path.py: load_bearing); an authored mirror of the six required ruleset contexts as named inside the milestone run plus the binding job, review-pinned, and derived from the workflow files by tests/test_ci_milestone_policy.py"
+  "verify_milestone_evidence.py::REQUIRED_JOB_NAMES": "the milestone evidence verifier's required jobs: reached from main() via verify() and deciding which runs it refuses (scripts/enforcement_path.py: load_bearing); an authored mirror of the six required ruleset contexts as named inside the milestone run plus the binding job, review-pinned, and derived from the workflow files by tests/test_ci_milestone_policy.py",
+  "boundary_precheck.py::INVENTORY_READS": "a fixed configuration value or literal set, not an enforced scope (P6-INF-15 Stage-A boundary precheck: names the two read-only IAM calls for the report; evaluate() only echoes it, so it gates nothing the guard examines or refuses. The client issues the two reads as literals in its only two public methods; tests/test_boundary_precheck.py pins the tuple exactly, checks each member READ_ONLY with scripts/action_classifier.py, and requires it to equal the commands the client actually issues)"
  },
  "a1a_adjudication": {
   "gen_bootstrap_operator_policy.py::BOUNDARY_ATTACH_ACTIONS": {
