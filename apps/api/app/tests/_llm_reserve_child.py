@@ -42,7 +42,7 @@ FIXED_USAGE = (1000, 500)
 FIXED_COST = Decimal("0.010500")
 DB_TIMEOUT_MS = 10_000
 #: The inputs the P1/P3 run bodies send through the service.
-RUN_INPUTS = {"content": "x" * 100}
+RUN_INPUTS = {"content": "x" * 100, "audiences": None}
 
 
 def wire_payload(content: str = "x", tenant_ref: str | None = None) -> bytes:
@@ -168,7 +168,13 @@ def run_until_refused(
             reason = None
             for _ in range(1000):
                 try:
-                    service.run("classify_signal", RUN_INPUTS, meter=meter)
+                    service.run(
+                        "classify_signal",
+                        RUN_INPUTS,
+                        meter=meter,
+                        organization_id=meter.organization_id,
+                        workspace_id=meter.workspace_id,
+                    )
                 except LLMBudgetExceededError as exc:
                     reason = exc.reason
                     break
@@ -218,7 +224,9 @@ def reserve_then_die(
             )
         meter.before_attempt("anthropic", MODEL, wire_payload(CRASH_CONTENT))
     if make_call:
-        provider.generate(LLMRequest(task="classify_signal", inputs={"content": "x"}), "p", "v")
+        provider.generate(
+            LLMRequest(task="classify_signal", inputs={"content": "x", "audiences": None}), "p", "v"
+        )
     reserved_event.set()
     time.sleep(0.2)
     os._exit(1)
