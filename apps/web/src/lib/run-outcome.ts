@@ -166,7 +166,7 @@ export const runNextActions: Record<RunNextAction, string> = {
   narrow_request: 'Narrow this scout: edit it to use fewer source types or keywords, then run it again.',
   run_again_later: 'Run this scout again later. A source that failed may be available then.',
   wait_for_source_retry:
-    'Wait before running this scout again. For a while after a failed read, a new run does not contact that source.',
+    'Wait before running this scout again. After a failed read, a source cools down for a while, and a run during that time may not reach it.',
   no_action: "No action needed: the results come from the items read within each source's limit.",
 };
 
@@ -177,23 +177,27 @@ export const runNextActionsForNonEditors: Record<RunNextAction, string> = {
   run_again_later:
     'Ask someone who can run this scout to run it again later. A source that failed may be available then.',
   wait_for_source_retry:
-    'Ask someone who can run this scout to wait before running it again. For a while after a failed read, a new run does not contact that source.',
+    'Ask someone who can run this scout to wait before running it again. After a failed read, a source cools down for a while, and a run during that time may not reach it.',
   no_action: runNextActions.no_action,
 };
 
 /**
  * `wait_for_source_retry` with its recorded time (W21 FU-HELD-BODY-1, PROPOSED): run again after
- * it, not sooner. `unread` is how many sources the run could not read (failed or held).
+ * it. `unread` is how many sources the run could not read (failed or held). The time is the cool-down
+ * of the worker that ran the run; another worker may reach the source sooner, so a run before then
+ * "may not" reach it - never "will not" (review W21-REV-HELDBODY r1 MINOR-1).
  */
 export const runNextStepAfter = {
   editor: (time: string, unread: number) =>
-    `Run this scout again after ${time}. Until then, a new run will not contact ${theSources(unread)} it could not read.`,
+    `Run this scout again after ${time}. ${coolingUntilThen(unread)}`,
   nonEditor: (time: string, unread: number) =>
-    `Ask someone who can run this scout to run it again after ${time}. Until then, a new run will not contact ${theSources(unread)} it could not read.`,
+    `Ask someone who can run this scout to run it again after ${time}. ${coolingUntilThen(unread)}`,
 };
 
-function theSources(n: number): string {
-  return n === 1 ? 'the source' : 'the sources';
+function coolingUntilThen(n: number): string {
+  return n === 1
+    ? 'The source it could not read is cooling down until then, so a run before then may not reach it.'
+    : 'The sources it could not read are cooling down until then, so a run before then may not reach them.';
 }
 
 export const sourceFailureReasons: Record<SourceFailureReason, string> = {

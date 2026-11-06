@@ -480,8 +480,47 @@ describe('a stored copy used during a failure cool-down is never a complete read
       next: runNextStepAfter.editor(retry, 1),
     });
     expect(runNextStepAfter.editor(retry, 1)).toBe(
-      `Run this scout again after ${retry}. Until then, a new run will not contact the source it could not read.`,
+      `Run this scout again after ${retry}. The source it could not read is cooling down until then, so a run before then may not reach it.`,
     );
+  });
+
+  it('the retry time is one worker\'s cool-down: no next step says a run "will not" reach the source (review r1 MINOR-1)', () => {
+    const steps = [
+      runNextStepAfter.editor(retry, 1),
+      runNextStepAfter.editor(retry, 2),
+      runNextStepAfter.nonEditor(retry, 1),
+      runNextStepAfter.nonEditor(retry, 2),
+      runNextActions.wait_for_source_retry,
+      runNextActionsForNonEditors.wait_for_source_retry,
+    ];
+    for (const step of steps) {
+      expect(step).toMatch(/may not reach (it|them)\.$/);
+      expect(step).not.toMatch(/will not|does not contact|would not/);
+    }
+  });
+
+  it('two sources not read: the step names both, with the latest retry time (review r1 I-9)', () => {
+    // A second source that failed in the same run, cooling down 5 minutes longer: derived from the
+    // real body, as the variants below are; the API pins "the latest retry time" itself.
+    const later = new Date(Date.parse(heldSource.next_retry_at!) + 300_000).toISOString();
+    const failed = {
+      ...heldSource,
+      source_key: 'live-dallas-2',
+      failed: true,
+      failure_reason: 'fetch_error' as const,
+      read_mode: null,
+      fetched: 0,
+      eligible_seen: 0,
+      last_read_at: null,
+      last_failure_reason: null,
+      next_retry_at: later,
+    };
+    const run_outcome = { ...held.run_outcome!, next_retry_at: later, sources: [heldSource, failed] };
+    const at = formatDateTime(later);
+    expect(runResultLines(run_outcome, held.stats, true).next).toBe(
+      `Run this scout again after ${at}. The sources it could not read are cooling down until then, so a run before then may not reach them.`,
+    );
+    expect(runResultLines(run_outcome, held.stats, false).next).toBe(runNextStepAfter.nonEditor(at, 2));
   });
 
   it('the page: Partial, never "Complete" or "Every source was read in full", with the age, the retry time and the wait', async () => {
@@ -499,7 +538,7 @@ describe('a stored copy used during a failure cool-down is never a complete read
     });
     expect(panel.textContent).toContain(lastRead);
     expect(panel.textContent).toContain(retry);
-    // Not the step a run inside the cool-down cannot honour.
+    // Not "run again later": a run inside the cool-down may not reach the source.
     expect(panel.textContent).not.toContain(runNextActions.run_again_later);
     expect(screen.getAllByRole('button', { name: 'Run now' })).not.toHaveLength(0);
   });

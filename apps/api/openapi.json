@@ -7794,7 +7794,7 @@
         "type": "object"
       },
       "ScoutRunNextAction": {
-        "description": "The one next step a customer can take in the product today.\n\n``narrow_request``: edit the Scout to use fewer source types or keywords, then run it again\n(a refusal). ``run_again_later``: run the Scout again later (a source failed).\n``wait_for_source_retry`` (W21 FU-HELD-BODY-1, PROPOSED): a source the run did not read\n(failed, or its held copy used) is cooling down after a failed fetch and is not contacted\nbefore ``ScoutRunOutcome.next_retry_at`` (``null``: not recorded); run the Scout again after\nthen, not sooner, since a run before then would not contact it. ``no_action``: nothing the\ncustomer can do changes the result (only a fetch limit clipped a source: no setting raises\nit, and a re-run reads the same limit).",
+        "description": "The one next step a customer can take in the product today.\n\n``narrow_request``: edit the Scout to use fewer source types or keywords, then run it again\n(a refusal). ``run_again_later``: run the Scout again later (a source failed).\n``wait_for_source_retry`` (W21 FU-HELD-BODY-1, PROPOSED): a source the run did not read\n(failed, or its held copy used) is cooling down after a failed fetch, until\n``ScoutRunOutcome.next_retry_at`` (``null``: not recorded) in the worker that ran the run; run\nthe Scout again after then, since a run before then may not reach it (another worker, or a\nrestarted one, may reach it sooner). ``no_action``: nothing the\ncustomer can do changes the result (only a fetch limit clipped a source: no setting raises\nit, and a re-run reads the same limit).",
         "enum": [
           "narrow_request",
           "run_again_later",

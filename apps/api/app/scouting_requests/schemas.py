@@ -181,9 +181,10 @@ class ScoutRunNextAction(StrEnum):
     ``narrow_request``: edit the Scout to use fewer source types or keywords, then run it again
     (a refusal). ``run_again_later``: run the Scout again later (a source failed).
     ``wait_for_source_retry`` (W21 FU-HELD-BODY-1, PROPOSED): a source the run did not read
-    (failed, or its held copy used) is cooling down after a failed fetch and is not contacted
-    before ``ScoutRunOutcome.next_retry_at`` (``null``: not recorded); run the Scout again after
-    then, not sooner, since a run before then would not contact it. ``no_action``: nothing the
+    (failed, or its held copy used) is cooling down after a failed fetch, until
+    ``ScoutRunOutcome.next_retry_at`` (``null``: not recorded) in the worker that ran the run; run
+    the Scout again after then, since a run before then may not reach it (another worker, or a
+    restarted one, may reach it sooner). ``no_action``: nothing the
     customer can do changes the result (only a fetch limit clipped a source: no setting raises
     it, and a re-run reads the same limit)."""
 
@@ -291,8 +292,9 @@ def _next_action(
     """The one next step and, for ``wait_for_source_retry``, the time to wait for.
 
     A run that used a held copy, or whose failed source is cooling down, is told to wait for the
-    source's retry time rather than to run again at once: a run before then would not contact the
-    source (W21 FU-HELD-BODY-1). A refusal still says to narrow the Scout first."""
+    source's retry time rather than to run again at once: a run before then may not reach the
+    source (the worker that ran it will not contact it before then; W21 FU-HELD-BODY-1). A refusal
+    still says to narrow the Scout first."""
     if kind is ScoutRunOutcomeKind.REFUSED:
         return ScoutRunNextAction.NARROW_REQUEST, None
     unread = [s for s in sources or [] if s.failed or s.held]

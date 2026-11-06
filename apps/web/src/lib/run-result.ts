@@ -140,8 +140,8 @@ export function runResultLines(
 
 /**
  * The one next step. During a source's cool-down (`wait_for_source_retry`) it is to run again
- * after the recorded retry time - never "run again later", which a run inside the cool-down cannot
- * honour - or, with no time recorded, to wait (FU-HELD-BODY-1, PROPOSED).
+ * after the recorded retry time - not "run again later", since a run inside the cool-down may not
+ * reach the source - or, with no time recorded, to wait (FU-HELD-BODY-1, PROPOSED).
  */
 function nextStep(result: RunResult, canEdit: boolean): string | null {
   if (!result.next_action) return null;
