@@ -1,0 +1,710 @@
+import { within } from '@testing-library/react';
+import { http, HttpResponse } from 'msw';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { App } from '@/App';
+import { API_PREFIX } from '@/api/config';
+import type { JobOut, ScoutRequestOut } from '@/api/types';
+import {
+  runNextActions,
+  runNextActionsForNonEditors,
+  runNextStepAfter,
+  runOutcomeReasons,
+  runResultCopy,
+  runResultLabels,
+  runResultSummaries,
+  sourceFailureReasons,
+} from '@/lib/run-outcome';
+import {
+  isEarlierRunResult,
+  runResultLines,
+  runResultSummary,
+  showsRunResult,
+  usedHeldCopy,
+} from '@/lib/run-result';
+import { executionNotice, type ScoutExecution } from '@/lib/scout-execution';
+import { formatDateTime } from '@/lib/utils';
+import captured from '@/test/fixtures/scout-run-outcomes.json';
+import { orgModel } from '@/test/handlers';
+import { server } from '@/test/server';
+import { renderApp } from '@/test/utils';
+
+/**
+ * W21 FU-Q1-1 and FU-Q1-2 in the web app (PROPOSED). Every Scout and job used here is a response
+ * captured from the real API: apps/api/app/tests/test_run_outcome_guidance_w21.py produces each
+ * case with the real worker and pipeline and asserts that the route returns exactly the values in
+ * src/test/fixtures/scout-run-outcomes.json (LANE-BRIEF §5: a hand-written fixture can agree with
+ * a bug). The page reads the typed `run_outcome` and the `RunStats` counts only.
+ */
+type Case = Pick<ScoutRequestOut, 'status' | 'stats' | 'run_outcome' | 'coverage' | 'execution'>;
+type CaseName = keyof typeof captured.cases;
+// The JSON import widens the enums to `string`; the API test pins the values themselves.
+const cases = captured.cases as unknown as Record<CaseName, Case>;
+const jobs = captured.jobs as unknown as Record<
+  keyof typeof captured.jobs,
+  Pick<JobOut, 'status' | 'last_error_code' | 'result_summary' | 'outcome' | 'outcome_reason'>
+>;
+
+const P = (path: string) => `*${API_PREFIX}${path}`;
+const DALLAS = 'scout-loc-dallas';
+
+function scout(overrides: Partial<ScoutRequestOut>): ScoutRequestOut {
+  return {
+    id: DALLAS,
+    organization_id: 'org-1',
+    workspace_id: 'ws-1',
+    brand_id: 'brand-1',
+    location_id: null,
+    campaign_id: null,
+    name: 'Dallas demand scan',
+    status: 'completed',
+    source_types: ['rss_news'],
+    keywords: ['coffee'],
+    product_profile_id: null,
+    resolved_market: 'Dallas, TX',
+    notes: null,
+    last_run_at: '2026-06-01T12:00:00Z',
+    stats: {},
+    coverage: null,
+    execution: { state: 'idle', reason: 'none', next_action: 'run_now', since: null },
+    created_at: '2026-05-01T00:00:00Z',
+    updated_at: '2026-06-01T12:00:00Z',
+    ...overrides,
+  };
+}
+
+function jobRow(id: string, fields: (typeof jobs)[keyof typeof jobs]): JobOut {
+  return {
+    id,
+    job_type: 'scout_request.execute',
+    scout_request_id: DALLAS,
+    location_id: null,
+    attempt_count: 1,
+    max_attempts: 3,
+    priority: 0,
+    scheduled_for: null,
+    started_at: null,
+    completed_at: '2026-06-01T12:00:00Z',
+    cancel_requested_at: null,
+    cancelled_at: null,
+    created_at: '2026-06-01T12:00:00Z',
+    updated_at: '2026-06-01T12:00:00Z',
+    ...fields,
+  };
+}
+
+const SCHEDULE_404 = http.get(P('/workspaces/:ws/scout-requests/:id/schedule'), () =>
+  HttpResponse.json({ error: { code: 'not_found', message: 'This request has no schedule.' } }, { status: 404 }),
+);
+
+function serve(request: ScoutRequestOut, jobList: JobOut[] = []) {
+  server.use(
+    SCHEDULE_404,
+    http.get(P('/workspaces/:ws/scout-requests/:id'), () => HttpResponse.json(request)),
+    http.get(P('/workspaces/:ws/jobs'), () =>
+      HttpResponse.json({ items: jobList, total: jobList.length, limit: 10, offset: 0 }),
+    ),
+  );
+}
+
+async function openPanel(request: ScoutRequestOut) {
+  serve(request);
+  const screen = renderApp(<App />, { route: `/scout-requests/${DALLAS}` });
+  const panel = await screen.findByRole('region', { name: runResultCopy.heading });
+  return { screen, panel };
+}
+
+/** The panel's sections as read by assistive technology: each term with its definition's lines. */
+function sections(panel: HTMLElement): Record<string, string[]> {
+  const terms = within(panel).getAllByRole('term');
+  const definitions = within(panel).getAllByRole('definition');
+  expect(definitions).toHaveLength(terms.length);
+  const out: Record<string, string[]> = {};
+  terms.forEach((term, i) => {
+    const definition = definitions[i]!;
+    expect(term.nextElementSibling).toBe(definition);
+    const items = within(definition).queryAllByRole('listitem');
+    out[term.textContent ?? ''] = items.length
+      ? items.map((li) => li.textContent ?? '')
+      : [definition.textContent ?? ''];
+  });
+  return out;
+}
+
+describe('the run-result lines say what ran, what did not and one next step (FU-Q1-1)', () => {
+  it('complete: the counts and the source read, nothing missing, no next step', () => {
+    const c = cases.complete;
+    expect(runResultLines(c.run_outcome!, c.stats, true)).toEqual({
+      ran: ['9 items collected, 7 signals analysed, 3 opportunities.', 'Read 1 source.', 'Sample library: 9 items read.'],
+      didNot: [],
+      next: null,
+    });
+  });
+
+  it('partial, clipped: the clip is named, and nothing is asked of the customer', () => {
+    const c = cases.partial_fetch_limit_reached;
+    expect(runResultLines(c.run_outcome!, c.stats, true)).toEqual({
+      ran: ['100 items collected, 100 signals analysed, 1 opportunity.', 'Read 1 source.', 'replay-big: 100 items read.'],
+      didNot: ['replay-big: held more than its limit of 100 items; the rest were not read.'],
+      next: runNextActions.no_action,
+    });
+  });
+
+  it('partial, a failed source: the failure and its reason, and run again later', () => {
+    const c = cases.partial_source_failed;
+    expect(runResultLines(c.run_outcome!, c.stats, true)).toEqual({
+      ran: ['3 items collected, 3 signals analysed, 1 opportunity.', 'Read 1 of 2 sources.', 'replay-ok: 3 items read.'],
+      didNot: [`replay-bad: could not be read (${sourceFailureReasons.xml_unsafe}).`],
+      next: runNextActions.run_again_later,
+    });
+  });
+
+  it('refused at the bound: what was collected, the bound, and narrow the scout', () => {
+    const c = cases.refused_at_bound;
+    expect(runResultLines(c.run_outcome!, c.stats, true)).toEqual({
+      ran: [
+        '120 items collected; none were analysed.',
+        'Read 2 sources.',
+        'replay-a: 60 items read.',
+        'replay-b: 60 items read.',
+      ],
+      didNot: ['The run was refused: its sources returned more items than one run can analyse (at most 100).'],
+      next: runNextActions.narrow_request,
+    });
+  });
+
+  it('an absent count reads "not reported", never a confident zero', () => {
+    const c = cases.partial_source_failed;
+    expect(runResultLines(c.run_outcome!, {}, true).ran[0]).toBe('— items collected, — signals analysed, — opportunities.');
+  });
+
+  it('every next step is something the product offers today: Edit or Run now', () => {
+    expect(runNextActions.narrow_request).toMatch(/edit it/i);
+    expect(runNextActions.run_again_later).toMatch(/^Run this scout again later/);
+    expect(runNextActions.no_action).toMatch(/^No action needed/);
+  });
+
+  it('a member who cannot edit or run the scout is never told to edit or run it', () => {
+    for (const name of ['refused_at_bound', 'partial_source_failed', 'partial_fetch_limit_reached'] as const) {
+      const c = cases[name];
+      const action = c.run_outcome!.next_action!;
+      expect(runResultLines(c.run_outcome!, c.stats, false).next).toBe(runNextActionsForNonEditors[action]);
+    }
+    expect(runNextActionsForNonEditors.narrow_request).toMatch(/^Ask someone who can edit this scout/);
+    expect(runNextActionsForNonEditors.run_again_later).toMatch(/^Ask someone who can run this scout/);
+    for (const text of Object.values(runNextActionsForNonEditors)) {
+      expect(text).not.toMatch(/^(Narrow|Run|Edit)\b/);
+      expect(text).not.toMatch(/: edit it/);
+    }
+  });
+});
+
+describe('the Scout page presents each outcome (FU-Q1-1)', () => {
+  beforeEach(() => orgModel.setMembership('org-1', 'user-1', 'owner'));
+  afterEach(() => orgModel.reset());
+
+  it.each([
+    ['complete', 'Complete'],
+    ['partial_fetch_limit_reached', 'Partial'],
+    ['partial_source_failed', 'Partial'],
+    ['refused_at_bound', 'Refused'],
+  ] as const)('%s', async (name, label) => {
+    const c = cases[name];
+    const { panel } = await openPanel(scout(c));
+    const kind = c.run_outcome!.kind;
+    expect(runResultLabels[kind]).toBe(label);
+    // A named region with a heading, a polite status line, and term/definition sections.
+    expect(within(panel).getByRole('heading', { name: runResultCopy.heading })).toBeInTheDocument();
+    const status = within(panel).getByRole('status');
+    expect(status).toHaveTextContent(`${label}${runResultSummaries[kind]}`);
+    const lines = runResultLines(c.run_outcome!, c.stats, true);
+    const expected: Record<string, string[]> = { [runResultCopy.whatRan]: lines.ran };
+    if (lines.didNot.length) expected[runResultCopy.whatDidNot] = lines.didNot;
+    if (lines.next) expected[runResultCopy.nextStep] = [lines.next];
+    expect(sections(panel)).toEqual(expected);
+    expect(panel).toHaveAttribute('data-run-result', kind);
+  });
+
+  it('a partial run never looks like a complete one', async () => {
+    const complete = await openPanel(scout(cases.complete));
+    const completeText = complete.panel.textContent;
+    complete.screen.unmount();
+    const partial = await openPanel(scout(cases.partial_fetch_limit_reached));
+    expect(partial.panel.textContent).not.toBe(completeText);
+    expect(within(partial.panel).getByRole('status')).toHaveTextContent('Partial');
+    expect(within(partial.panel).queryByText(runResultSummaries.complete)).not.toBeInTheDocument();
+  });
+
+  it('reads the typed run_outcome only: untyped stats keys alone show nothing', async () => {
+    // The real stats of a partial run, with no run_outcome (as a pre-lift API would send).
+    serve(scout({ ...cases.partial_source_failed, run_outcome: null }));
+    const screen = renderApp(<App />, { route: `/scout-requests/${DALLAS}` });
+    await screen.findByRole('heading', { level: 1, name: 'Dallas demand scan' });
+    expect(screen.queryByRole('region', { name: runResultCopy.heading })).not.toBeInTheDocument();
+    expect(screen.queryByText(/clipped|could not be read/)).not.toBeInTheDocument();
+  });
+
+  it('a run_outcome without the untyped facts in stats is still presented in full', async () => {
+    const c = cases.partial_source_failed;
+    const { scanned, signals_analyzed, opportunities } = c.stats as Record<string, number>;
+    const { panel } = await openPanel(scout({ ...c, stats: { scanned, signals_analyzed, opportunities } }));
+    expect(within(panel).getByText(`replay-bad: could not be read (${sourceFailureReasons.xml_unsafe}).`)).toBeInTheDocument();
+    expect(within(panel).getByText(runNextActions.run_again_later)).toBeInTheDocument();
+  });
+
+  it('shows nothing before any result', async () => {
+    serve(scout({ stats: {}, run_outcome: null, last_run_at: null, status: 'draft' }));
+    const screen = renderApp(<App />, { route: `/scout-requests/${DALLAS}` });
+    await screen.findByRole('heading', { level: 1, name: 'Dallas demand scan' });
+    expect(screen.queryByRole('region', { name: runResultCopy.heading })).not.toBeInTheDocument();
+  });
+});
+
+describe('the wait-expiry reason says only what the job recorded (FU-Q1-2)', () => {
+  beforeEach(() => orgModel.setMembership('org-1', 'user-1', 'owner'));
+  afterEach(() => orgModel.reset());
+
+  it('an immediate refusal is not worded as a wait; a wait until the deadline is', async () => {
+    serve(scout(cases.complete), [
+      jobRow('j-now', jobs.admission_refused_at_once),
+      jobRow('j-unknown', jobs.admission_waited_until_unknown_end),
+      jobRow('j-deadline', jobs.admission_waited_until_deadline),
+    ]);
+    const screen = renderApp(<App />, { route: `/scout-requests/${DALLAS}` });
+    const unresolved = await screen.findAllByText(runOutcomeReasons.earlier_operation_unresolved);
+    expect(unresolved).toHaveLength(2); // nothing waited; waited until an unknown end
+    expect(screen.getAllByText(runOutcomeReasons.earlier_operation_timed_out)).toHaveLength(1);
+    expect(runOutcomeReasons.earlier_operation_unresolved).not.toMatch(/wait|timed out/i);
+    const rows = Array.from(document.querySelectorAll('[data-job-outcome="failed"]'));
+    expect(rows).toHaveLength(3);
+  });
+});
+
+describe('the next step follows the viewer\'s role (fix pass: every next step is doable by this viewer)', () => {
+  afterEach(() => orgModel.reset());
+
+  it.each([
+    ['refused_at_bound', 'narrow_request'],
+    ['partial_source_failed', 'run_again_later'],
+  ] as const)('%s: an editor is pointed at Edit or Run now, which the page shows', async (name, action) => {
+    orgModel.setMembership('org-1', 'user-1', 'marketer');
+    const { screen, panel } = await openPanel(scout(cases[name]));
+    expect(sections(panel)[runResultCopy.nextStep]).toEqual([runNextActions[action]]);
+    expect(await screen.findAllByRole('button', { name: 'Run now' })).not.toHaveLength(0);
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+  });
+
+  it.each([
+    ['refused_at_bound', 'narrow_request'],
+    ['partial_source_failed', 'run_again_later'],
+  ] as const)('%s: a viewer, who has no Edit or Run now, is asked to turn to someone who can', async (name, action) => {
+    orgModel.setMembership('org-1', 'user-1', 'viewer');
+    const { screen, panel } = await openPanel(scout(cases[name]));
+    expect(sections(panel)[runResultCopy.nextStep]).toEqual([runNextActionsForNonEditors[action]]);
+    expect(within(panel).queryByText(runNextActions[action])).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Run now' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Review r1 (W21-REV-Q1) MINOR-1..3, PROPOSED. Each page test renders a whole body the real route
+ * returned (src/test/fixtures/scout-run-outcomes.json, pinned by the API test), including its real
+ * `coverage` and `execution`, so the D-25 notice renders beside the panel as it does in the product.
+ */
+const NOTICE_RUN_STEPS = [
+  'Run now to try again.',
+  'Run now to start a new run.',
+  'so this scout can run again',
+  'You can run this scout now',
+];
+
+describe('a run that read no source is not presented as complete (review r1 MINOR-1)', () => {
+  beforeEach(() => orgModel.setMembership('org-1', 'user-1', 'owner'));
+  afterEach(() => orgModel.reset());
+
+  it('showsRunResult: no panel for sources [], a panel for null sources (a pre-#268 refusal)', () => {
+    expect(showsRunResult(cases.no_source.run_outcome)).toBe(false);
+    expect(showsRunResult({ ...cases.refused_at_bound.run_outcome!, sources: null })).toBe(true);
+    expect(showsRunResult(cases.complete.run_outcome)).toBe(true);
+    expect(showsRunResult(null)).toBe(false);
+  });
+
+  it('the real body of a market no source covers: no "complete" claim; the zero-result panel explains it once', async () => {
+    serve(scout(cases.no_source));
+    const screen = renderApp(<App />, { route: `/scout-requests/${DALLAS}` });
+    expect(await screen.findByText('No source covered the last run')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: runResultCopy.heading })).not.toBeInTheDocument();
+    expect(screen.queryByText(runResultSummaries.complete)).not.toBeInTheDocument();
+    expect(screen.queryByText(runResultLabels.complete)).not.toBeInTheDocument();
+  });
+});
+
+describe('the panel never calls an earlier run the latest (review r1 MINOR-2)', () => {
+  beforeEach(() => orgModel.setMembership('org-1', 'user-1', 'owner'));
+  afterEach(() => orgModel.reset());
+
+  const exec = (state: ScoutExecution['state'], reason: ScoutExecution['reason']): ScoutExecution => ({
+    state,
+    reason,
+    next_action: 'run_now',
+    since: null,
+  });
+
+  it('isEarlierRunResult: only states in which the latest run ended without a result', () => {
+    expect(isEarlierRunResult(exec('stopped', 'admission_unresolved'))).toBe(true);
+    expect(isEarlierRunResult(exec('stopped', 'run_cancelled'))).toBe(true);
+    expect(isEarlierRunResult(exec('stopped', 'run_interrupted'))).toBe(true);
+    // A refusal ends `stopped / run_failed` and is itself the result; the others may have written one.
+    expect(isEarlierRunResult(exec('stopped', 'run_failed'))).toBe(false);
+    expect(isEarlierRunResult(exec('idle', 'none'))).toBe(false);
+    expect(isEarlierRunResult(exec('paused', 'paused_by_user'))).toBe(false);
+    expect(isEarlierRunResult(exec('in_progress', 'run_active'))).toBe(false);
+    expect(isEarlierRunResult(exec('needs_attention', 'operation_outcome_unknown'))).toBe(false);
+    expect(isEarlierRunResult(null)).toBe(false);
+  });
+
+  it('the real body after a later run failed admission_unresolved: the panel says it is an earlier run', async () => {
+    const c = cases.earlier_result_after_admission_unresolved;
+    expect(c.execution).toMatchObject({ state: 'stopped', reason: 'admission_unresolved' });
+    const { screen, panel } = await openPanel(scout(c));
+    expect(runResultCopy.heading).toBe('Result of the last run that read its sources');
+    expect(within(panel).getByRole('heading', { name: runResultCopy.heading })).toBeInTheDocument();
+    expect(within(panel).getByText(runResultCopy.earlierRun)).toBeInTheDocument();
+    expect(screen.queryByText(/latest run result/i)).not.toBeInTheDocument();
+    // The D-25 notice above says the latest run could not continue; the two now agree.
+    const notice = document.querySelector('[data-execution-state="stopped"]');
+    expect(notice?.textContent).toMatch(/^The last run could not continue/);
+  });
+
+  it('a result that is the latest run has no such qualifier', async () => {
+    const { panel } = await openPanel(scout(cases.partial_source_failed));
+    expect(within(panel).queryByText(runResultCopy.earlierRun)).not.toBeInTheDocument();
+  });
+});
+
+describe('a refused run has exactly one next step on the page (review r1 MINOR-3)', () => {
+  afterEach(() => orgModel.reset());
+
+  it.each([
+    ['owner', runNextActions.narrow_request],
+    ['viewer', runNextActionsForNonEditors.narrow_request],
+  ] as const)('the real refused body with its real execution (%s)', async (role, step) => {
+    orgModel.setMembership('org-1', 'user-1', role);
+    const c = cases.refused_at_bound;
+    expect(c.execution).toMatchObject({ state: 'stopped', reason: 'run_failed' });
+    const { screen, panel } = await openPanel(scout(c));
+    // The D-25 notice keeps its title and points at the panel instead of giving its own step.
+    const title = screen.getByText(/^The last run did not complete/);
+    const notice = title.closest('[data-execution-state]') as HTMLElement;
+    expect(notice).toHaveAttribute('data-execution-state', 'stopped');
+    expect(within(notice).getByText(runResultCopy.seeResultBelow)).toBeInTheDocument();
+    // Exactly one next step: the panel's.
+    const page = document.body.textContent ?? '';
+    expect(sections(panel)[runResultCopy.nextStep]).toEqual([step]);
+    expect(page.split(step).length - 1).toBe(1);
+    for (const other of [...NOTICE_RUN_STEPS, ...Object.values(runNextActions), ...Object.values(runNextActionsForNonEditors)]) {
+      if (other !== step) expect(page).not.toContain(other);
+    }
+  });
+
+  it('executionNotice: a run-again step defers to the panel; a prerequisite step is kept; titles never change', () => {
+    const exec = (state: ScoutExecution['state'], reason: ScoutExecution['reason']): ScoutExecution => ({
+      state,
+      reason,
+      next_action: 'run_now',
+      since: null,
+    });
+    const see = runResultCopy.seeResultBelow;
+    const deferred = [
+      [exec('stopped', 'run_failed'), 'failed'],
+      [exec('stopped', 'run_cancelled'), 'draft'],
+      [exec('stopped', 'admission_unresolved'), 'failed'],
+      [exec('in_progress', 'operation_finishing'), 'failed'],
+    ] as const;
+    for (const [e, status] of deferred) {
+      const plain = executionNotice(e, status)!;
+      const got = executionNotice(e, status, { deferNextStep: true })!;
+      expect(got.title).toBe(plain.title);
+      expect(got.body.endsWith(see)).toBe(true);
+      for (const step of NOTICE_RUN_STEPS) expect(got.body).not.toContain(step);
+    }
+    const kept = [
+      [exec('paused', 'paused_by_user'), 'paused'],
+      [exec('needs_attention', 'operation_overdue'), 'failed'],
+      [exec('stopped', 'run_interrupted'), 'queued'],
+    ] as const;
+    for (const [e, status] of kept) {
+      expect(executionNotice(e, status, { deferNextStep: true })).toEqual(executionNotice(e, status));
+    }
+  });
+});
+
+/**
+ * W21 FU-HELD-BODY-1 (PROPOSED). `held_copy_after_failure`, `live_source_failed_cooling` and
+ * `older_record_without_read_facts` are real bodies the route returned
+ * (apps/api/app/tests/test_held_copy_outcome_w21.py): a live source read once, then failing (500),
+ * then a run inside its cool-down that used the stored copy without contacting it; and a run whose
+ * record predates the read facts. Variants the current writer cannot produce (no recorded age or
+ * retry time) are derived from the real body, as the pre-#268 refusal is above.
+ */
+describe('a stored copy used during a failure cool-down is never a complete read (FU-HELD-BODY-1)', () => {
+  beforeEach(() => orgModel.setMembership('org-1', 'user-1', 'owner'));
+  afterEach(() => orgModel.reset());
+
+  const held = cases.held_copy_after_failure;
+  const heldSource = held.run_outcome!.sources![0]!;
+  const lastRead = formatDateTime(heldSource.last_read_at);
+  const retry = formatDateTime(held.run_outcome!.next_retry_at);
+
+  it('the real body: partial (source_held), the copy held after a failed read, wait for the retry time', () => {
+    expect(held.run_outcome).toMatchObject({
+      kind: 'partial',
+      partial_reasons: ['source_held'],
+      next_action: 'wait_for_source_retry',
+    });
+    expect(heldSource).toMatchObject({ read_mode: 'held', failed: false, last_failure_reason: 'retries_exhausted' });
+    expect(usedHeldCopy(heldSource)).toBe(true);
+    expect(heldSource.last_read_at).toBeTruthy();
+    expect(held.run_outcome!.next_retry_at).toBe(heldSource.next_retry_at);
+    // What #284 disclosed stays as it was: the held source is not counted failed in coverage.
+    expect(held.coverage).toMatchObject({ status: 'covered', sources_failed: 0 });
+  });
+
+  it('lines: the stored copy is never called a read; the failure, its age and the retry time are given', () => {
+    expect(runResultLines(held.run_outcome!, held.stats, true)).toEqual({
+      ran: ['1 item collected, 1 signal analysed, 1 opportunity.', 'Read 0 of 1 source.', 'live-dallas: 2 items from a stored copy.'],
+      didNot: [
+        `live-dallas: not contacted in this run, because its last read failed (${sourceFailureReasons.retries_exhausted}). ` +
+          `The stored copy used was last read on ${lastRead}. It can be tried again after ${retry}.`,
+      ],
+      next: runNextStepAfter.editor(retry, 1),
+    });
+    expect(runNextStepAfter.editor(retry, 1)).toBe(
+      `Run this scout again after ${retry}. The source it could not read is cooling down until then, so a run before then may not reach it.`,
+    );
+  });
+
+  it('the retry time is one worker\'s cool-down: no next step says a run "will not" reach the source (review r1 MINOR-1)', () => {
+    const steps = [
+      runNextStepAfter.editor(retry, 1),
+      runNextStepAfter.editor(retry, 2),
+      runNextStepAfter.nonEditor(retry, 1),
+      runNextStepAfter.nonEditor(retry, 2),
+      runNextActions.wait_for_source_retry,
+      runNextActionsForNonEditors.wait_for_source_retry,
+    ];
+    for (const step of steps) {
+      expect(step).toMatch(/may not reach (it|them)\.$/);
+      expect(step).not.toMatch(/will not|does not contact|would not/);
+    }
+  });
+
+  it('two sources not read: the step names both, with the latest retry time (review r1 I-9)', () => {
+    // A second source that failed in the same run, cooling down 5 minutes longer: derived from the
+    // real body, as the variants below are; the API pins "the latest retry time" itself.
+    const later = new Date(Date.parse(heldSource.next_retry_at!) + 300_000).toISOString();
+    const failed = {
+      ...heldSource,
+      source_key: 'live-dallas-2',
+      failed: true,
+      failure_reason: 'fetch_error' as const,
+      read_mode: null,
+      fetched: 0,
+      eligible_seen: 0,
+      last_read_at: null,
+      last_failure_reason: null,
+      next_retry_at: later,
+    };
+    const run_outcome = { ...held.run_outcome!, next_retry_at: later, sources: [heldSource, failed] };
+    const at = formatDateTime(later);
+    expect(runResultLines(run_outcome, held.stats, true).next).toBe(
+      `Run this scout again after ${at}. The sources it could not read are cooling down until then, so a run before then may not reach them.`,
+    );
+    expect(runResultLines(run_outcome, held.stats, false).next).toBe(runNextStepAfter.nonEditor(at, 2));
+  });
+
+  it('the page: Partial, never "Complete" or "Every source was read in full", with the age, the retry time and the wait', async () => {
+    const { screen, panel } = await openPanel(scout(held));
+    expect(panel).toHaveAttribute('data-run-result', 'partial');
+    expect(within(panel).getByRole('status')).toHaveTextContent(`${runResultLabels.partial}${runResultSummaries.partial}`);
+    expect(within(panel).queryByText(runResultLabels.complete)).not.toBeInTheDocument();
+    expect(screen.queryByText(runResultSummaries.complete)).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain(runResultSummaries.complete);
+    const lines = runResultLines(held.run_outcome!, held.stats, true);
+    expect(sections(panel)).toEqual({
+      [runResultCopy.whatRan]: lines.ran,
+      [runResultCopy.whatDidNot]: lines.didNot,
+      [runResultCopy.nextStep]: [lines.next],
+    });
+    expect(panel.textContent).toContain(lastRead);
+    expect(panel.textContent).toContain(retry);
+    // Not "run again later": a run inside the cool-down may not reach the source.
+    expect(panel.textContent).not.toContain(runNextActions.run_again_later);
+    expect(screen.getAllByRole('button', { name: 'Run now' })).not.toHaveLength(0);
+  });
+
+  it('an age that was not recorded is said to be unknown, never invented', async () => {
+    const run_outcome = { ...held.run_outcome!, sources: [{ ...heldSource, last_read_at: null }] };
+    const { panel } = await openPanel(scout({ ...held, run_outcome }));
+    expect(panel.textContent).toContain('When the stored copy used was last read is not recorded.');
+    expect(panel.textContent).not.toMatch(/was last read on/);
+    expect(within(panel).getByRole('status')).toHaveTextContent(runResultLabels.partial);
+  });
+
+  it('a retry time that was not recorded is not invented, and the step is still to wait', () => {
+    const run_outcome = {
+      ...held.run_outcome!,
+      next_retry_at: null,
+      sources: [{ ...heldSource, next_retry_at: null }],
+    };
+    const lines = runResultLines(run_outcome, held.stats, true);
+    expect(lines.next).toBe(runNextActions.wait_for_source_retry);
+    expect(lines.didNot.join(' ')).not.toMatch(/tried again after/);
+    expect(runResultLines(run_outcome, held.stats, false).next).toBe(runNextActionsForNonEditors.wait_for_source_retry);
+    expect(runNextActions.wait_for_source_retry).toMatch(/^Wait before running this scout again\./);
+  });
+
+  it('a member who cannot run the scout is asked to turn to someone who can, after the retry time', async () => {
+    orgModel.setMembership('org-1', 'user-1', 'viewer');
+    const { screen, panel } = await openPanel(scout(held));
+    expect(sections(panel)[runResultCopy.nextStep]).toEqual([runNextStepAfter.nonEditor(retry, 1)]);
+    expect(runNextStepAfter.nonEditor(retry, 1)).toMatch(/^Ask someone who can run this scout to run it again after /);
+    expect(screen.queryByRole('button', { name: 'Run now' })).not.toBeInTheDocument();
+  });
+
+  it('a live source that failed and is cooling down: its retry time, and wait - not "run again later"', async () => {
+    const c = cases.live_source_failed_cooling;
+    const at = formatDateTime(c.run_outcome!.next_retry_at);
+    expect(c.run_outcome).toMatchObject({ kind: 'partial', partial_reasons: ['source_failed'], next_action: 'wait_for_source_retry' });
+    expect(runResultLines(c.run_outcome!, c.stats, true)).toEqual({
+      ran: ['0 items collected, 0 signals analysed, 0 opportunities.', 'Read 0 of 1 source.'],
+      didNot: [`live-dallas: could not be read (${sourceFailureReasons.retries_exhausted}). It can be tried again after ${at}.`],
+      next: runNextStepAfter.editor(at, 1),
+    });
+    const { panel } = await openPanel(scout(c));
+    expect(panel).toHaveAttribute('data-run-result', 'partial');
+    expect(panel.textContent).not.toContain(runNextActions.run_again_later);
+  });
+
+  it('a failed source that does not cool down (the sample feed) keeps "run again later"', () => {
+    const c = cases.partial_source_failed;
+    expect(c.run_outcome!.next_action).toBe('run_again_later');
+    expect(c.run_outcome!.next_retry_at).toBeNull();
+    expect(runResultLines(c.run_outcome!, c.stats, true).next).toBe(runNextActions.run_again_later);
+  });
+
+  it('an older record of a live source: complete as before, but "read in full" is not claimed, since the record cannot say', async () => {
+    const c = cases.older_live_record_without_read_facts;
+    expect(c.run_outcome!.kind).toBe('complete');
+    expect(c.run_outcome!.sources!.every((s) => s.read_mode == null && s.last_read_at == null)).toBe(true);
+    const { panel } = await openPanel(scout(c));
+    expect(within(panel).getByRole('status')).toHaveTextContent(`${runResultLabels.complete}${runResultCopy.completeUnrecorded}`);
+    expect(within(panel).queryByText(runResultSummaries.complete)).not.toBeInTheDocument();
+    expect(sections(panel)[runResultCopy.nextStep]).toBeUndefined();
+  });
+
+  it('a complete run that records how its sources were read still says "read in full", simulated or live (guardrail 3)', () => {
+    expect(runResultSummary(cases.complete.run_outcome!, cases.complete.coverage)).toBe(runResultSummaries.complete);
+    const live = cases.live_complete_fetched;
+    expect(live.coverage).toMatchObject({ reason: 'live_sources' });
+    expect(runResultSummary(live.run_outcome!, live.coverage)).toBe(runResultSummaries.complete);
+    for (const c of [cases.complete, live]) {
+      const [source] = c.run_outcome!.sources!;
+      for (const read_mode of ['fetched', 'revalidated', 'reused'] as const) {
+        const result = { ...c.run_outcome!, sources: [{ ...source!, read_mode }] };
+        expect(runResultSummary(result, c.coverage)).toBe(runResultSummaries.complete);
+        expect(runResultSummary(result, null)).toBe(runResultSummaries.complete);
+      }
+    }
+  });
+});
+
+/**
+ * Operator ruling on packet item 48 (option B), with review W21-REV-HELDBODY r2's four guardrails. An
+ * older complete record (no `read_mode`) keeps "Every source was read in full." only when its own
+ * recorded `coverage.reason` positively establishes an entirely simulated source path
+ * (`fixture_library`, `sandbox_feed`); live, mixed, missing, unreadable or unknown coverage gets the
+ * qualified sentence. Real bodies the route returned: the demo library, sample feed and replayed live
+ * records without read facts, a record without coverage and one whose coverage the API cannot read
+ * (lifted to null), and a fresh live record. Derived from them, as above, the shapes no writer
+ * produces: `sources_unavailable` on a complete run, a mixed or unknown reason, a contradicting
+ * `is_simulated`, and an older API that sends no `coverage` field.
+ */
+describe('older complete records: the recorded source path decides the summary (packet item 48, option B)', () => {
+  beforeEach(() => orgModel.setMembership('org-1', 'user-1', 'owner'));
+  afterEach(() => orgModel.reset());
+
+  const FULL = runResultSummaries.complete;
+  const QUALIFIED = runResultCopy.completeUnrecorded;
+  const live = cases.older_live_record_without_read_facts;
+  const withReason = (reason: string, is_simulated = live.coverage!.is_simulated) =>
+    ({ ...live.coverage!, reason, is_simulated }) as unknown as NonNullable<Case['coverage']>;
+
+  it('the real older bodies record no read facts and keep the coverage they recorded', () => {
+    for (const name of [
+      'older_record_without_read_facts',
+      'older_sandbox_record_without_read_facts',
+      'older_live_record_without_read_facts',
+      'older_record_without_coverage',
+      'older_record_unreadable_coverage',
+    ] as const) {
+      const c = cases[name];
+      expect(c.run_outcome!.kind).toBe('complete');
+      expect(c.run_outcome!.sources!.every((s) => !s.failed && s.read_mode == null)).toBe(true);
+    }
+    expect(cases.older_record_without_read_facts.coverage).toMatchObject({ reason: 'fixture_library' });
+    expect(cases.older_sandbox_record_without_read_facts.coverage).toMatchObject({ reason: 'sandbox_feed' });
+    // Guardrail 1's trap: a replayed live source records is_simulated: true.
+    expect(live.coverage).toMatchObject({ reason: 'live_sources', is_simulated: true });
+    expect(cases.older_record_without_coverage.coverage).toBeNull();
+    expect(cases.older_record_unreadable_coverage.coverage).toBeNull();
+  });
+
+  it.each([
+    ['the demo library (real body)', 'older_record_without_read_facts', undefined, FULL],
+    ['the sample feed (real body)', 'older_sandbox_record_without_read_facts', undefined, FULL],
+    ['a replayed live source (real body)', 'older_live_record_without_read_facts', undefined, QUALIFIED],
+    ['missing coverage (real body)', 'older_record_without_coverage', undefined, QUALIFIED],
+    ['unreadable coverage (real body)', 'older_record_unreadable_coverage', undefined, QUALIFIED],
+    ['live, every source failed (derived)', 'older_live_record_without_read_facts', withReason('sources_unavailable'), QUALIFIED],
+    ['no source for the market (derived)', 'older_live_record_without_read_facts', withReason('no_source_for_market'), QUALIFIED],
+    ['a mixed path (derived)', 'older_live_record_without_read_facts', withReason('fixture_library+live_sources'), QUALIFIED],
+    ['an unknown future reason (derived)', 'older_live_record_without_read_facts', withReason('a future source path'), QUALIFIED],
+    ['live with is_simulated true (derived; guardrail 1)', 'older_live_record_without_read_facts', withReason('live_sources', true), QUALIFIED],
+    ['demo library with is_simulated false (derived; guardrail 1)', 'older_live_record_without_read_facts', withReason('fixture_library', false), FULL],
+    ['sample feed with is_simulated false (derived; guardrail 1)', 'older_live_record_without_read_facts', withReason('sandbox_feed', false), FULL],
+  ] as const)('%s', (_label, name, override, summary) => {
+    const c = cases[name];
+    const coverage = override === undefined ? c.coverage : override;
+    expect(runResultSummary(c.run_outcome!, coverage)).toBe(summary);
+  });
+
+  it('an older API that sends no coverage field, or a record with no per-source facts, is qualified unless its path is simulated', () => {
+    const c = cases.older_sandbox_record_without_read_facts;
+    expect(runResultSummary(c.run_outcome!, undefined)).toBe(QUALIFIED);
+    expect(runResultSummary({ ...c.run_outcome!, sources: null }, c.coverage)).toBe(FULL);
+    expect(runResultSummary({ ...live.run_outcome!, sources: null }, live.coverage)).toBe(QUALIFIED);
+  });
+
+  it.each([
+    ['older_record_without_read_facts', FULL],
+    ['older_sandbox_record_without_read_facts', FULL],
+    ['older_live_record_without_read_facts', QUALIFIED],
+    ['older_record_without_coverage', QUALIFIED],
+    ['older_record_unreadable_coverage', QUALIFIED],
+  ] as const)('the page: %s', async (name, summary) => {
+    const { panel } = await openPanel(scout(cases[name]));
+    expect(within(panel).getByRole('status')).toHaveTextContent(`${runResultLabels.complete}${summary}`);
+    const other = summary === FULL ? QUALIFIED : FULL;
+    expect(within(panel).queryByText(other)).not.toBeInTheDocument();
+  });
+
+  it('the held copy stays Partial and a fresh live read stays "read in full", whatever the coverage', async () => {
+    const held = cases.held_copy_after_failure;
+    for (const coverage of [held.coverage, null, withReason('fixture_library')]) {
+      expect(runResultSummary(held.run_outcome!, coverage)).toBe(runResultSummaries.partial);
+    }
+    const { panel } = await openPanel(scout(cases.live_complete_fetched));
+    expect(within(panel).getByRole('status')).toHaveTextContent(`${runResultLabels.complete}${FULL}`);
+  });
+});

@@ -17,11 +17,23 @@ closed ``failure_reason``, never as an empty source. The run's stats expose the 
 (:data:`FETCH_LIMIT_REACHED`) or failed (:data:`SOURCE_FAILED`), listing every applicable
 reason in ``partial_fetch_reasons`` - an explicit outcome, never ``covered`` by silence. The
 demo fixture library declares no per-source limit (``max_items`` null) and is never clipped.
+
+How each source's content was obtained (W21 FU-HELD-BODY-1, PROPOSED): every report a
+connector writes says so in ``read_mode`` (:class:`SourceReadMode`). The live connector can
+answer a run without contacting a source: inside the politeness interval after a good read
+(``reused``), or during the cool-down after a failed fetch, from the copy it holds of the last
+good read (``held``). A held copy is not a read of the source: the run is partial
+(:data:`SOURCE_HELD`), and the report carries when that copy was last read successfully
+(``last_read_at``), why the last fetch failed (``last_failure_reason``) and when the source may
+be contacted again (``next_retry_at``). Facts a run did not record are left out of its stats,
+never invented: a row written before they existed has none of them.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
+from enum import StrEnum
 
 #: The per-source fetch limit (``FetchScope.max_items`` default): entries read per source
 #: per run, independent of the per-run in-process bound.
@@ -32,6 +44,11 @@ FETCH_LIMIT_REACHED = "fetch_limit_reached"
 #: Stable reason code of a run in which at least one source failed (and so contributed
 #: nothing): a failed source is never presented as an empty one.
 SOURCE_FAILED = "source_failed"
+#: Stable reason code of a run in which at least one source was not contacted because its last
+#: fetch failed and it was cooling down, and the copy held from its last good read was used
+#: instead (``read_mode`` ``held``; W21 FU-HELD-BODY-1, PROPOSED). Such a source was not read in
+#: this run, so the run is never complete.
+SOURCE_HELD = "source_held"
 
 #: Per-source failure reasons (``failure_reason``); closed, static, secret-free.
 #: A byte cap refused the feed (the parser's ``MAX_FEED_BYTES`` or, on the live path, the
@@ -54,6 +71,23 @@ RESPONSE_REFUSED = "response_refused"
 EGRESS_BLOCKED = "egress_blocked"
 #: Any other permanent fetch failure (a 4xx other than 429, a source not configured).
 FETCH_ERROR = "fetch_error"
+
+
+class SourceReadMode(StrEnum):
+    """How a source that was not failed provided the content a run used (``read_mode``).
+
+    ``fetched``: the source sent its content in this run (a live ``200``, or a simulated source
+    read in this run). ``revalidated``: the source answered this run's conditional request with
+    ``304 Not Modified``, so the copy held from its last good read is current. ``reused``: the
+    source was not contacted, because its last read succeeded less than one politeness interval
+    ago. ``held``: the source was not contacted, because its last fetch failed and it is cooling
+    down; the copy held from its last good read was used (its age is that read's age).
+    """
+
+    FETCHED = "fetched"
+    REVALIDATED = "revalidated"
+    REUSED = "reused"
+    HELD = "held"
 
 
 def lookahead_entries(max_items: int) -> int:
@@ -84,10 +118,24 @@ class SourceFetchReport:
     #: nothing about what the source held. ``failure_reason`` is one of the closed codes.
     failed: bool = False
     failure_reason: str | None = None
+    #: W21 FU-HELD-BODY-1 (PROPOSED). How the content was obtained (a :class:`SourceReadMode`
+    #: value); ``None`` for a failed source, and where the writer does not know (a connector
+    #: double without reports).
+    read_mode: str | None = None
+    #: When the source last answered successfully (``200`` or ``304``) for the copy used;
+    #: ``None`` where not known (a simulated source, a failed one).
+    last_read_at: datetime | None = None
+    #: While the source cools down after a failed fetch: the earliest time the worker that ran
+    #: this run will contact it again. ``None`` when it is not cooling down.
+    next_retry_at: datetime | None = None
+    #: For a ``held`` copy: the closed reason of the failed fetch that started the cool-down.
+    last_failure_reason: str | None = None
 
     def as_stats(self) -> dict:
-        """The JSON object stored under ``stats["fetch_limits"]``."""
-        return {
+        """The JSON object stored under ``stats["fetch_limits"]``. The W21 FU-HELD-BODY-1 facts
+        are written only when known, so an unknown one is absent (as in a row written before
+        they existed), never a guessed value."""
+        out: dict = {
             "source_key": self.source_key,
             "max_items": self.max_items,
             "clipped": self.clipped_by_fetch_limit,
@@ -96,6 +144,15 @@ class SourceFetchReport:
             "failed": self.failed,
             "failure_reason": self.failure_reason,
         }
+        if self.read_mode is not None:
+            out["read_mode"] = str(self.read_mode)
+        if self.last_read_at is not None:
+            out["last_read_at"] = self.last_read_at.isoformat()
+        if self.next_retry_at is not None:
+            out["next_retry_at"] = self.next_retry_at.isoformat()
+        if self.last_failure_reason is not None:
+            out["last_failure_reason"] = self.last_failure_reason
+        return out
 
 
 @dataclass
@@ -114,13 +171,16 @@ def partial_fetch_facts(fetch_limits: list[dict]) -> dict:
     """``partial_fetch`` and ``partial_fetch_reasons`` from per-source stats entries.
 
     The run did not read everything its sources held when any source was clipped by its
-    fetch limit (``fetch_limit_reached``) or failed (``source_failed``). Both facts are
-    kept: the reasons list names each that applies and never collapses one into the
-    other. ``partial_fetch_reasons`` is present only when ``partial_fetch`` is true.
+    fetch limit (``fetch_limit_reached``), failed (``source_failed``) or was not contacted
+    during a failure cool-down, its held copy used instead (``source_held``). Every fact is
+    kept: the reasons list names each that applies and never collapses one into another.
+    ``partial_fetch_reasons`` is present only when ``partial_fetch`` is true.
     """
     reasons = []
     if any(f.get("failed") for f in fetch_limits):
         reasons.append(SOURCE_FAILED)
+    if any(f.get("read_mode") == SourceReadMode.HELD for f in fetch_limits):
+        reasons.append(SOURCE_HELD)
     if any(f.get("clipped") for f in fetch_limits):
         reasons.append(FETCH_LIMIT_REACHED)
     out: dict = {"partial_fetch": bool(reasons)}
