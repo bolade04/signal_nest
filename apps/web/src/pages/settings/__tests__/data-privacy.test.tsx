@@ -100,6 +100,7 @@ const EXPORT: AccountExportOut = {
   audit_events_performed: [],
   briefs_authored: [],
   approvals_decided: [],
+  drafts_authored: [],
 };
 
 function RoleProbe() {

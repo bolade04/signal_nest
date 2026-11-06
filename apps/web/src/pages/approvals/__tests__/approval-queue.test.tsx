@@ -74,6 +74,7 @@ function decision(overrides: Partial<ApprovalOut> = {}): ApprovalOut {
     subject_id: 'brief-1',
     subject_version: 1,
     brief_id: 'brief-1',
+    draft_id: null, // W21 CF-2 (I-CF2-1): a decision on a brief binds no draft
     decision: 'approved',
     decision_seq: 1,
     reason_code: null,
