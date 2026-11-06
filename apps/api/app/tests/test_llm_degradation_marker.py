@@ -14,7 +14,10 @@ opportunities and the opportunity detail API are asserted for each:
   degrades its opportunity, which is then never explained (the scores, title and
   grouping were computed without the classification, and the copy says so);
 * ``"rule_based"`` below the relevance action floor, where the signals are classified
-  but no explanation is requested from the model.
+  but no explanation is requested from the model;
+* on an act decision (``act_now`` / ``act_soon``) a degraded card's recommended action
+  is the placeholder's, pinned verbatim with every other canned field, in storage and
+  in the detail API (FU-237-F3): never invented action copy.
 
 Every module-level path to a provider is offline (``app.tests._llm_offline``), so the
 module behaves the same on a machine whose environment configures a real provider.
@@ -31,8 +34,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
+from app.claims.engine import ClaimSafetyResult
 from app.core.config import get_settings
-from app.core.enums import ExplanationSource
+from app.core.enums import ClaimRisk, DecisionAction, ExplanationSource
 from app.core.logging import JsonFormatter
 from app.db import seed as seed_mod
 from app.db.models import Base
@@ -67,6 +71,17 @@ CLASSIFIED = {
     "rationale": "Repeated complaints about wait times.",
 }
 OLD_CANNED = ("Signal is relevant to your market.", "Demand appears to be forming.")
+#: The stored copy when the explain call failed, pinned verbatim.
+DEGRADED_WHY = (
+    "AI explanation unavailable: the language-model provider did not return a "
+    "usable response for this run."
+)
+#: The recommended action a degraded card shows on an act decision, pinned verbatim
+#: (FU-237-F3): it sends the reader to the evidence and says no AI recommendation exists.
+DEGRADED_ACTION = "Review the observed evidence before acting; no AI recommendation was generated."
+#: Returned by the forced ``decide``: it matches no placeholder, so a card that showed
+#: the decision rationale instead of the placeholder's action would fail the pin.
+FORCED_RATIONALE = "Forced act decision (test)."
 #: The stored copy when classification failed, pinned verbatim: it names the failure
 #: and makes no claim that the scores are unaffected.
 UNCLASSIFIED_WHY = (
@@ -168,6 +183,12 @@ def _relevance_at(monkeypatch, value: int) -> None:
     )
 
 
+def _decide_as(monkeypatch, action: DecisionAction) -> None:
+    """Decide every cluster as ``action``. The seeded fixture alone yields only
+    ``monitor`` decisions, which store the rationale as the recommended action."""
+    monkeypatch.setattr(pipeline, "decide", lambda _input: (action, FORCED_RATIONALE))
+
+
 @pytest.fixture(scope="module")
 def seeded(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("llm5")
@@ -244,10 +265,7 @@ def test_provider_failure_persists_a_marked_honest_placeholder(seeded, monkeypat
     assert calls.count("explain_opportunity") == attempts * len(degraded)
     for o in degraded:
         assert o.why_it_matters == pipeline.DEGRADED_EXPLANATION["why_it_matters"]
-        assert o.why_it_matters == (
-            "AI explanation unavailable: the language-model provider did not return a "
-            "usable response for this run."
-        )
+        assert o.why_it_matters == DEGRADED_WHY
         assert o.ai_inference is None
         assert o.suggested_angles == []
         assert o.why_it_matters not in OLD_CANNED and o.ai_inference not in OLD_CANNED
@@ -425,6 +443,61 @@ def test_detail_api_surfaces_degraded_marker(seeded, client, monkeypatch):
     assert body["explanation_source"] == "degraded"
     assert body["ai_inference"] is None
     assert body["why_it_matters"].startswith("AI explanation unavailable")
+
+
+@pytest.mark.parametrize(
+    "action", [DecisionAction.ACT_NOW, DecisionAction.ACT_SOON], ids=lambda a: a.value
+)
+@pytest.mark.parametrize(
+    ("classify_ok", "why"),
+    [(True, DEGRADED_WHY), (False, UNCLASSIFIED_WHY)],
+    ids=["explain_failed", "classify_failed"],
+)
+def test_an_act_decision_stores_and_serves_the_degraded_placeholder(
+    seeded, client, monkeypatch, action, classify_ok, why
+):
+    # FU-237-F3: only an act decision stores the explanation's recommended action, so a
+    # degraded card's action copy is reachable only here. Relevance at the floor makes
+    # every cluster eligible for an explanation; then the explain call fails, or (with
+    # ``classify_ok=False``) a member's classification fails first. Either way every
+    # card of the run is degraded and every canned field is the placeholder's.
+    _relevance_at(monkeypatch, RELEVANCE_ACTION_FLOOR)
+    _decide_as(monkeypatch, action)
+    # Claim-safety warnings on the observed text take precedence over the placeholder's
+    # risk note, and the seeded posts raise some. With none, the stored risk note is the
+    # placeholder's own (empty), so that canned field is pinned too.
+    monkeypatch.setattr(
+        pipeline,
+        "check_claim_safety",
+        lambda *_args, **_kwargs: ClaimSafetyResult(risk_level=ClaimRisk.LOW),
+    )
+    service, calls = _replay_service(classify_ok=classify_ok, explain_ok=False)
+    opps, _ = _rerun(seeded, monkeypatch, service)
+    if classify_ok:
+        attempts = offline_settings().llm_max_retries + 1
+        assert calls.count("explain_opportunity") == attempts * len(opps)
+    else:
+        assert "explain_opportunity" not in calls
+    for o in opps:
+        assert o.decision == action.value
+        assert o.explanation_source == ExplanationSource.DEGRADED.value
+        assert o.recommended_action == DEGRADED_ACTION
+        assert o.why_it_matters == why
+        assert o.ai_inference is None
+        assert o.suggested_angles == []
+        assert o.who_cares == o.audience_fit
+        assert o.risk_note == ""
+        assert o.claims_warnings == []
+        body = _detail(client, seeded, o)
+        assert body["explanation_source"] == "degraded"
+        assert body["decision"] == action.value
+        assert body["recommended_action"] == DEGRADED_ACTION
+        assert body["why_it_matters"] == why
+        assert body["ai_inference"] is None
+        assert body["suggested_angles"] == []
+        assert body["who_cares"] == o.audience_fit
+        assert body["risk_note"] == ""
+        assert body["claims_warnings"] == []
 
 
 def test_detail_api_reports_unrecorded_rows_as_null(seeded, client):

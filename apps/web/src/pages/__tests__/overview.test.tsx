@@ -81,6 +81,18 @@ describe('Overview — signal statistics (P6-UI-019)', () => {
     expect(await screen.findByText(/— noise filtered · — signals/)).toBeInTheDocument();
   });
 
+  it('says "1 signal" for exactly one analysed signal (W21 Q1 fix pass)', async () => {
+    seedScouts([
+      {
+        status: 'completed',
+        stats: { scanned: 1, noise_filtered: 0, signals_analyzed: 1, opportunities: 1 },
+        last_run_at: '2026-06-01T12:00:00Z',
+      },
+    ]);
+    const screen = renderApp(<App />, { route: '/' });
+    expect(await screen.findByText(/0 noise filtered · 1 signal$/)).toBeInTheDocument();
+  });
+
   it('shows a genuine zero as 0 — a run that found nothing is not a run that never happened', async () => {
     seedScouts([
       {
