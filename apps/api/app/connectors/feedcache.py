@@ -20,7 +20,9 @@ One entry per source key holds the last good feed body with its ``ETag`` /
   ``docs/operations/live-data-sources.md`` §6) (#255 review r2-MINOR-1);
 * while a source cools down, its last good body (if any) is served; a body the
   connector cannot read is never stored, so it is neither re-served nor re-fetched on
-  every run.
+  every run. The run records that it used that held copy (``read_mode`` ``held``, with the
+  copy's last good read and :meth:`FeedCache.retry_in`), so it is never shown as a complete
+  read of the source (W21 FU-HELD-BODY-1, PROPOSED).
 
 The cache is process-local and bounded; each worker process is polite on its own.
 A source's entry is dropped (:meth:`FeedCache.forget`) by the process that performs
@@ -177,6 +179,16 @@ class FeedCache:
         with self._lock:
             until = self._cool_until.get(key)
             return until is not None and self._clock() < until
+
+    def retry_in(self, key: str) -> float | None:
+        """Seconds until ``key``'s cool-down ends, or ``None`` when it is not cooling down.
+        Read-only: it never starts, extends or ends a cool-down (W21 FU-HELD-BODY-1)."""
+        with self._lock:
+            until = self._cool_until.get(key)
+            if until is None:
+                return None
+            left = until - self._clock()
+            return left if left > 0 else None
 
     def cooling_reason(self, key: str) -> tuple[FailureKind, str]:
         with self._lock:

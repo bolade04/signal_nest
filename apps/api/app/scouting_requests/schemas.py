@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator, model_v
 
 from app.connectors import fetch_limits
 from app.connectors.coverage import CoverageReason, CoverageStatus
+from app.connectors.fetch_limits import SourceReadMode
 from app.core.enums import ScheduleInterval, ScheduleState, SourceType
 from app.infra.vector import SIGNAL_VOLUME_ABOVE_BOUND
 from app.jobs.outcomes import RunOutcome, RunOutcomeReason
@@ -134,8 +135,10 @@ class ScoutRunOutcomeKind(StrEnum):
     """How completely the latest recorded run read its sources.
 
     ``complete``: the run completed and every source it consulted was read in full.
-    ``partial``: the run completed, but at least one source was clipped by its fetch limit or
-    failed. ``refused``: the run was refused at the per-run bound before anything was analysed."""
+    ``partial``: the run completed, but at least one source was clipped by its fetch limit,
+    failed, or was not contacted during a failure cool-down and its held copy was used (W21
+    FU-HELD-BODY-1). ``refused``: the run was refused at the per-run bound before anything was
+    analysed."""
 
     COMPLETE = "complete"
     PARTIAL = "partial"
@@ -143,9 +146,13 @@ class ScoutRunOutcomeKind(StrEnum):
 
 
 class PartialFetchReason(StrEnum):
-    """Why a run did not read everything its sources held (``app.connectors.fetch_limits``)."""
+    """Why a run did not read everything its sources held (``app.connectors.fetch_limits``).
+
+    ``source_held`` (W21 FU-HELD-BODY-1, PROPOSED): a source was not contacted because its last
+    fetch failed and it was cooling down; the copy held from its last good read was used."""
 
     SOURCE_FAILED = fetch_limits.SOURCE_FAILED
+    SOURCE_HELD = fetch_limits.SOURCE_HELD
     FETCH_LIMIT_REACHED = fetch_limits.FETCH_LIMIT_REACHED
 
 
@@ -173,11 +180,17 @@ class ScoutRunNextAction(StrEnum):
 
     ``narrow_request``: edit the Scout to use fewer source types or keywords, then run it again
     (a refusal). ``run_again_later``: run the Scout again later (a source failed).
-    ``no_action``: nothing the customer can do changes the result (only a fetch limit clipped a
-    source: no setting raises it, and a re-run reads the same limit)."""
+    ``wait_for_source_retry`` (W21 FU-HELD-BODY-1, PROPOSED): a source the run did not read
+    (failed, or its held copy used) is cooling down after a failed fetch, until
+    ``ScoutRunOutcome.next_retry_at`` (``null``: not recorded) in the worker that ran the run; run
+    the Scout again after then, since a run before then may not reach it (another worker, or a
+    restarted one, may reach it sooner). ``no_action``: nothing the
+    customer can do changes the result (only a fetch limit clipped a source: no setting raises
+    it, and a re-run reads the same limit)."""
 
     NARROW_REQUEST = "narrow_request"
     RUN_AGAIN_LATER = "run_again_later"
+    WAIT_FOR_SOURCE_RETRY = "wait_for_source_retry"
     NO_ACTION = "no_action"
 
 
@@ -188,7 +201,18 @@ class ScoutRunSource(BaseModel):
     Scout's keywords. ``clipped`` is true when the source held more than ``max_items`` (``null``:
     the source declares no limit). ``failed`` is true when the source contributed nothing because
     it failed; ``failure_reason`` is then its closed code (``null`` for a code this API does not
-    know, so the failure itself is never dropped). Counts and codes only."""
+    know, so the failure itself is never dropped). Counts and codes only.
+
+    How the content was obtained (W21 FU-HELD-BODY-1, PROPOSED): ``read_mode`` (``null`` for a
+    failed source, and when the run did not record it - a run recorded before this fact existed,
+    whose sources may or may not have been read in that run). ``held`` means the source was not
+    contacted: its last fetch failed and it was cooling down, so the copy held from its last good
+    read was used; ``last_failure_reason`` is then that failure's closed code. ``last_read_at``:
+    when the source last answered successfully for the copy used (``null`` when not recorded: the
+    copy's age is then unknown). ``next_retry_at``: while the source cools down after a failed
+    fetch, the earliest time the worker that ran this run contacts it again (``null`` when it is
+    not cooling down, or this was not recorded). These times come from one worker process; another
+    worker, or a restarted one, keeps no such record and may contact the source sooner."""
 
     source_key: str
     max_items: int | None
@@ -197,12 +221,42 @@ class ScoutRunSource(BaseModel):
     clipped: bool
     failed: bool
     failure_reason: SourceFailureReason | None
+    read_mode: SourceReadMode | None = None
+    last_read_at: datetime | None = None
+    next_retry_at: datetime | None = None
+    last_failure_reason: SourceFailureReason | None = None
 
-    @field_validator("failure_reason", mode="before")
+    @field_validator("failure_reason", "last_failure_reason", mode="before")
     @classmethod
     def _known_reason(cls, value: object) -> object:
         known = {r.value for r in SourceFailureReason}
         return value if value is None or value in known else None
+
+    @field_validator("read_mode", mode="before")
+    @classmethod
+    def _known_mode(cls, value: object) -> object:
+        # A mode this API does not know is "not recorded", never a guessed one.
+        known = {m.value for m in SourceReadMode}
+        return value if isinstance(value, str) and value in known else None
+
+    @field_validator("last_read_at", "next_retry_at", mode="before")
+    @classmethod
+    def _recorded_time(cls, value: object) -> object:
+        # A time that does not parse as an aware ISO 8601 instant is "not recorded"; it never
+        # sinks the whole lift, and is never read as another zone's time.
+        if isinstance(value, str):
+            try:
+                value = datetime.fromisoformat(value)
+            except ValueError:
+                return None
+        if isinstance(value, datetime) and value.tzinfo is not None:
+            return value
+        return None
+
+    @property
+    def held(self) -> bool:
+        """Its held copy was used during a failure cool-down: it was not read in this run."""
+        return not self.failed and self.read_mode is SourceReadMode.HELD
 
 
 class ScoutRunOutcome(BaseModel):
@@ -213,8 +267,11 @@ class ScoutRunOutcome(BaseModel):
     stats; its outcome is on the job). **What ran:** ``sources`` (every consulted source, ``[]``
     when none covered the market, ``null`` when the run recorded no per-source facts) and the
     counts in ``stats`` (``RunStats`` keys). **What did not:** ``refusal_reason`` and ``bound``
-    for a refusal, ``partial_reasons`` and the clipped or failed ``sources``. **One next
-    action:** ``next_action`` (``null`` for a complete run)."""
+    for a refusal, ``partial_reasons`` and the clipped, failed or held ``sources``. **One next
+    action:** ``next_action`` (``null`` for a complete run), and ``next_retry_at`` with
+    ``wait_for_source_retry`` (W21 FU-HELD-BODY-1, PROPOSED): the latest ``next_retry_at`` of the
+    sources the run did not read, so a run after it may contact each of them again; ``null`` when
+    no such time was recorded, and for every other next action."""
 
     kind: ScoutRunOutcomeKind
     sources: list[ScoutRunSource] | None
@@ -222,20 +279,33 @@ class ScoutRunOutcome(BaseModel):
     refusal_reason: RunRefusalReason | None
     bound: int | None
     next_action: ScoutRunNextAction | None
+    next_retry_at: datetime | None
 
     model_config = {"extra": "forbid"}
 
 
 def _next_action(
-    kind: ScoutRunOutcomeKind, reasons: list[PartialFetchReason]
-) -> ScoutRunNextAction | None:
+    kind: ScoutRunOutcomeKind,
+    reasons: list[PartialFetchReason],
+    sources: list[ScoutRunSource] | None,
+) -> tuple[ScoutRunNextAction | None, datetime | None]:
+    """The one next step and, for ``wait_for_source_retry``, the time to wait for.
+
+    A run that used a held copy, or whose failed source is cooling down, is told to wait for the
+    source's retry time rather than to run again at once: a run before then may not reach the
+    source (the worker that ran it will not contact it before then; W21 FU-HELD-BODY-1). A refusal
+    still says to narrow the Scout first."""
     if kind is ScoutRunOutcomeKind.REFUSED:
-        return ScoutRunNextAction.NARROW_REQUEST
+        return ScoutRunNextAction.NARROW_REQUEST, None
+    unread = [s for s in sources or [] if s.failed or s.held]
+    cooling = [s.next_retry_at for s in unread if s.next_retry_at is not None]
+    if PartialFetchReason.SOURCE_HELD in reasons or cooling:
+        return ScoutRunNextAction.WAIT_FOR_SOURCE_RETRY, max(cooling, default=None)
     if PartialFetchReason.SOURCE_FAILED in reasons:
-        return ScoutRunNextAction.RUN_AGAIN_LATER
+        return ScoutRunNextAction.RUN_AGAIN_LATER, None
     if kind is ScoutRunOutcomeKind.PARTIAL:
-        return ScoutRunNextAction.NO_ACTION
-    return None
+        return ScoutRunNextAction.NO_ACTION, None
+    return None, None
 
 
 def run_outcome_from_stats(stats: object) -> ScoutRunOutcome | None:
@@ -244,7 +314,9 @@ def run_outcome_from_stats(stats: object) -> ScoutRunOutcome | None:
     ``None`` for a Scout that has not produced a result (``{}``), for a completed run recorded
     before the per-source fetch facts existed (#268: without ``partial_fetch`` "complete" cannot
     be told from "partial"), and for stats that do not validate (never a guess). A refusal
-    recorded before #268 is still a refusal, with ``sources`` null."""
+    recorded before #268 is still a refusal, with ``sources`` null. A run recorded before W21
+    FU-HELD-BODY-1 lifts as before; its sources' ``read_mode`` and times are ``null`` (not
+    recorded), never inferred."""
     if not isinstance(stats, dict):
         return None
     refused = stats.get("refused") is True
@@ -270,13 +342,15 @@ def run_outcome_from_stats(stats: object) -> ScoutRunOutcome | None:
         else:
             kind = ScoutRunOutcomeKind.PARTIAL if partial else ScoutRunOutcomeKind.COMPLETE
             refusal_reason, bound = None, None
+        next_action, next_retry_at = _next_action(kind, reasons, sources)
         return ScoutRunOutcome(
             kind=kind,
             sources=sources,
             partial_reasons=reasons,
             refusal_reason=refusal_reason,
             bound=bound,
-            next_action=_next_action(kind, reasons),
+            next_action=next_action,
+            next_retry_at=next_retry_at,
         )
     except (ValidationError, ValueError, TypeError):
         return None

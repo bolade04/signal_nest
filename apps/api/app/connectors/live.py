@@ -35,6 +35,14 @@ Every source - read, clipped or failed - yields one
 failed source is reported ``failed`` with a closed ``failure_reason``, never as an empty
 one. The per-run in-process bound applies afterwards, in the pipeline, to the total over
 all sources.
+
+How each source was read (W21 FU-HELD-BODY-1, PROPOSED): a report also says how the content
+was obtained - ``fetched`` (a 200), ``revalidated`` (a 304), ``reused`` (inside the politeness
+interval after a good read, no request) or ``held`` (during the cool-down after a failed fetch,
+no request: the copy of the last good read). A ``held`` report carries that copy's last good
+read, the failure that started the cool-down and the time the source may be contacted again,
+so the run is never presented as a complete read of the source. Which body is served, and
+when a source is contacted, are unchanged by this record.
 """
 
 from __future__ import annotations
@@ -42,7 +50,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 
@@ -60,11 +68,12 @@ from app.connectors.egress import (
     parse_replay_origin,
 )
 from app.connectors.feedcache import CachedFeed, FeedCache, feed_cache
-from app.connectors.fetch_limits import lookahead_entries
+from app.connectors.fetch_limits import SourceReadMode, lookahead_entries
 from app.connectors.retry import ConnectorFetchError
 from app.connectors.rss import (
     ParsedFeed,
     failed_source_report,
+    failure_reason,
     item_signal,
     keyword_match,
     parse_feed,
@@ -224,7 +233,7 @@ class LiveRssConnector(SourceConnector):
             key = target.source.source_key
             started = time.monotonic()
             try:
-                feed, parsed = self._feed(target, max_entries)
+                feed, parsed, mode = self._feed(target, max_entries)
                 signals, fetched, clipped = self._signals(target, feed, parsed, scope)
             except (RunStopped, AdmissionUnresolved):
                 # D-25 (PROPOSED): a refused admission stops the whole run; it is not a
@@ -238,8 +247,23 @@ class LiveRssConnector(SourceConnector):
                 self._record_failure(result, scope, key, FailureKind.PARSE_ERROR, detail)
                 continue
             result.signals.extend(signals)
+            held = mode is SourceReadMode.HELD
             result.reports.append(
-                source_report(key, scope, fetched=fetched, eligible=len(signals), clipped=clipped)
+                source_report(
+                    key,
+                    scope,
+                    fetched=fetched,
+                    eligible=len(signals),
+                    clipped=clipped,
+                    read_mode=mode,
+                    last_read_at=feed.retrieved_at,
+                    next_retry_at=self._next_retry_at(key),
+                    last_failure_reason=(
+                        failure_reason(FetchFailure(*self._cache.cooling_reason(key)))
+                        if held
+                        else None
+                    ),
+                )
             )
             logger.info(
                 "connector.source_read",
@@ -247,6 +271,7 @@ class LiveRssConnector(SourceConnector):
                     "extra_fields": {
                         "source_key": key,
                         "delivery": target.delivery,
+                        "read_mode": mode.value,
                         "items": len(parsed.items),
                         "fetched": fetched,
                         "clipped": clipped,
@@ -269,14 +294,26 @@ class LiveRssConnector(SourceConnector):
         failure = FetchFailure(kind=kind, detail=f"{key}: {detail}")
         result.failures.append(failure)
         # A failed source contributed nothing; it is reported failed, never as an empty
-        # one (the closed reason is derived from the kind and the static detail).
+        # one (the closed reason is derived from the kind and the static detail). While it
+        # cools down, the report says when it may be contacted again.
         result.reports.append(
-            failed_source_report(key, scope, FetchFailure(kind=kind, detail=detail))
+            failed_source_report(
+                key,
+                scope,
+                FetchFailure(kind=kind, detail=detail),
+                next_retry_at=self._next_retry_at(key),
+            )
         )
         logger.warning(
             "connector.source_failed",
             extra={"extra_fields": {"source_key": key, "kind": kind.value}},
         )
+
+    def _next_retry_at(self, key: str) -> datetime | None:
+        """While ``key`` cools down: when this process may contact it again (this run's wall
+        clock plus the cool-down left). ``None`` when it is not cooling down."""
+        left = self._cache.retry_in(key)
+        return None if left is None else self._now() + timedelta(seconds=left)
 
     def _signals(
         self, target: SourceTarget, feed: CachedFeed, parsed: ParsedFeed, scope: FetchScope
@@ -312,10 +349,13 @@ class LiveRssConnector(SourceConnector):
                 signals.append(signal)
         return signals, len(window), len(parsed.items) > scope.max_items
 
-    def _feed(self, target: SourceTarget, max_entries: int) -> tuple[CachedFeed, ParsedFeed]:
-        """The source's feed and its parse (at most ``max_entries`` entries extracted). A
-        body is cached only after it parsed, so a feed this connector cannot read is never
-        served again from the cache.
+    def _feed(
+        self, target: SourceTarget, max_entries: int
+    ) -> tuple[CachedFeed, ParsedFeed, SourceReadMode]:
+        """The source's feed, its parse (at most ``max_entries`` entries extracted) and how
+        it was obtained (:class:`~app.connectors.fetch_limits.SourceReadMode`). A body is
+        cached only after it parsed, so a feed this connector cannot read is never served
+        again from the cache.
 
         Politeness floor (#255 review r2-MINOR-1): a source is contacted at most once per
         interval, failing or not, when runs do not overlap (see
@@ -329,11 +369,15 @@ class LiveRssConnector(SourceConnector):
         interval = max(self._interval, target.source.min_fetch_interval_seconds or 0.0)
         fresh = self._cache.fresh(key, interval)
         if fresh is not None:
-            return fresh, parse_feed(fresh.body, max_entries=max_entries)
+            # Served without a request. Normally the last contact was this good read; should
+            # a failure have been recorded since, the copy is held, not reused.
+            mode = SourceReadMode.HELD if self._cache.cooling(key) else SourceReadMode.REUSED
+            return fresh, parse_feed(fresh.body, max_entries=max_entries), mode
         if self._cache.cooling(key):
             held = self._cache.cached(key)
             if held is not None:
-                return held, parse_feed(held.body, max_entries=max_entries)
+                parsed = parse_feed(held.body, max_entries=max_entries)
+                return held, parsed, SourceReadMode.HELD
             raise ConnectorFetchError(*self._cache.cooling_reason(key))
         try:
             return self._fetch(target, max_entries)
@@ -358,7 +402,9 @@ class LiveRssConnector(SourceConnector):
             )
             raise
 
-    def _fetch(self, target: SourceTarget, max_entries: int) -> tuple[CachedFeed, ParsedFeed]:
+    def _fetch(
+        self, target: SourceTarget, max_entries: int
+    ) -> tuple[CachedFeed, ParsedFeed, SourceReadMode]:
         """One fetch of the source (bounded retries with backoff for transient failures)
         and its parse. Raises on failure; :meth:`_feed` starts the cool-down."""
         key = target.source.source_key
@@ -391,12 +437,13 @@ class LiveRssConnector(SourceConnector):
                 held = self._cache.revalidated(key, response)
                 if held is None:  # validators are only sent while a body is held
                     raise ConnectorFetchError(FailureKind.UPSTREAM_ERROR, "304 without a body")
-                return held, parse_feed(held.body, max_entries=max_entries)
+                parsed = parse_feed(held.body, max_entries=max_entries)
+                return held, parsed, SourceReadMode.REVALIDATED
             # An unreadable body raises here: it is not cached, and the cool-down
             # :meth:`_feed` starts keeps it from being asked for again before the
             # politeness interval passes. A previously cached good body stays available.
             parsed = parse_feed(response.body, max_entries=max_entries)
-            return self._cache.store(key, response), parsed
+            return self._cache.store(key, response), parsed, SourceReadMode.FETCHED
         assert last is not None
         raise last
 
