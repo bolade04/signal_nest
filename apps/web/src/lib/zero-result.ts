@@ -126,10 +126,3 @@ export function zeroResult(
   return GENERIC;
 }
 
-
-/** Supplementary partial-fetch note, when the run recorded one. */
-export function partialFetchNote(stats: Stats): string | null {
-  return stats?.['partial_fetch'] === true
-    ? 'Some sources failed or were clipped during the last run.'
-    : null;
-}
