@@ -61,6 +61,7 @@ from app.brands.models import Brand
 from app.connectors.coverage import Coverage, CoverageReason
 from app.core.config import Settings, get_settings
 from app.core.enums import ScoutRequestStatus
+from app.db.utc_session import create_utc_engine
 from app.infra.vector import SIGNAL_VOLUME_ABOVE_BOUND
 from app.jobs import pipeline
 from app.jobs.models import Job
@@ -143,7 +144,8 @@ def _clone(template: str) -> Iterator[str]:
 
 
 def _engine(url: str, **kwargs) -> Engine:
-    engine = create_engine(url, future=True, pool_size=8, max_overflow=8, **kwargs)
+    # Built as the app's engine is: UTC sessions (app.db.utc_session).
+    engine = create_utc_engine(url, future=True, pool_size=8, max_overflow=8, **kwargs)
 
     @event.listens_for(engine, "connect")
     def _timeouts(dbapi_conn, _record):  # pragma: no cover - trivial hook
@@ -826,9 +828,7 @@ def test_pause_issued_mid_run_is_honoured_by_the_retry(world, monkeypatch):
 # --------------------------------------------------------------------------- #
 def _priced(monkeypatch) -> PricedMock:
     provider = PricedMock(park_first=True)
-    monkeypatch.setattr(
-        pipeline,
-        "llm_service",
+    monkeypatch.setattr("app.llm.service.llm_service",
         LLMService(provider, sleep=lambda _s: None, settings=offline_settings()),
     )
     return provider

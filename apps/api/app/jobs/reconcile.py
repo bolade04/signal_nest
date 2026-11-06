@@ -186,6 +186,7 @@ def resolve(
     acknowledge_unrecorded_deadline: bool = False,
 ) -> bool:
     """Mark one unresolved admission resolved; returns False if it already was. Flushes."""
+    from app.audit.actions import AuditAction
     from app.audit.service import record_audit
     from app.scouting_requests.models import ScoutAdmission
 
@@ -251,7 +252,7 @@ def resolve(
         db,
         organization_id=row.organization_id,
         workspace_id=row.workspace_id,
-        action="scout_admission.reconciled",
+        action=AuditAction.SCOUT_ADMISSION_RECONCILED,
         entity_type="scout_admission",
         entity_id=row.id,
         reason=reason,

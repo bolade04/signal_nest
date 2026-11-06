@@ -1,4 +1,5 @@
 import { waitFor, within } from '@testing-library/react';
+import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { App } from '@/App';
 import { API_PREFIX } from '@/api/config';
@@ -11,6 +12,7 @@ import {
   type ContextFieldRule,
   type ModelRole,
 } from '@/test/handlers';
+import { server } from '@/test/server';
 import { renderApp } from '@/test/utils';
 import { titleCase } from '@/lib/utils';
 
@@ -60,6 +62,7 @@ interface JsonSchema {
   required?: string[];
   additionalProperties?: boolean;
   $ref?: string;
+  enum?: string[];
 }
 interface OpenApi {
   paths: Record<string, Record<string, { requestBody?: { content: Record<string, { schema: JsonSchema }> } }>>;
@@ -75,12 +78,19 @@ const OPENAPI = JSON.parse(Object.values(openapiSources)[0] ?? '{}') as OpenApi;
 
 const KINDS = Object.keys(CONTEXT_FIELD_RULES) as ContextKind[];
 /** Keys a JSON-Schema property may carry for `ruleOf` to classify it; anything else is unmodelled. */
-const KNOWN_KEYS = new Set(['type', 'format', 'minLength', 'maxItems', 'items', 'anyOf', 'title', 'description', 'default', 'additionalProperties']);
+const KNOWN_KEYS = new Set(['type', 'format', 'minLength', 'maxItems', 'items', 'anyOf', 'title', 'description', 'default', 'additionalProperties', '$ref']);
 
 /** The MSW rule a published property maps to, or a reason it maps to none. */
 function ruleOf(property: JsonSchema): string {
   const unknown = Object.keys(property).filter((k) => !KNOWN_KEYS.has(k));
   if (unknown.length) return `unmodelled keys ${unknown.join(',')}`;
+  if (property.$ref !== undefined) {
+    // W21 CF-3: `mode` and `status` of a campaign are `$ref`s to closed string enums
+    // (CampaignMode, CampaignStatus); the model's rule lists the members in the contract's order.
+    const target = OPENAPI.components.schemas[property.$ref.replace('#/components/schemas/', '')];
+    if (target?.type === 'string' && Array.isArray(target.enum)) return `enum ${target.enum.join('|')}`;
+    return `unmodelled $ref ${property.$ref}`;
+  }
   const variants = property.anyOf ?? [property];
   const nullable = variants.some((v) => v.type === 'null');
   const [main, ...more] = variants.filter((v) => v.type !== 'null');
@@ -624,11 +634,14 @@ describe('an edit the API refuses (P6-PLAT-9)', () => {
 
 describe('the edit control follows the API role gate (P6-PLAT-9)', () => {
   // The backend gate on PATCH is require_role(OWNER, ADMIN, MARKETER) (EDITORS in
-  // apps/api/app/campaign_context/routes.py), the same as POST and DELETE. Written out
-  // here rather than read from lib/roles.ts, as in role-control-matrix.test.tsx, so a
-  // wrong frontend helper cannot pass this test.
+  // apps/api/app/campaign_context/routes.py), the same as POST and DELETE, except on the
+  // claims library, whose writes are the exact steward set CLAIMS_STEWARDS = OWNER, ADMIN,
+  // COMPLIANCE_REVIEWER (W21 CF-2, as in role-control-matrix.test.tsx). Written out here
+  // rather than read from lib/roles.ts, so a wrong frontend helper cannot pass this test.
   const ROLES: ModelRole[] = ['owner', 'admin', 'marketer', 'reviewer', 'compliance_reviewer', 'viewer'];
   const EDITOR = new Set<ModelRole>(['owner', 'admin', 'marketer']);
+  const CLAIMS_STEWARD = new Set<ModelRole>(['owner', 'admin', 'compliance_reviewer']);
+  const mayEdit = (kind: ContextKind, role: ModelRole) => (kind === 'claims' ? CLAIMS_STEWARD : EDITOR).has(role);
 
   beforeEach(() => {
     orgModel.reset();
@@ -644,9 +657,9 @@ describe('the edit control follows the API role gate (P6-PLAT-9)', () => {
       // The read surface renders for every role before the control is judged.
       await within(panel).findByText(c.title);
       const name = exactly(`edit ${c.singular}`);
-      if (EDITOR.has(role)) {
-        // Positive instance: the editor is actually offered the control (wait for the
-        // role to resolve; until then every role is denied).
+      if (mayEdit(c.kind, role)) {
+        // Positive instance: the editor (or, on the claims library, the steward) is actually
+        // offered the control (wait for the role to resolve; until then every role is denied).
         await waitFor(() => expect(within(panel).getAllByRole('button', { name })).toHaveLength(1));
         expect(within(panel).getByRole('button', { name })).toBeEnabled();
       } else {
@@ -746,5 +759,96 @@ describe('the edit path is accessible (P6-PLAT-9)', () => {
     const opener = within(panel).getByRole('button', { name: /^edit product$/i });
     expect(opener).toHaveAccessibleDescription('Signature Cut Pro');
     expect(opener).toHaveFocus();
+  });
+});
+
+// W21 CF-2: the claims library is a protected safety control. Its /claims writes are exactly
+// owner, admin and compliance_reviewer (`CLAIMS_STEWARDS`,
+// apps/api/app/campaign_context/routes.py); the other eight kinds keep the editors
+// (owner, admin, marketer). The page must offer each role exactly the controls the API
+// lets it use: never a control that 403s, never a missing control the role holds.
+describe('claims library controls are steward-only (W21 CF-2)', () => {
+  const P = (path: string) => `*${API_PREFIX}${path}`;
+  const SEEDED_CLAIM = http.get(P('/workspaces/:ws/claims'), () =>
+    HttpResponse.json([{ id: 'claim-1', text: 'Seeded blocked claim', kind: 'blocked', risk_level: 'high' }]),
+  );
+
+  beforeEach(() => {
+    orgModel.reset();
+    // P6-PLAT-9's stateful context model (W21 integration): the products panel must be empty here.
+    contextModel.reset();
+  });
+
+  afterEach(() => {
+    expect(orgModel.violations()).toEqual([]);
+  });
+
+  async function renderAs(role: ModelRole) {
+    orgModel.setMembership('org-1', 'user-1', role);
+    const screen = renderApp(<App />, { route: '/context' });
+    await screen.findByRole('heading', { name: /campaign context/i });
+    await screen.findByText(/no products yet/i);
+    return screen;
+  }
+
+  async function openClaims(screen: Awaited<ReturnType<typeof renderAs>>) {
+    await screen.user.click(screen.getByRole('tab', { name: /^claims library$/i }));
+    return screen.findByRole('tabpanel');
+  }
+
+  it('a marketer edits products but is offered no claims control, and still reads the library', async () => {
+    server.use(SEEDED_CLAIM);
+    const screen = await renderAs('marketer');
+    // Witness that the role has resolved: the marketer is offered the products controls.
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /^add product$/i })).toHaveLength(2));
+
+    const panel = await openClaims(screen);
+    expect(await within(panel).findByText('Seeded blocked claim')).toBeInTheDocument();
+    expect(within(panel).queryAllByRole('button', { name: /^add claim$/i })).toHaveLength(0);
+    expect(within(panel).queryAllByRole('button', { name: /^remove claim$/i })).toHaveLength(0);
+  });
+
+  it('a marketer is offered no Add claim on an empty claims library', async () => {
+    const screen = await renderAs('marketer');
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /^add product$/i })).toHaveLength(2));
+
+    const panel = await openClaims(screen);
+    expect(await within(panel).findByText(/no claims yet/i)).toBeInTheDocument();
+    expect(within(panel).queryAllByRole('button', { name: /^add claim$/i })).toHaveLength(0);
+  });
+
+  it('a compliance reviewer is offered every claims control and no products control', async () => {
+    server.use(SEEDED_CLAIM);
+    const screen = await renderAs('compliance_reviewer');
+
+    const panel = await openClaims(screen);
+    expect(await within(panel).findByText('Seeded blocked claim')).toBeInTheDocument();
+    // Positive witness: the role resolved and holds the claims controls.
+    const [add] = await within(panel).findAllByRole('button', { name: /^add claim$/i });
+    expect(add).toBeEnabled();
+    const remove = within(panel).getAllByRole('button', { name: /^remove claim$/i });
+    expect(remove).toHaveLength(1);
+    expect(remove[0]).toBeEnabled();
+    await screen.user.click(add!);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('heading', { name: /^add claim$/i })).toBeInTheDocument();
+    await screen.user.click(within(dialog).getByRole('button', { name: /^cancel$/i }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    // A compliance reviewer is no kind of editor: the products tab offers nothing.
+    await screen.user.click(screen.getByRole('tab', { name: /^products & services$/i }));
+    const products = await screen.findByRole('tabpanel');
+    await within(products).findByText(/no products yet/i);
+    expect(within(products).queryAllByRole('button', { name: /^add product$/i })).toHaveLength(0);
+  });
+
+  it('a compliance reviewer is offered both Add claim controls on an empty claims library', async () => {
+    const screen = await renderAs('compliance_reviewer');
+
+    const panel = await openClaims(screen);
+    await within(panel).findByText(/no claims yet/i);
+    // Header + empty-state Add claim.
+    await waitFor(() => expect(within(panel).getAllByRole('button', { name: /^add claim$/i })).toHaveLength(2));
+    for (const add of within(panel).getAllByRole('button', { name: /^add claim$/i })) expect(add).toBeEnabled();
   });
 });

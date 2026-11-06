@@ -25,10 +25,11 @@ database schema** and asks the database two questions about the subject:
    operator to look.
 
 A report is ``verified`` only when the content was scanned and both come back empty. The
-single declared exception is the organization's own audit records, which ``O-6`` keeps after
-the organization is gone: for an organization subject, ``audit_logs`` rows whose
-``organization_id`` is the subject are reported as *retained* — and each must have every
-identifying column cleared, or it is a finding. Nothing here writes.
+single declared exception is the organization's own compliance records, which ``O-6`` keeps
+after the organization is gone: for an organization subject, ``audit_logs`` rows — and, since
+W21 CF-1, Project Phase 5B ``approvals`` rows and, since CF-3, Project Phase 5E ``exports``
+rows — whose ``organization_id`` is the subject are reported as *retained*, and each must have
+every identifying column cleared, or it is a finding. Nothing here writes.
 
 Cost: the content scan reads every text column of every table (359 at this writing) once
 per identifier. That is acceptable for an operator tool and for the pilot's data volume; it
@@ -234,6 +235,22 @@ def verify_subject_erased(
 
 #: The columns of an organization's retained audit records that must all be cleared.
 _AUDIT_IDENTIFYING = ("actor_user_id", "entity_id", "reason", "previous_state", "new_state")
+#: The columns of an organization's retained approvals (Project Phase 5B, W21 CF-1) that must
+#: all be NULL; their ``decided_by_snapshot`` must be the erased marker.
+_APPROVAL_IDENTIFYING = ("decided_by", "note", "brief_id", "draft_id")
+#: The marker the deletion writes over an erased snapshot. Repeated here rather than imported,
+#: so this module stays independent of the deletion code; a test pins the two equal.
+_ERASED_MARKER = "[erased]"
+#: The columns of an organization's retained exports (Project Phase 5E, W21 CF-3) that must
+#: all be NULL; their ``exported_by_snapshot`` must be the erased marker.
+_EXPORT_IDENTIFYING = ("exported_by", "draft_id")
+#: Tables whose rows ``O-6`` keeps after their organization is deleted (FK-less scope columns).
+_O6_RETAINED = ("audit_logs", "approvals", "exports")
+#: For the Phase 5 compliance records: (table, columns that must be NULL, snapshot column).
+_PHASE5_RETAINED = (
+    ("approvals", _APPROVAL_IDENTIFYING, "decided_by_snapshot"),
+    ("exports", _EXPORT_IDENTIFYING, "exported_by_snapshot"),
+)
 
 
 def verify_organization_erased(
@@ -267,14 +284,14 @@ def verify_organization_erased(
                 table, "workspaces", ("workspace_id",)
             )]
         for column, values in checks:
-            if table is audit and column.name in ("organization_id", "workspace_id"):
+            if table.name in _O6_RETAINED and column.name in ("organization_id", "workspace_id"):
                 continue  # the declared O-6 exception, checked below
             report.reference_columns_checked += 1
             rows = _count(db, table, column.in_(values))
             if rows:
                 report.reference_findings.append(Finding(table.name, column.name, rows))
     if audit is not None:
-        skip = {("audit_logs", "organization_id"), ("audit_logs", "workspace_id")}
+        skip |= {("audit_logs", "organization_id"), ("audit_logs", "workspace_id")}
         scope = audit.c.organization_id == organization_id
         retained = _count(db, audit, scope)
         if retained:
@@ -294,6 +311,23 @@ def verify_organization_erased(
         )
         if rows:
             report.reference_findings.append(Finding("audit_logs", "context", rows))
+    for name, identifying, snapshot_name in _PHASE5_RETAINED:
+        retained_table = by_name.get(name)
+        if retained_table is None:
+            continue
+        skip |= {(name, "organization_id"), (name, "workspace_id")}
+        scope = retained_table.c.organization_id == organization_id
+        retained = _count(db, retained_table, scope)
+        if retained:
+            report.retained_anonymised.append(Finding(name, "organization_id", retained))
+        for column_name in identifying:
+            rows = _count(db, retained_table, scope, retained_table.c[column_name].is_not(None))
+            if rows:
+                report.reference_findings.append(Finding(name, column_name, rows))
+        snapshot = retained_table.c[snapshot_name]
+        rows = _count(db, retained_table, scope, snapshot != _ERASED_MARKER)
+        if rows:
+            report.reference_findings.append(Finding(name, snapshot_name, rows))
     if content:
         subject = Subject(ids=(organization_id, *workspace_ids))
         (

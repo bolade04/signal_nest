@@ -390,6 +390,33 @@ const capabilityRegistryItems = [
     workspace_disableable: true,
     future_activation_phase: '4B',
   },
+  {
+    // Project Phase 5A (W21 CF-1): enableable per workspace (O-3), dark by default.
+    capability: 'recommendation_briefs',
+    label: 'Recommendation Briefs',
+    global_flag_attr: 'recommendation_briefs_enabled',
+    workspace_enableable: true,
+    workspace_disableable: true,
+    future_activation_phase: '5A',
+  },
+  {
+    // Project Phase 5C (W21 CF-2): enableable per workspace (O-3), dark by default.
+    capability: 'creative_generation',
+    label: 'Creative Generation',
+    global_flag_attr: 'creative_generation_enabled',
+    workspace_enableable: true,
+    workspace_disableable: true,
+    future_activation_phase: '5C',
+  },
+  {
+    // Project Phase 5E (W21 CF-3): enableable per workspace (O-3), dark by default.
+    capability: 'content_export',
+    label: 'Content Export',
+    global_flag_attr: 'content_export_enabled',
+    workspace_enableable: true,
+    workspace_disableable: true,
+    future_activation_phase: '5E',
+  },
 ] as const;
 
 interface OverrideRow {
@@ -909,7 +936,10 @@ async function tenantGate({ request, params }: { request: Request; params: Recor
 // compile error, and campaign-context.test.tsx checks every rule (type, null, min length)
 // and every default against apps/api/openapi.json at run time.
 
-/** `T?` admits null (`T | None`); `string+` is `Field(min_length=1)`; `string[]` a list of strings. */
+/**
+ * `T?` admits null (`T | None`); `string+` is `Field(min_length=1)`; `string[]` a list of strings;
+ * `enum a|b|c` a closed string vocabulary (a `$ref` to a string enum component, W21 CF-3).
+ */
 export type ContextFieldRule =
   | 'string'
   | 'string+'
@@ -920,7 +950,8 @@ export type ContextFieldRule =
   | 'number?'
   | 'boolean'
   | 'string[]'
-  | 'object';
+  | 'object'
+  | `enum ${string}`;
 
 type ContextRules = { [K in ContextKind]: { [F in keyof Required<ContextPatchByKind[K]>]: ContextFieldRule } };
 type ContextDefaults = { [K in ContextKind]: Required<ContextPatchByKind[K]> };
@@ -974,7 +1005,15 @@ export const CONTEXT_FIELD_RULES: ContextRules = {
   claims: { text: 'string+', kind: 'string', category: 'string?', risk_level: 'string', notes: 'string?' },
   'source-preferences': { source_type: 'string', enabled: 'boolean', config: 'object' },
   'channel-preferences': { channel: 'string', enabled: 'boolean', weekly_volume: 'integer?' },
-  campaigns: { name: 'string+', goal: 'string?', mode: 'string', location_ids: 'string[]', status: 'string' },
+  // W21 CF-3 (Phase 5D campaign hardening): `mode` and `status` are closed enums (CampaignMode,
+  // CampaignStatus); the page's form offers `mode` as a select and never sends `status`.
+  campaigns: {
+    name: 'string+',
+    goal: 'string?',
+    mode: 'enum same_for_all|per_location|grouped|recommend',
+    location_ids: 'string[]',
+    status: 'enum draft|active|paused|completed|archived',
+  },
 };
 
 /** A stored row's columns when a test does not set them: the create schema's defaults. */
@@ -1033,7 +1072,7 @@ interface ContextFieldError {
   type: string;
   loc: string[];
   msg: string;
-  ctx?: Record<string, number>;
+  ctx?: Record<string, number | string>;
 }
 
 /**
@@ -1068,6 +1107,15 @@ function checkContextValue(key: string, rule: ContextFieldRule, value: unknown):
     if (typeof value === 'number' && Number.isFinite(value)) {
       return { type: 'int_from_float', loc, msg: 'Input should be a valid integer, got a number with a fractional part' };
     }
+  } else if (rule.startsWith('enum ') && typeof value === 'string') {
+    // W21 CF-3: a closed vocabulary. The answer to a non-member is pydantic's `enum` error as the
+    // API's validation layer shapes it (`_public_validation_errors` keeps `ctx.expected`):
+    // "Input should be 'a', 'b' or 'c'" (W21 integration probe, INT-IND raw/041).
+    const members = rule.slice('enum '.length).split('|');
+    if (members.includes(value)) return null;
+    const quoted = members.map((m) => `'${m}'`);
+    const expected = `${quoted.slice(0, -1).join(', ')} or ${quoted[quoted.length - 1]}`;
+    return { type: 'enum', loc, msg: `Input should be ${expected}`, ctx: { expected } };
   }
   model.violations.push(`context PATCH: no recorded API answer for ${key} (${rule}) = ${JSON.stringify(value)}`);
   return { type: 'unrecorded', loc, msg: 'The test mock has no recorded answer for this value' };
@@ -1304,6 +1352,43 @@ export const orgModel = {
 
 orgModel.reset();
 
+// Project Phase 5A: the dark answer of every brief endpoint (app/briefs/routes.py).
+const BRIEFS_DARK = () =>
+  HttpResponse.json(
+    {
+      error: {
+        code: 'capability_unavailable',
+        message: 'Recommendation briefs are not available yet.',
+      },
+    },
+    { status: 503 },
+  );
+
+// Phase 5B (I-5A/I-5B integration): the dark answer of every approval endpoint
+// (app/approvals/routes.py) — one switch with the briefs, its own message.
+const APPROVALS_DARK = () =>
+  HttpResponse.json(
+    {
+      error: {
+        code: 'capability_unavailable',
+        message: 'Recommendation briefs and approvals are not available yet.',
+      },
+    },
+    { status: 503 },
+  );
+
+// Phase 5C (I-5C integration): the dark answer of every draft route (app/creative/routes.py).
+const CREATIVE_DARK = () =>
+  HttpResponse.json(
+    {
+      error: {
+        code: 'capability_unavailable',
+        message: 'Creative generation is not available yet.',
+      },
+    },
+    { status: 503 },
+  );
+
 export const handlers = [
   // ---- Tenant gate for every workspace-scoped route (runs first, then falls through) ----
   http.all(P('/workspaces/:ws'), tenantGate),
@@ -1444,7 +1529,7 @@ export const handlers = [
       is_local_mode: true,
       all_configured: true,
       // Every registered capability ships dark by default, mirroring the server
-      // flags (`config.py`: all three default False). Tests that need a
+      // flags (`config.py`: all six default False). Tests that need a
       // capability ON install a per-test `server.use(...)` override rather than
       // changing this shared default — so the dark path is what renders unless a
       // test explicitly opts out of it.
@@ -1452,6 +1537,9 @@ export const handlers = [
         opportunity_feedback_enabled: false,
         scout_scheduling_enabled: false,
         connector_rss_enabled: false,
+        recommendation_briefs_enabled: false,
+        creative_generation_enabled: false,
+        content_export_enabled: false,
       },
     }),
   ),
@@ -2093,6 +2181,49 @@ export const handlers = [
     ),
   ),
 
+  // ---- Recommendation briefs (Project Phase 5A; dark by default) ----
+  // Every brief endpoint answers 503 capability_unavailable while the capability is off,
+  // which is the shipped state; tests opt in with server.use(...). The message is the
+  // server's (app/briefs/routes.py).
+  ...[
+    // The workspace-effective reflection: 200 {enabled:false} while dark, never 503.
+    http.get(P('/workspaces/:workspaceId/brief-capability'), () =>
+      HttpResponse.json({ enabled: false }),
+    ),
+    http.get(P('/workspaces/:ws/opportunities/:id/briefs'), () => BRIEFS_DARK()),
+    http.post(P('/workspaces/:ws/opportunities/:id/briefs'), () => BRIEFS_DARK()),
+    http.get(P('/workspaces/:ws/opportunities/:id/briefs/:briefId'), () => BRIEFS_DARK()),
+  ],
+
+  // ---- Creative drafts (Phase 5C; mounted at I-5C) — dark by default ----
+  // The reflection answers 200 even while dark; every draft route answers 503 with the
+  // server's message (app/creative/routes.py). Tests opt in with server.use(...). The
+  // reflection must precede the greedy campaign-context `/workspaces/:ws/:kind` match.
+  ...[
+    http.get(P('/workspaces/:ws/creative-capability'), () =>
+      HttpResponse.json({ enabled: false, generation_configured: false }),
+    ),
+    http.get(P('/workspaces/:ws/briefs/:briefId/drafts'), () => CREATIVE_DARK()),
+    http.post(P('/workspaces/:ws/briefs/:briefId/drafts'), () => CREATIVE_DARK()),
+    http.get(P('/workspaces/:ws/drafts/:draftId'), () => CREATIVE_DARK()),
+    http.get(P('/workspaces/:ws/drafts/:draftId/approvals'), () => CREATIVE_DARK()),
+    http.post(P('/workspaces/:ws/drafts/:draftId/approvals'), () => CREATIVE_DARK()),
+  ],
+
+  // ---- Approval decisions (Phase 5B; same dark switch as the briefs; I-5A/I-5B) ----
+  // The shipped answer of every approval endpoint while the capability is off (the message is
+  // the server's, app/approvals/routes.py APPROVALS_DARK); tests opt in with server.use(...).
+  // The queue must precede the greedy campaign-context `/workspaces/:ws/:kind` match below.
+  ...[
+    http.get(P('/workspaces/:ws/approval-queue'), () => APPROVALS_DARK()),
+    http.get(P('/workspaces/:ws/opportunities/:id/briefs/:briefId/approvals'), () =>
+      APPROVALS_DARK(),
+    ),
+    http.post(P('/workspaces/:ws/opportunities/:id/briefs/:briefId/approvals'), () =>
+      APPROVALS_DARK(),
+    ),
+  ],
+
   // ---- Campaign context (each kind is empty unless a test seeds contextModel) ----
   // Registered LAST so the specific single-segment routes above (locations,
   // scout-requests, opportunities) take precedence over this greedy :kind match.
@@ -2105,8 +2236,9 @@ export const handlers = [
   }),
   // P6-PLAT-9: PATCH changes only the fields sent (apps/api/app/campaign_context/routes.py
   // `_update`). The order of refusals is the API's: the tenancy gate above (403 for a
-  // non-member), then the role gate (EDITORS), then body validation (422, every field),
-  // then the item's scoping to this workspace (404).
+  // non-member), then the role gate (EDITORS; for the claims library the exact steward set
+  // CLAIMS_STEWARDS = owner, admin, compliance_reviewer, W21 CF-2), then body validation
+  // (422, every field), then the item's scoping to this workspace (404).
   http.patch(P('/workspaces/:ws/:kind/:id'), async ({ request, params }) => {
     const kind = asContextKind(params.kind);
     // Not a context collection: no answer here, so the request stays unhandled (an error).
@@ -2115,7 +2247,8 @@ export const handlers = [
     if (!user) return modelError(401, 'unauthorized', 'Invalid or expired token.');
     const orgId = workspaceOrganization(String(params.ws));
     const role = orgId ? membershipOf(orgId, user.id)?.role : undefined;
-    if (role && !['owner', 'admin', 'marketer'].includes(role)) {
+    const writers = kind === 'claims' ? ['owner', 'admin', 'compliance_reviewer'] : ['owner', 'admin', 'marketer'];
+    if (role && !writers.includes(role)) {
       return modelError(403, 'permission_denied', `Role '${role}' is not permitted for this action.`);
     }
     let raw: unknown;

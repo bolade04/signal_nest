@@ -158,6 +158,23 @@ class AccountExportOut(BaseModel):
     feedback_submitted: list[dict[str, Any]]
     capability_overrides_set: list[dict[str, Any]]
     audit_events_performed: list[dict[str, Any]]
+    #: Project Phase 5 (W21 CF-1): recommendation briefs the account authored (ids, version,
+    #: its own snapshot; no model-derived content).
+    briefs_authored: list[dict[str, Any]]
+    #: Project Phase 5 (W21 CF-1): approval decisions the account made (its decision, reason,
+    #: note, role and snapshot).
+    approvals_decided: list[dict[str, Any]]
+    #: Project Phase 5C (W21 CF-2): creative drafts the account generated (ids, version,
+    #: channel, its own snapshot; no model-generated text).
+    drafts_authored: list[dict[str, Any]]
+    #: Project Phase 5E (W21 CF-3): exports the account made (ids, version, format,
+    #: jurisdiction, its own snapshot; never the exported text).
+    exports_performed: list[dict[str, Any]]
+    #: Project Phase 5E (W21 CF-3): the account's own in-app notifications (codes, ids and
+    #: instants; no text).
+    notifications_received: list[dict[str, Any]]
+    #: Project Phase 5E (W21 CF-3): the account's own per-event notification preferences.
+    notification_preferences: list[dict[str, Any]]
 
 
 class ExportedTableOut(BaseModel):

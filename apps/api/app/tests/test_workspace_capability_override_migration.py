@@ -35,7 +35,7 @@ import pytest
 API_DIR = Path(__file__).resolve().parents[2]
 # Revision immediately before the workspace_capability_overrides migration.
 PREV = "4945b98229e6"
-HEAD = "e7b3c5a9d1f4"
+HEAD = "c3f8e1a6d2b9"
 TABLE = "workspace_capability_overrides"
 
 
@@ -194,6 +194,9 @@ def test_all_capability_flags_remain_dark() -> None:
     assert settings.opportunity_feedback_enabled is False
     assert settings.scout_scheduling_enabled is False
     assert settings.connector_rss_enabled is False
+    assert settings.recommendation_briefs_enabled is False  # Project Phase 5 CF-1
+    assert settings.creative_generation_enabled is False  # Project Phase 5 CF-2
+    assert settings.content_export_enabled is False  # Project Phase 5 CF-3
     # And every registry-bound flag is dark.
     for capability in iter_capabilities():
         assert getattr(settings, get_policy(capability).global_flag_attr) is False
@@ -206,14 +209,16 @@ def test_resolver_ships_and_every_live_gate_consumes_it() -> None:
     assert hasattr(resolver, "decide_capability")
 
     # ...and every live gate decides through it: feedback since Phase 4B-A, scheduling
-    # and RSS since P6-CAP-1 (this test asserted the opposite for those two until then,
-    # which pinned the raw-flag bypass). The precise AST guards — one decision call
+    # and RSS since P6-CAP-1, briefs since Phase 5A (this test asserted the opposite for
+    # scheduling and RSS until then, which pinned the raw-flag bypass). The precise AST
+    # guards — one decision call
     # site per capability, no raw-flag read outside the raw-global reflection — live in
     # ``test_capability_override_types.py``; this keeps the migration-era check honest.
     for module_path in (
         Path("app/feedback/routes.py"),
         Path("app/scouting_requests/schedules.py"),
         Path("app/scouting_requests/connectors.py"),
+        Path("app/briefs/routes.py"),  # Project Phase 5A
     ):
         source = (API_DIR / module_path).read_text(encoding="utf-8")
         assert "resolve_capability(" in source, module_path

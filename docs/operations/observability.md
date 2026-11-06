@@ -133,6 +133,7 @@ Anything else (the defaults) leaves the no-op backend in place.
 | Jobs | `jobs_enqueued_total`, `jobs_claimed_total`, `jobs_completed_total`, `jobs_failed_total`, `jobs_retried_total`, `jobs_dead_lettered_total`, `job_execution_duration_ms`, `jobs_queue_depth` |
 | Workers | `worker_poll_total`, `worker_lease_recovered_total`, `worker_active` |
 | Dependencies | `redis_notify_total`, `dependency_operation_total`, `dependency_operation_duration_ms` |
+| LLM calls (Project Phase 5A; defined at W21 CF-1, emitted by `app/llm/service.py` for every provider attempt; an attempt the budget refuses counts `failure`/`budget_exceeded` with no duration) | `llm_calls_total` (`dependency`, `operation`, `outcome`, `error_class`), `llm_call_duration_ms` (`dependency`, `operation`, `outcome`), `llm_input_tokens_total` and `llm_output_tokens_total` (`dependency`, `operation`). Closed values: `dependency` = the configured provider (`mock`/`openai`/`anthropic`), `operation` = the LLM task, `outcome` = `success`/`failure`, `error_class` = `none`/`timeout`/`rate_limit`/`refusal`/`malformed`/`unavailable`/`provider_error`/`budget_exceeded`/`other` (`app/core/metrics.py`). Dedicated names, so an LLM provider failure does not join the `dependency_operation_total{outcome="failure"}` alert |
 | Telemetry | `telemetry_failures_total` |
 
 Metrics are recorded only **after** the governing transaction commits: enqueue after

@@ -15,10 +15,11 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { sourceTypeLabels } from '@/lib/labels';
 import { canEditWorkspace, useActorRole } from '@/lib/roles';
-import { formatStat, statValue } from '@/lib/scout-stats';
+import { formatCount, statValue } from '@/lib/scout-stats';
 import { isExecutionInProgress } from '@/lib/scout-execution';
+import { showsRunResult } from '@/lib/run-result';
 import { editAvailability } from '@/lib/scout-actions';
-import { partialFetchNote, zeroResult } from '@/lib/zero-result';
+import { zeroResult } from '@/lib/zero-result';
 import { SCOUT_IN_FLIGHT } from '@/lib/scout-status';
 import { moveFocusTo } from '@/lib/focus';
 import { pollingOptions, useStatusPolling } from '@/lib/status-polling';
@@ -28,6 +29,7 @@ import { OpportunityCardView } from './opportunities/OpportunityCardView';
 import { jobFilters } from './scouts/jobFilters';
 import { JobsPanel } from './scouts/JobsPanel';
 import { RunNowButton } from './scouts/RunNowButton';
+import { RunResultPanel } from './scouts/RunResultPanel';
 import { ScoutEditDialog } from './scouts/ScoutEditDialog';
 import { ScoutExecutionNotice } from './scouts/ScoutExecutionNotice';
 import { SchedulePanel } from './scouts/SchedulePanel';
@@ -127,7 +129,6 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
   const edit = editAvailability(r);
   // W16 §E (PROPOSED): why the latest completed run produced no new card, from what it recorded.
   const empty = zeroResult(r);
-  const partial = partialFetchNote(r.stats);
 
   return (
     <div className="space-y-6">
@@ -144,8 +145,8 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
             </div>
             <h1 className="text-2xl font-semibold tracking-tight">{r.name}</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              {formatStat(statValue(r.stats, 'opportunities'))} opportunities ·{' '}
-              {formatStat(statValue(r.stats, 'signals_analyzed'))} signals ·{' '}
+              {formatCount(statValue(r.stats, 'opportunities'), 'opportunity', 'opportunities')} ·{' '}
+              {formatCount(statValue(r.stats, 'signals_analyzed'), 'signal', 'signals')} ·{' '}
               {r.last_run_at ? `last run ${formatRelative(r.last_run_at)}` : 'never run'}
             </p>
           </div>
@@ -184,7 +185,18 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
         </div>
       </div>
 
-      <ScoutExecutionNotice execution={r.execution} status={r.status} />
+      {/* Review r1 MINOR-3 (PROPOSED): a refused run's one next step is the panel's; a notice
+          that would say "run it again" points at the panel instead. */}
+      <ScoutExecutionNotice
+        execution={r.execution}
+        status={r.status}
+        deferNextStep={showsRunResult(r.run_outcome) && r.run_outcome.kind === 'refused'}
+      />
+
+      {/* W21 FU-Q1-1 (PROPOSED): what the last run that read its sources read, what it did not,
+          one next step; from the typed `run_outcome`. It replaces the zero-result panel's
+          partial note. */}
+      <RunResultPanel request={r} canEdit={canEdit} />
 
       {empty ? (
         <div role="status" data-zero-result={empty.code} className="rounded-md border border-border bg-muted/40 px-4 py-3 text-sm">
@@ -192,7 +204,6 @@ function DetailInner({ workspaceId, requestId }: { workspaceId: string; requestI
             <Info className="size-4 shrink-0" aria-hidden="true" /> {empty.title}
           </p>
           <p className="mt-1 text-muted-foreground">{empty.body}</p>
-          {partial ? <p className="mt-1 text-muted-foreground">{partial}</p> : null}
         </div>
       ) : null}
 
