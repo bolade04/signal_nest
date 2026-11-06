@@ -850,3 +850,26 @@ class TestNoFlagDefaultsTrue:
     def test_the_shipped_configuration_resolves_briefs_dark(self, world):
         r = world.get()
         assert r.status_code == 503 and r.json()["error"]["code"] == "capability_unavailable"
+
+
+class TestCommitBeforeTheAnswer:
+    def test_the_brief_and_its_audit_row_are_committed_before_the_201(self, world, flag_on):
+        """O9 / I-O9-1: durable although the request session's teardown rolls back."""
+        committed = app.dependency_overrides[get_db]
+
+        def rollback_teardown():
+            s = world.make()
+            try:
+                yield s
+                s.rollback()
+            finally:
+                s.close()
+
+        app.dependency_overrides[get_db] = rollback_teardown
+        try:
+            r = world.create()
+        finally:
+            app.dependency_overrides[get_db] = committed
+        assert r.status_code == 201, r.text
+        assert world.count(RecommendationBrief) == 1
+        assert len(world.rows(AuditLog, AuditLog.action == "recommendation_brief.created")) == 1

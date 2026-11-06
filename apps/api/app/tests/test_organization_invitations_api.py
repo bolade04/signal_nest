@@ -33,8 +33,8 @@ Load-bearing properties, each with its own test:
 * **Explicit commit before success (§39).** Production ``get_db`` commits only after the
   handler, and on a real server after the response is sent. A variant of the override that
   never commits at teardown shows that each successful mutation is already committed when
-  the response is returned -- and, as a positive control, that a route which does *not*
-  commit explicitly (workspace creation) leaves nothing behind under the same variant.
+  the response is returned -- and, as a positive control, that a write left to the
+  teardown leaves nothing behind under the same variant.
 * **Per-instance error codes reach the envelope.** ``SignalNestError(message, code=...)``
   is used for the first time in production; every refusal here is asserted by its code in
   ``{"error": {"code", "message", "request_id"}}``, and the class-level defaults are shown
@@ -1003,17 +1003,17 @@ class TestRevoke:
 class TestExplicitCommit:
     """Under ``withheld_env`` the teardown never commits: visibility means the route did."""
 
-    def test_positive_control_a_route_without_explicit_commit_leaves_nothing(
+    def test_positive_control_a_write_left_to_the_teardown_leaves_nothing(
         self, withheld_env: Env
     ):
-        r = _send(
-            withheld_env,
-            "POST",
-            f"{API}/organizations/{ORG_A}/workspaces",
-            _uid(ORG_A, Role.OWNER),
-            {"name": "Ghost"},
-        )
-        assert r.status_code == 201  # the handler succeeded ...
+        """The control drives the variant's ``get_db`` as FastAPI does: yield, a flushed write,
+        then the teardown. It used to be workspace creation, a route that relied on the
+        teardown commit; since O9 (FU-267-F7) that route commits before it answers."""
+        teardown = app.dependency_overrides[get_db]()
+        db = next(teardown)
+        db.add(Workspace(organization_id=ORG_A, name="Ghost", slug="ghost"))
+        db.flush()  # the write reached the database ...
+        assert next(teardown, None) is None  # ... and the teardown ran
         assert withheld_env.witness.count(Workspace) == 1  # ... but only the seeded row exists
 
     def test_create_is_committed_before_the_response(self, withheld_env: Env):
