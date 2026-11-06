@@ -4,6 +4,9 @@ import * as api from '@/api/endpoints';
 import { queryKeys } from '@/api/queryKeys';
 import type { ApprovalDecisionCreate } from '@/api/types';
 import { useToast } from '@/components/ui/toast';
+import { canDecideApprovals, useActorRole } from '@/lib/roles';
+import { useBriefCapability } from '@/pages/opportunities/useBriefs';
+import { useWorkspace } from '@/workspace/WorkspaceContext';
 
 /** The page size of the approval queue as this UI reads it. */
 export const QUEUE_PAGE_SIZE = 50;
@@ -23,6 +26,23 @@ function deterministic(error: unknown): boolean {
     isApprovalsDark(error) ||
     (error instanceof ApiError && error.status >= 400 && error.status < 500)
   );
+}
+
+/**
+ * Whether the approval queue exists for the signed-in member in the active workspace
+ * (I-5A/I-5B integration): the member's role is exactly `reviewer` (the queue's
+ * `require_exact_roles(REVIEWER)` gate) AND recommendation briefs resolve enabled for this
+ * workspace (the one dark switch both features share, read from the workspace-effective
+ * reflection, never the raw global flag). The reflection is asked only for a reviewer, so
+ * no other member sends an extra request. Unknown (loading, no role yet, a failed lookup)
+ * is `false`: the sidebar never offers a surface the server would refuse. UX only — every
+ * approval endpoint re-decides role and capability.
+ */
+export function useApprovalQueueVisible(): boolean {
+  const { workspaceId, organizationId } = useWorkspace();
+  const isApprover = canDecideApprovals(useActorRole(organizationId).role);
+  const capability = useBriefCapability(workspaceId ?? '', { enabled: isApprover });
+  return isApprover && capability.isEnabled;
 }
 
 /** The workspace's briefs awaiting a decision, oldest first (reviewer only). */
