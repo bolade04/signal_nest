@@ -33,8 +33,8 @@ Design, mirroring the scouting-schedule route boundary:
   cross-workspace signal. Reads are a bounded, reverse-chronological projection that
   never mutates anything.
 
-Transaction ownership follows the house rule: the route/service ``flush`` and the
-request-scoped ``get_db`` override owns the commit.
+Transaction ownership: the route/service ``flush``; ``WriteDb`` (:mod:`app.db.request_tx`)
+commits before the response is sent.
 """
 
 from __future__ import annotations
@@ -52,6 +52,7 @@ from app.core.config import get_settings
 from app.core.enums import Role
 from app.core.errors import CapabilityUnavailableError, NotFoundError
 from app.core.logging import get_logger, log_event
+from app.db.request_tx import WriteDb
 from app.db.session import get_db
 from app.feedback.models import OpportunityFeedback
 from app.feedback.schemas import (
@@ -217,7 +218,7 @@ def submit_opportunity_feedback(
     workspace_id: str,
     opportunity_id: str,
     body: FeedbackCreate,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     ctx: TenantContext = Depends(EDITORS),
 ) -> FeedbackOut:
     """Append one immutable feedback judgement for an opportunity (editor + gated).

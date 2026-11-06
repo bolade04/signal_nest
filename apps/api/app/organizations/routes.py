@@ -14,6 +14,7 @@ from app.auth.dependencies import (
 )
 from app.core.enums import Role
 from app.core.errors import NotFoundError, PermissionDeniedError
+from app.db.request_tx import WriteDb
 from app.db.session import get_db
 from app.organizations import invitations as invitation_service
 from app.organizations import members as member_service
@@ -79,7 +80,7 @@ def list_workspaces(
 )
 def create_workspace(
     body: WorkspaceCreate,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     ctx: OrganizationContext = Depends(require_exact_organization_roles(Role.OWNER, Role.ADMIN)),
 ) -> Workspace:
     # Membership, organization existence and the exact OWNER/ADMIN check are done by the

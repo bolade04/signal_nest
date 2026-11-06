@@ -28,8 +28,9 @@ Approver authority is organization-wide: a reviewer grant made through
 ``PUT /organizations/{org}/members/{user}/role`` confers approver authority in every
 workspace of that organization (there are no workspace-scoped roles; Phase 5B plan §2).
 
-Transaction ownership follows the house rule: the service flushes; the request-scoped
-``get_db`` commits the decision and its audit row together, or rolls both back.
+Transaction ownership: the service flushes; ``WriteDb`` (:mod:`app.db.request_tx`) commits
+the decision and its audit row together before the response is sent, or ``get_db`` rolls both
+back.
 """
 
 from __future__ import annotations
@@ -57,6 +58,7 @@ from app.core.config import get_settings
 from app.core.enums import Role
 from app.core.errors import CapabilityUnavailableError
 from app.core.logging import get_logger, log_event
+from app.db.request_tx import WriteDb
 from app.db.session import get_db
 
 logger = get_logger(__name__)
@@ -127,7 +129,7 @@ def decide_on_brief(
     opportunity_id: str,
     brief_id: str,
     body: ApprovalDecisionCreate,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     ctx: TenantContext = Depends(require_approver),
 ) -> ApprovalOut:
     """Record one append-only decision (approve / reject / revoke) on the brief's exact

@@ -18,6 +18,7 @@ from app.brands.schemas import (
 )
 from app.core.enums import Role
 from app.core.errors import NotFoundError
+from app.db.request_tx import WriteDb
 from app.db.session import get_db
 
 router = APIRouter(tags=["brands"])
@@ -31,7 +32,7 @@ router = APIRouter(tags=["brands"])
 def onboard(
     workspace_id: str,
     body: OnboardingRequest,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     ctx: TenantContext = Depends(require_role(Role.OWNER, Role.ADMIN, Role.MARKETER)),
 ) -> OnboardingResult:
     brand, profile = service.run_onboarding(db, ctx, body)
@@ -80,7 +81,7 @@ def get_business_profile(
 def update_business_profile(
     workspace_id: str,
     body: BusinessProfileBase,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     ctx: TenantContext = Depends(require_role(Role.OWNER, Role.ADMIN, Role.MARKETER)),
 ) -> BusinessProfile:
     profile = db.scalar(
