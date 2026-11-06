@@ -257,6 +257,7 @@ class LLMService:
         organization_id: str,
         workspace_id: str,
         meter: LLMMeter | None = None,
+        max_output_tokens: int | None = None,
     ) -> tuple[BaseModel, LLMResponse]:
         """Run ``task`` for the tenant ``(organization_id, workspace_id)``.
 
@@ -264,18 +265,25 @@ class LLMService:
         differs from the bound ``meter``'s; :class:`LLMPromptRenderError` (nothing sent,
         nothing charged) when the prompt cannot be rendered; otherwise the provider's
         normalized :class:`LLMError` after the bounded retries.
+
+        ``max_output_tokens`` (Project Phase 5C) can only lower the request's output limit
+        below ``llm_max_output_tokens``, never raise it; the metered worst case is computed
+        from the request as sent, so it lowers that too.
         """
         _require_tenant(organization_id, workspace_id, meter)
         settings = self._settings or get_settings()
         prompt = get_prompt(task)
         inputs = sanitize_inputs(inputs)
         input_hash = compute_input_hash(task, prompt, inputs)
+        max_tokens = settings.llm_max_output_tokens
+        if max_output_tokens is not None:
+            max_tokens = min(max_tokens, max_output_tokens)
         request = LLMRequest(
             task=task,
             inputs=inputs,
             seed=settings.llm_mock_seed,
             temperature=settings.llm_temperature,
-            max_tokens=settings.llm_max_output_tokens,
+            max_tokens=max_tokens,
             tenant_ref=(
                 meter.tenant_ref
                 if meter is not None

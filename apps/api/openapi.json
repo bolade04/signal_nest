@@ -2037,6 +2037,16 @@
         "title": "ClaimPatch",
         "type": "object"
       },
+      "ClaimRisk": {
+        "enum": [
+          "low",
+          "medium",
+          "high",
+          "blocked"
+        ],
+        "title": "ClaimRisk",
+        "type": "string"
+      },
       "CompetitorIn": {
         "properties": {
           "known_weaknesses": {
@@ -2120,6 +2130,109 @@
         "title": "CompetitorPatch",
         "type": "object"
       },
+      "ContentFindingOut": {
+        "properties": {
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "excerpt": {
+            "title": "Excerpt",
+            "type": "string"
+          },
+          "risk": {
+            "$ref": "#/components/schemas/ClaimRisk"
+          }
+        },
+        "required": [
+          "category",
+          "risk",
+          "excerpt"
+        ],
+        "title": "ContentFindingOut",
+        "type": "object"
+      },
+      "ContentReviewOut": {
+        "description": "The output-side review of one draft version.",
+        "properties": {
+          "blocked_claim_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Blocked Claim Ids",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "disclaimers_resolved": {
+            "title": "Disclaimers Resolved",
+            "type": "boolean"
+          },
+          "draft_id": {
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "draft_version": {
+            "title": "Draft Version",
+            "type": "integer"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/ContentFindingOut"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_blocked": {
+            "title": "Is Blocked",
+            "type": "boolean"
+          },
+          "passed": {
+            "title": "Passed",
+            "type": "boolean"
+          },
+          "required_disclaimers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Disclaimers",
+            "type": "array"
+          },
+          "risk_level": {
+            "$ref": "#/components/schemas/ClaimRisk"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "draft_id",
+          "draft_version",
+          "risk_level",
+          "is_blocked",
+          "findings",
+          "warnings",
+          "blocked_claim_ids",
+          "required_disclaimers",
+          "disclaimers_resolved",
+          "passed",
+          "created_at"
+        ],
+        "title": "ContentReviewOut",
+        "type": "object"
+      },
       "CoverageReason": {
         "enum": [
           "live_sources",
@@ -2139,6 +2252,258 @@
         ],
         "title": "CoverageStatus",
         "type": "string"
+      },
+      "CreativeChannel": {
+        "description": "The text channel a creative draft is written for (Phase 5C; text-first: no image,\nvideo or audio channel exists). The list is a CF-2 proposal recorded for review.",
+        "enum": [
+          "social_post",
+          "email",
+          "search_ad",
+          "sms",
+          "landing_page"
+        ],
+        "title": "CreativeChannel",
+        "type": "string"
+      },
+      "CreativeDraftCreate": {
+        "additionalProperties": false,
+        "description": "Strict request body to generate one draft version from a brief.",
+        "properties": {
+          "channel": {
+            "$ref": "#/components/schemas/CreativeChannel"
+          },
+          "parent_draft_id": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Draft Id"
+          }
+        },
+        "required": [
+          "channel"
+        ],
+        "title": "CreativeDraftCreate",
+        "type": "object"
+      },
+      "CreativeDraftListOut": {
+        "description": "Bounded, newest-version-first page of a brief's drafts.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CreativeDraftOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "CreativeDraftListOut",
+        "type": "object"
+      },
+      "CreativeDraftOut": {
+        "description": "Customer-safe projection of one stored draft version, with its review.",
+        "properties": {
+          "body": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Body",
+            "type": "string"
+          },
+          "brief_id": {
+            "title": "Brief Id",
+            "type": "string"
+          },
+          "call_to_action": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Call To Action"
+          },
+          "campaign_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Id"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/CreativeChannel"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "created_by_snapshot": {
+            "title": "Created By Snapshot",
+            "type": "string"
+          },
+          "draft_version": {
+            "title": "Draft Version",
+            "type": "integer"
+          },
+          "headline": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Headline"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_simulated": {
+            "title": "Is Simulated",
+            "type": "boolean"
+          },
+          "location_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Id"
+          },
+          "model_identifier": {
+            "title": "Model Identifier",
+            "type": "string"
+          },
+          "opportunity_id": {
+            "title": "Opportunity Id",
+            "type": "string"
+          },
+          "parent_draft_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Draft Id"
+          },
+          "prompt_name": {
+            "title": "Prompt Name",
+            "type": "string"
+          },
+          "prompt_version": {
+            "title": "Prompt Version",
+            "type": "string"
+          },
+          "review": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContentReviewOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "body",
+          "id",
+          "brief_id",
+          "opportunity_id",
+          "location_id",
+          "campaign_id",
+          "draft_version",
+          "parent_draft_id",
+          "channel",
+          "prompt_name",
+          "prompt_version",
+          "model_identifier",
+          "is_simulated",
+          "created_by",
+          "created_by_snapshot",
+          "created_at"
+        ],
+        "title": "CreativeDraftOut",
+        "type": "object"
+      },
+      "CreativeGenerationCapabilityOut": {
+        "description": "Customer-visible creative-generation availability for one workspace.\n\nExactly one field (the ``FeedbackCapabilityOut`` precedent): no governance metadata\nreaches a customer.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "CreativeGenerationCapabilityOut",
+        "type": "object"
+      },
+      "CreativeGenerationQueuedOut": {
+        "description": "The generate route's answer: the durable job to poll.",
+        "properties": {
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "title": "CreativeGenerationQueuedOut",
+        "type": "object"
       },
       "DataSourceOut": {
         "properties": {
@@ -13172,6 +13537,173 @@
         ]
       }
     },
+    "/api/v1/workspaces/{workspace_id}/briefs/{brief_id}/drafts": {
+      "get": {
+        "description": "A bounded page of the brief's immutable draft versions, reviews embedded.",
+        "operationId": "list_drafts_api_v1_workspaces__workspace_id__briefs__brief_id__drafts_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "brief_id",
+            "required": true,
+            "schema": {
+              "title": "Brief Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreativeDraftListOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List a brief's drafts, newest version first",
+        "tags": [
+          "creative-drafts"
+        ]
+      },
+      "post": {
+        "description": "Enqueue (or join) the generation of one draft version; poll the returned job.",
+        "operationId": "generate_brief_draft_api_v1_workspaces__workspace_id__briefs__brief_id__drafts_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "brief_id",
+            "required": true,
+            "schema": {
+              "title": "Brief Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreativeDraftCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreativeGenerationQueuedOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Generate a new draft version from an approved brief (a durable job)",
+        "tags": [
+          "creative-drafts"
+        ]
+      }
+    },
     "/api/v1/workspaces/{workspace_id}/business-profile": {
       "get": {
         "operationId": "get_business_profile_api_v1_workspaces__workspace_id__business_profile_get",
@@ -14577,6 +15109,300 @@
         "tags": [
           "campaign-context",
           "competitors"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/creative-capability": {
+      "get": {
+        "description": "Customer-facing, workspace-effective availability (any member). Advisory only: every\ndraft endpoint re-decides and answers 503 while disabled.",
+        "operationId": "read_creative_capability_api_v1_workspaces__workspace_id__creative_capability_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreativeGenerationCapabilityOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Whether creative generation is available for this workspace",
+        "tags": [
+          "creative-drafts"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/drafts/{draft_id}": {
+      "get": {
+        "description": "One draft version (any member; gated); unknown or foreign ids answer 404.",
+        "operationId": "get_draft_api_v1_workspaces__workspace_id__drafts__draft_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true,
+            "schema": {
+              "title": "Draft Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreativeDraftOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fetch one draft version with its content review",
+        "tags": [
+          "creative-drafts"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/drafts/{draft_id}/approvals": {
+      "get": {
+        "description": "The draft version's append-only decisions, newest ``decision_seq`` first: the first\nitem, when present, is the controlling decision. Read-only.",
+        "operationId": "list_draft_approvals_api_v1_workspaces__workspace_id__drafts__draft_id__approvals_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true,
+            "schema": {
+              "title": "Draft Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalHistoryOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "A draft version's decisions, newest first",
+        "tags": [
+          "creative-drafts"
+        ]
+      },
+      "post": {
+        "description": "Record one append-only decision (approve / reject / revoke) on the draft's exact\nversion. Reviewer only; never the draft's author; ``subject_version`` must be the draft's\nversion (409 otherwise); ``revoked`` only withdraws a controlling approval; an approval\nis refused (409 ``approval_review_blocked``) while the draft's content review does not\nallow it.",
+        "operationId": "decide_on_draft_api_v1_workspaces__workspace_id__drafts__draft_id__approvals_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true,
+            "schema": {
+              "title": "Draft Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalDecisionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Record a decision on one draft version (reviewer only)",
+        "tags": [
+          "creative-drafts"
         ]
       }
     },

@@ -769,7 +769,11 @@ class TestOpenApiContract:
         # /workspaces/{workspace_id}/opportunities/{opportunity_id}/briefs/{brief_id}/approvals
         # and GET /workspaces/{workspace_id}/approval-queue -- customer routes (exact-role,
         # capability-gated), none an account-mail operation of this module.
-        assert count == 134
+        # 134 -> 138 (W21 P5C): generate/list drafts of a brief, fetch one draft, and the
+        # creative-capability reflection -- customer operations, none an account-mail one.
+        # 138 -> 140 (W21 P5C): POST and GET .../drafts/{draft_id}/approvals (customer,
+        # reviewer-exact and history readers), none an account-mail operation.
+        assert count == 140
 
     def test_no_token_in_any_path_query_or_header_anywhere(self, doc: dict):
         for path, item in doc["paths"].items():

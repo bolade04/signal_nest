@@ -15,6 +15,7 @@ from app.brands.routes import router as brands_router
 from app.briefs.routes import router as briefs_router
 from app.campaign_context.routes import router as campaign_context_router
 from app.connectors.routes import router as data_sources_router
+from app.creative.routes import router as creative_router
 from app.feedback.routes import router as feedback_router
 from app.jobs.routes import router as jobs_router
 from app.locations.routes import router as locations_router
@@ -49,6 +50,7 @@ for _r in (
     feedback_router,
     briefs_router,
     approvals_router,
+    creative_router,
     jobs_router,
     audit_router,
     privacy_router,

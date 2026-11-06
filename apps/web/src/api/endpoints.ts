@@ -4,6 +4,11 @@ import type {
   ApprovalHistoryOut,
   ApprovalOut,
   FeedbackCapability,
+  CreativeCapability,
+  CreativeDraftCreate,
+  CreativeDraftListOut,
+  CreativeDraftOut,
+  CreativeGenerationQueuedOut,
   AccountDeletionOut,
   AccountDeletionPreviewOut,
   AccountDeletionRequest,
@@ -648,3 +653,41 @@ export const getApprovalQueue = (
     signal,
   });
 // ---- Phase 5B approvals (W21 lane P5B) — end ---------------------------------------
+
+// --- Project Phase 5C: text creative generation (W21 lane P5C) — BEGIN ---------
+// Every draft route is capability-gated: while `creative_generation` resolves disabled for
+// the workspace they answer 503 (capability_unavailable). Generating is editor-only
+// (owner / admin / marketer); reading drafts is open to every member. Generation is a
+// durable job: the POST answers 202 with the job to poll (`getJob`), and the draft appears
+// in the brief's list once the job succeeds. The reflection answers 200 {enabled} even
+// while dark (the feedback-capability precedent).
+const briefDraftsPath = (workspaceId: string, briefId: string) =>
+  `/workspaces/${workspaceId}/briefs/${briefId}/drafts`;
+
+export const getCreativeCapability = (workspaceId: string, signal?: AbortSignal) =>
+  apiRequest<CreativeCapability>(`/workspaces/${workspaceId}/creative-capability`, { signal });
+
+export const listBriefDrafts = (
+  workspaceId: string,
+  briefId: string,
+  params: { limit?: number; offset?: number } = {},
+  signal?: AbortSignal,
+) =>
+  apiRequest<CreativeDraftListOut>(briefDraftsPath(workspaceId, briefId), {
+    query: { ...params },
+    signal,
+  });
+
+export const getCreativeDraft = (workspaceId: string, draftId: string, signal?: AbortSignal) =>
+  apiRequest<CreativeDraftOut>(`/workspaces/${workspaceId}/drafts/${draftId}`, { signal });
+
+export const generateCreativeDraft = (
+  workspaceId: string,
+  briefId: string,
+  body: CreativeDraftCreate,
+) =>
+  apiRequest<CreativeGenerationQueuedOut>(briefDraftsPath(workspaceId, briefId), {
+    method: 'POST',
+    body,
+  });
+// --- Project Phase 5C: text creative generation (W21 lane P5C) — END -----------

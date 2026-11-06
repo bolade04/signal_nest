@@ -147,6 +147,7 @@ SCHEDULING_DARK = "Scout scheduling is not available yet."
 FEEDBACK_DARK = "Opportunity feedback is not available yet."
 BRIEFS_DARK = "Recommendation briefs are not available yet."  # Project Phase 5A
 APPROVALS_DARK = "Recommendation briefs and approvals are not available yet."  # Phase 5B
+CREATIVE_DARK = "Creative generation is not available yet."
 # New in 6B-3A. Messages are the service's; the codes are frozen by the contract (§50).
 INVITATION_NOT_FOUND = ("invitation_not_found", "Invitation not found.")
 MEMBER_NOT_FOUND = ("member_not_found", "Member not found.")
@@ -325,6 +326,15 @@ E7_POLICY: tuple[Policy, ...] = (
         RANK_FLOOR,
         _body_422(),
     ),
+    # Phase 5C (W21 lane P5C): generating a draft is editor-only (the brief-capture set).
+    _row(
+        "POST",
+        f"{_W}/briefs/{{brief_id}}/drafts",
+        "workspace",
+        EDITORS,
+        RANK_FLOOR,
+        _body_422(),
+    ),
     _row(
         "POST",
         f"{_W}/jobs/{{job_id}}/cancel",
@@ -356,6 +366,21 @@ E7_POLICY: tuple[Policy, ...] = (
     ),
     _row(
         "GET", f"{_W}/approval-queue", "workspace", APPROVERS, WS_EXACT, _dark_503(APPROVALS_DARK)
+    ),
+    # --- role-gated, workspace scope, exact set -- Phase 5C draft decisions (W21 P5C) ---------
+    # The 5B decision rules on a draft version, dark behind creative_generation: the reviewer
+    # decides (POST: body validation first), every role but viewer reads the history (503).
+    _row(
+        "POST", f"{_W}/drafts/{{draft_id}}/approvals", "workspace", APPROVERS, WS_EXACT,
+        _body_422(),
+    ),
+    _row(
+        "GET",
+        f"{_W}/drafts/{{draft_id}}/approvals",
+        "workspace",
+        APPROVAL_HISTORY_READERS,
+        WS_EXACT,
+        _dark_503(CREATIVE_DARK),
     ),
     # --- role-gated, organization scope, exact set ------------------------------------------
     _row("POST", f"{_O}/workspaces", "organization", ORG_ADMINS, ORG_EXACT, _body_422()),
@@ -394,6 +419,22 @@ E7_POLICY: tuple[Policy, ...] = (
     # P6-UI-006: the workspace-effective scheduling reflection is member-gated like the
     # schedule read it describes (feedback's reflection, above, is editor-gated).
     _row("GET", f"{_W}/scheduling-capability", "workspace", ALL_ROLES, MEMBER_WS, OK_200),
+    # Phase 5C (W21 lane P5C): drafts are read by every member, like the brief they come
+    # from (so the approving reviewer can read them); dark until the capability resolves
+    # enabled. The availability reflection is member-gated like those reads.
+    _row("GET", f"{_W}/creative-capability", "workspace", ALL_ROLES, MEMBER_WS, OK_200),
+    _row(
+        "GET",
+        f"{_W}/briefs/{{brief_id}}/drafts",
+        "workspace",
+        ALL_ROLES,
+        MEMBER_WS,
+        _dark_503(CREATIVE_DARK),
+    ),
+    _row(
+        "GET", f"{_W}/drafts/{{draft_id}}", "workspace", ALL_ROLES, MEMBER_WS,
+        _dark_503(CREATIVE_DARK),
+    ),
     _row(
         "GET",
         f"{_W}/business-profile",
@@ -624,8 +665,12 @@ class TestPolicyTableCompleteness:
             c: sum(1 for r in served if r.category == c) for c in {r.category for r in served}
         }
         assert counts == {
-            "role_gated": 62,
-            MEMBER_WS: 28,
+            # W21 P5C on the I-5AB + CF-2 base (62 / 28): +1 role-gated (POST
+            # .../briefs/{brief_id}/drafts), +3 workspace membership (the two draft reads and
+            # the creative-capability reflection). Recomputed from the served routes.
+            # +2 W21 P5C draft decisions (POST and GET .../drafts/{draft_id}/approvals).
+            "role_gated": 65,
+            MEMBER_WS: 31,
             MEMBER_ORG: 1,
             "operator": OPERATOR_ROUTE_COUNT,
             "authenticated": len(AUTHENTICATED_ONLY) + 2,
@@ -635,13 +680,17 @@ class TestPolicyTableCompleteness:
             c: sum(1 for p in E7_POLICY if p.category == c) for c in {p.category for p in E7_POLICY}
         }
         assert by_category == {
-            # 48 at CF-1; +1 Phase 5A (brief capture); -3 W21 CF-2 (claims writes -> WS_EXACT).
-            RANK_FLOOR: 46,
+            # 48 at CF-1; +1 Phase 5A (brief capture); -3 W21 CF-2 (claims writes -> WS_EXACT);
+            # +1 W21 P5C (generate a draft).
+            RANK_FLOOR: 47,
             # 1 at CF-1 (audit-logs); +3 Phase 5B (approvals); +3 W21 CF-2 (claims writes).
             # Both sides moved this pin from 1 to 4, so git kept one 4: the union is 7.
-            WS_EXACT: 7,
+            # +2 W21 P5C (the draft decision POST and its history GET).
+            WS_EXACT: 9,
             ORG_EXACT: 9,
-            MEMBER_WS: 28,
+            # 25 at N; +3 Phase 5A (brief reads, brief-capability); +3 W21 P5C (draft reads,
+            # creative-capability).
+            MEMBER_WS: 31,
             MEMBER_ORG: 1,
             MEMBER_HANDLER: 2,
         }
@@ -678,7 +727,12 @@ class TestPolicyTableCompleteness:
         # 131 -> 134 (Phase 5B, W21 P5B; I-5A/I-5B integration): POST and GET
         # .../briefs/{brief_id}/approvals and GET /workspaces/{workspace_id}/approval-queue,
         # each a WS_EXACT row above.
-        assert len(served) == 134
+        # 134 -> 138 (W21 P5C): POST and GET /workspaces/{workspace_id}/briefs/{brief_id}/drafts,
+        # GET /workspaces/{workspace_id}/drafts/{draft_id} and GET .../creative-capability:
+        # one RANK_FLOOR row and three MEMBER_WS rows above, all customer operations.
+        # 138 -> 140 (W21 P5C draft decisions): POST and GET
+        # /workspaces/{workspace_id}/drafts/{draft_id}/approvals, two WS_EXACT rows above.
+        assert len(served) == 140
 
     def test_one_row_per_route(self):
         keys = [p.key for p in E7_POLICY]
@@ -686,7 +740,7 @@ class TestPolicyTableCompleteness:
 
     def test_rows_are_machine_readable_and_partition_the_roles(self):
         rows = json.loads(json.dumps([asdict(p) for p in E7_POLICY]))
-        assert len(rows) == 93
+        assert len(rows) == 99  # 93 on the I-5AB + CF-2 base; +6 W21 P5C (the draft routes)
         for row in rows:
             assert set(row) == {"method", "path", "scope", "allowed", "denied", "category", "probe"}
             assert set(row["allowed"]) | set(row["denied"]) == set(ALL_ROLES)
@@ -951,7 +1005,8 @@ def _url(world: World, policy: Policy) -> tuple[str, dict[str, str] | None]:
         "{job_id}",
         "{invitation_id}",
         "{user_id}",
-        "{brief_id}",  # Project Phase 5A (briefs) and Phase 5B (approvals)
+        "{brief_id}",  # Project Phase 5A (briefs), Phase 5B (approvals), W21 P5C (drafts)
+        "{draft_id}",  # W21 P5C
     ):
         path = path.replace(name, SENTINEL)
     assert "{" not in path, path
