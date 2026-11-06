@@ -28,6 +28,11 @@ auditing), ``approval.approved`` / ``approval.rejected`` / ``approval.revoked`` 
 Added at CF-2 (Project Phase 5C): ``claims_library_entry.created`` / ``.updated`` /
 ``.retired`` — written now, by the protected claims-library routes — and
 ``creative_draft.created`` (reserved for the 5C lanes).
+
+Added at CF-3 (Project Phase 5E, reserved for lane 5E-W1): ``creative_draft.exported`` — the
+audit record the export service writes in the same transaction as each ``exports`` row
+(Phase 5E plan §2). The 5D milestone names no audited action. Notifications, notification
+preferences and analytics reads are not audited (the plan names none).
 """
 
 from __future__ import annotations
@@ -102,6 +107,9 @@ class AuditAction(StrEnum):
     CLAIMS_LIBRARY_ENTRY_RETIRED = "claims_library_entry.retired"
     CREATIVE_DRAFT_CREATED = "creative_draft.created"
 
+    # --- Project Phase 5E (CF-3) -----------------------------------------------------
+    CREATIVE_DRAFT_EXPORTED = "creative_draft.exported"
+
 
 @dataclass(frozen=True, slots=True)
 class AuditActionSpec:
@@ -133,6 +141,7 @@ _ADDED_5C = frozenset(
         AuditAction.CREATIVE_DRAFT_CREATED,
     }
 )
+_RESERVED_5E = frozenset({AuditAction.CREATIVE_DRAFT_EXPORTED})
 _RESERVED_5B = frozenset(
     {
         AuditAction.AUTH_LOGIN_SUCCEEDED,
@@ -152,6 +161,8 @@ def _introduced(action: AuditAction) -> str:
         return "5B"
     if action in _ADDED_5C:
         return "5C"
+    if action in _RESERVED_5E:
+        return "5E"
     return "pre-registry"
 
 

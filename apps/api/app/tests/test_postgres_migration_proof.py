@@ -58,12 +58,16 @@ from app.db.base import Base
 from app.tests._auth2_support import pg_database, require_postgres
 
 API_DIR = Path(__file__).resolve().parents[2]
-#: The code head (Project Phase 5 CF-2, W21: adds ``creative_drafts``, ``content_reviews``,
+#: The code head (Project Phase 5 CF-3, W21: campaign hardening and ``campaign_locations``,
+#: the jurisdiction columns, ``exports``, ``notifications`` / ``notification_preferences``,
+#: the ``deleted_at`` retention markers, and the widened capability-override CHECK).
+HEAD = "c3f8e1a6d2b9"
+#: One below head (Project Phase 5 CF-2, W21: adds ``creative_drafts``, ``content_reviews``,
 #: ``approvals.draft_id``, ``claims_library.retired_at`` and widens two CHECKs).
-HEAD = "a7d2e9f4c1b8"
-#: One below head (Project Phase 5 CF-1, W21: adds ``recommendation_briefs`` and
+BELOW_HEAD = "a7d2e9f4c1b8"
+#: Two below head (Project Phase 5 CF-1, W21: adds ``recommendation_briefs`` and
 #: ``approvals`` and widens the capability-override CHECK).
-BELOW_HEAD = "f3a9c1e7b2d5"
+CF1 = "f3a9c1e7b2d5"
 #: Two below head (W16 customer repairs, PROPOSED: adds ``opportunities.finding_key``, its
 #: partial unique index and the ``opportunity_observations`` table).
 FINDING = "e7b3c5a9d1f4"
@@ -286,6 +290,10 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     assert "opportunity_observations" in _tables(pg_url)
     assert {"recommendation_briefs", "approvals"} <= _tables(pg_url)
     assert {"creative_drafts", "content_reviews"} <= _tables(pg_url)
+    cf3_tables = {"campaign_locations", "exports", "notifications", "notification_preferences"}
+    assert cf3_tables <= _tables(pg_url)
+    assert {"jurisdiction_code", "deleted_at"} <= _columns(pg_url, "creative_drafts")
+    assert "jurisdiction_code" in _columns(pg_url, "business_locations")
 
     # One guarded step down undoes exactly the head revision; the spent token does not
     # authorize the next step.
@@ -293,10 +301,15 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     step_token = _confirmation(pg_url, "-1")
     _alembic(pg_url, "-x", f"confirm={step_token}", "downgrade", "-1")
     assert _version(pg_url) == [BELOW_HEAD]
-    assert not {"creative_drafts", "content_reviews"} & _tables(pg_url)
-    assert "draft_id" not in _columns(pg_url, "approvals")
-    assert "retired_at" not in _columns(pg_url, "claims_library")
-    # The revisions below: untouched.
+    assert not cf3_tables & _tables(pg_url)
+    for table in ("business_locations", "geo_coverage_rules", "recommendation_briefs",
+                  "creative_drafts", "content_reviews"):
+        assert not {"jurisdiction_code", "deleted_at"} & _columns(pg_url, table), table
+    assert "jurisdiction_codes" not in _columns(pg_url, "claims_library")
+    # The revisions below: untouched (CF-2's tables and columns, then CF-1's).
+    assert {"creative_drafts", "content_reviews"} <= _tables(pg_url)
+    assert "draft_id" in _columns(pg_url, "approvals")
+    assert "retired_at" in _columns(pg_url, "claims_library")
     assert {"recommendation_briefs", "approvals"} <= _tables(pg_url)
     assert "finding_key" in _columns(pg_url, "opportunities")
     assert "opportunity_observations" in _tables(pg_url)

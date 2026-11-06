@@ -101,6 +101,9 @@ const EXPORT: AccountExportOut = {
   briefs_authored: [],
   approvals_decided: [],
   drafts_authored: [],
+  exports_performed: [],
+  notifications_received: [],
+  notification_preferences: [],
 };
 
 function RoleProbe() {

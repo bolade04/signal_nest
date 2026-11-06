@@ -6,7 +6,9 @@ backend agree on status vocabularies without duplicating business logic.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
+from types import MappingProxyType
 
 
 class Role(StrEnum):
@@ -317,3 +319,62 @@ class CreativeChannel(StrEnum):
     SEARCH_AD = "search_ad"
     SMS = "sms"
     LANDING_PAGE = "landing_page"
+
+
+# --- Project Phase 5D/5E consolidated freeze (W21 CF-3) ------------------------------
+# Three more bare closed vocabularies of the plan's nine (§6.2.1): campaign status,
+# notification event code and export format. The jurisdiction code (+ ``UNRESOLVED``) lives
+# with its domain in ``app.jurisdiction.codes``.
+
+
+class CampaignStatus(StrEnum):
+    """The closed lifecycle vocabulary of a campaign (Phase 5D campaign hardening).
+
+    Validated at the schema layer and by ``ck_campaign_status``. The plan names the enum, not
+    its members: these are CF-3's proposal, accepted by the coordinator and disclosed as
+    PROPOSED. ``active`` is the default, as it was for the free-string column. Nothing in the
+    product reads a campaign's status yet; the members are a vocabulary, not behaviour.
+    """
+
+    DRAFT = "draft"
+    ACTIVE = "active"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    ARCHIVED = "archived"
+
+
+class NotificationEventCode(StrEnum):
+    """The closed vocabulary of in-app notification events (Phase 5E).
+
+    Exactly the five events the 5E plan names. Each event's ``subject_id`` names one row:
+    ``brief.created`` a ``recommendation_briefs`` row, ``approval.decided`` an ``approvals``
+    row, ``draft.generated`` a ``creative_drafts`` row, ``review.blocked`` a
+    ``content_reviews`` row and ``export.completed`` an ``exports`` row
+    (:data:`NOTIFICATION_SUBJECT_TABLES`). In-app only: no event is ever mailed or texted.
+    """
+
+    BRIEF_CREATED = "brief.created"
+    APPROVAL_DECIDED = "approval.decided"
+    DRAFT_GENERATED = "draft.generated"
+    REVIEW_BLOCKED = "review.blocked"
+    EXPORT_COMPLETED = "export.completed"
+
+
+#: The table whose row a notification's ``subject_id`` names, per event code.
+NOTIFICATION_SUBJECT_TABLES: Mapping[NotificationEventCode, str] = MappingProxyType(
+    {
+        NotificationEventCode.BRIEF_CREATED: "recommendation_briefs",
+        NotificationEventCode.APPROVAL_DECIDED: "approvals",
+        NotificationEventCode.DRAFT_GENERATED: "creative_drafts",
+        NotificationEventCode.REVIEW_BLOCKED: "content_reviews",
+        NotificationEventCode.EXPORT_COMPLETED: "exports",
+    }
+)
+
+
+class ExportFormat(StrEnum):
+    """The closed set of manual-export render formats (Phase 5E). Text only."""
+
+    TEXT_PLAIN = "text/plain"
+    TEXT_MARKDOWN = "text/markdown"
+    JSON = "json"
