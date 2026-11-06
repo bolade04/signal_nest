@@ -7,14 +7,22 @@ import type { JobOut, ScoutRequestOut } from '@/api/types';
 import {
   runNextActions,
   runNextActionsForNonEditors,
+  runNextStepAfter,
   runOutcomeReasons,
   runResultCopy,
   runResultLabels,
   runResultSummaries,
   sourceFailureReasons,
 } from '@/lib/run-outcome';
-import { isEarlierRunResult, runResultLines, showsRunResult } from '@/lib/run-result';
+import {
+  isEarlierRunResult,
+  runResultLines,
+  runResultSummary,
+  showsRunResult,
+  usedHeldCopy,
+} from '@/lib/run-result';
 import { executionNotice, type ScoutExecution } from '@/lib/scout-execution';
+import { formatDateTime } from '@/lib/utils';
 import captured from '@/test/fixtures/scout-run-outcomes.json';
 import { orgModel } from '@/test/handlers';
 import { server } from '@/test/server';
@@ -427,6 +435,141 @@ describe('a refused run has exactly one next step on the page (review r1 MINOR-3
     ] as const;
     for (const [e, status] of kept) {
       expect(executionNotice(e, status, { deferNextStep: true })).toEqual(executionNotice(e, status));
+    }
+  });
+});
+
+/**
+ * W21 FU-HELD-BODY-1 (PROPOSED). `held_copy_after_failure`, `live_source_failed_cooling` and
+ * `older_record_without_read_facts` are real bodies the route returned
+ * (apps/api/app/tests/test_held_copy_outcome_w21.py): a live source read once, then failing (500),
+ * then a run inside its cool-down that used the stored copy without contacting it; and a run whose
+ * record predates the read facts. Variants the current writer cannot produce (no recorded age or
+ * retry time) are derived from the real body, as the pre-#268 refusal is above.
+ */
+describe('a stored copy used during a failure cool-down is never a complete read (FU-HELD-BODY-1)', () => {
+  beforeEach(() => orgModel.setMembership('org-1', 'user-1', 'owner'));
+  afterEach(() => orgModel.reset());
+
+  const held = cases.held_copy_after_failure;
+  const heldSource = held.run_outcome!.sources![0]!;
+  const lastRead = formatDateTime(heldSource.last_read_at);
+  const retry = formatDateTime(held.run_outcome!.next_retry_at);
+
+  it('the real body: partial (source_held), the copy held after a failed read, wait for the retry time', () => {
+    expect(held.run_outcome).toMatchObject({
+      kind: 'partial',
+      partial_reasons: ['source_held'],
+      next_action: 'wait_for_source_retry',
+    });
+    expect(heldSource).toMatchObject({ read_mode: 'held', failed: false, last_failure_reason: 'retries_exhausted' });
+    expect(usedHeldCopy(heldSource)).toBe(true);
+    expect(heldSource.last_read_at).toBeTruthy();
+    expect(held.run_outcome!.next_retry_at).toBe(heldSource.next_retry_at);
+    // What #284 disclosed stays as it was: the held source is not counted failed in coverage.
+    expect(held.coverage).toMatchObject({ status: 'covered', sources_failed: 0 });
+  });
+
+  it('lines: the stored copy is never called a read; the failure, its age and the retry time are given', () => {
+    expect(runResultLines(held.run_outcome!, held.stats, true)).toEqual({
+      ran: ['1 item collected, 1 signal analysed, 1 opportunity.', 'Read 0 of 1 source.', 'live-dallas: 2 items from a stored copy.'],
+      didNot: [
+        `live-dallas: not contacted in this run, because its last read failed (${sourceFailureReasons.retries_exhausted}). ` +
+          `The stored copy used was last read on ${lastRead}. It can be tried again after ${retry}.`,
+      ],
+      next: runNextStepAfter.editor(retry, 1),
+    });
+    expect(runNextStepAfter.editor(retry, 1)).toBe(
+      `Run this scout again after ${retry}. Until then, a new run will not contact the source it could not read.`,
+    );
+  });
+
+  it('the page: Partial, never "Complete" or "Every source was read in full", with the age, the retry time and the wait', async () => {
+    const { screen, panel } = await openPanel(scout(held));
+    expect(panel).toHaveAttribute('data-run-result', 'partial');
+    expect(within(panel).getByRole('status')).toHaveTextContent(`${runResultLabels.partial}${runResultSummaries.partial}`);
+    expect(within(panel).queryByText(runResultLabels.complete)).not.toBeInTheDocument();
+    expect(screen.queryByText(runResultSummaries.complete)).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain(runResultSummaries.complete);
+    const lines = runResultLines(held.run_outcome!, held.stats, true);
+    expect(sections(panel)).toEqual({
+      [runResultCopy.whatRan]: lines.ran,
+      [runResultCopy.whatDidNot]: lines.didNot,
+      [runResultCopy.nextStep]: [lines.next],
+    });
+    expect(panel.textContent).toContain(lastRead);
+    expect(panel.textContent).toContain(retry);
+    // Not the step a run inside the cool-down cannot honour.
+    expect(panel.textContent).not.toContain(runNextActions.run_again_later);
+    expect(screen.getAllByRole('button', { name: 'Run now' })).not.toHaveLength(0);
+  });
+
+  it('an age that was not recorded is said to be unknown, never invented', async () => {
+    const run_outcome = { ...held.run_outcome!, sources: [{ ...heldSource, last_read_at: null }] };
+    const { panel } = await openPanel(scout({ ...held, run_outcome }));
+    expect(panel.textContent).toContain('When the stored copy used was last read is not recorded.');
+    expect(panel.textContent).not.toMatch(/was last read on/);
+    expect(within(panel).getByRole('status')).toHaveTextContent(runResultLabels.partial);
+  });
+
+  it('a retry time that was not recorded is not invented, and the step is still to wait', () => {
+    const run_outcome = {
+      ...held.run_outcome!,
+      next_retry_at: null,
+      sources: [{ ...heldSource, next_retry_at: null }],
+    };
+    const lines = runResultLines(run_outcome, held.stats, true);
+    expect(lines.next).toBe(runNextActions.wait_for_source_retry);
+    expect(lines.didNot.join(' ')).not.toMatch(/tried again after/);
+    expect(runResultLines(run_outcome, held.stats, false).next).toBe(runNextActionsForNonEditors.wait_for_source_retry);
+    expect(runNextActions.wait_for_source_retry).toMatch(/^Wait before running this scout again\./);
+  });
+
+  it('a member who cannot run the scout is asked to turn to someone who can, after the retry time', async () => {
+    orgModel.setMembership('org-1', 'user-1', 'viewer');
+    const { screen, panel } = await openPanel(scout(held));
+    expect(sections(panel)[runResultCopy.nextStep]).toEqual([runNextStepAfter.nonEditor(retry, 1)]);
+    expect(runNextStepAfter.nonEditor(retry, 1)).toMatch(/^Ask someone who can run this scout to run it again after /);
+    expect(screen.queryByRole('button', { name: 'Run now' })).not.toBeInTheDocument();
+  });
+
+  it('a live source that failed and is cooling down: its retry time, and wait - not "run again later"', async () => {
+    const c = cases.live_source_failed_cooling;
+    const at = formatDateTime(c.run_outcome!.next_retry_at);
+    expect(c.run_outcome).toMatchObject({ kind: 'partial', partial_reasons: ['source_failed'], next_action: 'wait_for_source_retry' });
+    expect(runResultLines(c.run_outcome!, c.stats, true)).toEqual({
+      ran: ['0 items collected, 0 signals analysed, 0 opportunities.', 'Read 0 of 1 source.'],
+      didNot: [`live-dallas: could not be read (${sourceFailureReasons.retries_exhausted}). It can be tried again after ${at}.`],
+      next: runNextStepAfter.editor(at, 1),
+    });
+    const { panel } = await openPanel(scout(c));
+    expect(panel).toHaveAttribute('data-run-result', 'partial');
+    expect(panel.textContent).not.toContain(runNextActions.run_again_later);
+  });
+
+  it('a failed source that does not cool down (the sample feed) keeps "run again later"', () => {
+    const c = cases.partial_source_failed;
+    expect(c.run_outcome!.next_action).toBe('run_again_later');
+    expect(c.run_outcome!.next_retry_at).toBeNull();
+    expect(runResultLines(c.run_outcome!, c.stats, true).next).toBe(runNextActions.run_again_later);
+  });
+
+  it('an older record: complete as before, but "read in full" is not claimed, since the record cannot say', async () => {
+    const c = cases.older_record_without_read_facts;
+    expect(c.run_outcome!.kind).toBe('complete');
+    expect(c.run_outcome!.sources!.every((s) => s.read_mode == null && s.last_read_at == null)).toBe(true);
+    const { panel } = await openPanel(scout(c));
+    expect(within(panel).getByRole('status')).toHaveTextContent(`${runResultLabels.complete}${runResultCopy.completeUnrecorded}`);
+    expect(within(panel).queryByText(runResultSummaries.complete)).not.toBeInTheDocument();
+    expect(sections(panel)[runResultCopy.nextStep]).toBeUndefined();
+  });
+
+  it('a complete run whose sources were read in it, or revalidated, still says "read in full"', () => {
+    expect(runResultSummary(cases.complete.run_outcome!)).toBe(runResultSummaries.complete);
+    const [source] = cases.complete.run_outcome!.sources!;
+    for (const read_mode of ['fetched', 'revalidated', 'reused'] as const) {
+      const result = { ...cases.complete.run_outcome!, sources: [{ ...source!, read_mode }] };
+      expect(runResultSummary(result)).toBe(runResultSummaries.complete);
     }
   });
 });

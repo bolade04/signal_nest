@@ -42,7 +42,10 @@ P6-PLAT-1): `fetch_limits` - per source `max_items` (100), `fetched`, `eligible_
 `clipped` (the source held more than 100 entries; one entry of look-ahead) and, for a
 source that failed, `failed: true` with a closed `failure_reason` (a failed source is
 never shown as an empty one) - and `partial_fetch` / `partial_fetch_reasons`
-(`fetch_limit_reached`, `source_failed`). After the takedown re-check, a run whose
+(`fetch_limit_reached`, `source_failed`, `source_held`). Each source that was not failed
+also records `read_mode`: `fetched` (read in this run), `revalidated` (a `304`), `reused`
+(inside the politeness interval after a good read, not contacted) or `held` (not contacted
+during a failure cool-down; see §6). After the takedown re-check, a run whose
 sources together would index more than N_max = 100 signals is refused
 (`signal_volume_above_bound`) before any model call, with every source's facts and no
 `coverage` object. The full statement is in `aws-staging-runtime-contract.md` §G.
@@ -232,9 +235,23 @@ data:
   source whose entry is stale before the first of them records its read or its cool-down.
   In that interval the source can receive up to `WORKER_CONCURRENCY` ×
   `CONNECTOR_RSS_MAX_ATTEMPTS` requests from that process.
-* While a held good body is served during a cool-down, the run counts the source as read
-  (`sources_failed` does not include it). Only the run that met the failure reports it,
-  and the `connector.source_failed` log event records it.
+* While a held good body is served during a cool-down, `coverage` still counts the source
+  as read (`sources_failed` does not include it). Only the run that met the failure reports
+  it failed, and the `connector.source_failed` log event records it. The run that used the
+  held copy records that it did (W21 FU-HELD-BODY-1, PROPOSED): the source's `fetch_limits`
+  entry has `read_mode: held`, `last_read_at` (when the copy was last read successfully),
+  `last_failure_reason` and `next_retry_at`; `partial_fetch_reasons` includes `source_held`.
+  So `run_outcome.kind` is `partial`, never `complete`, and `next_action` is
+  `wait_for_source_retry` with `run_outcome.next_retry_at`. The Scout page says the source
+  was not contacted, why, how old the copy is and when it can be tried again. A failed
+  source that is cooling down gets the same next step and retry time.
+* `next_retry_at` is the cool-down of the worker process that ran the run. Another worker,
+  or a restarted one, keeps no such record and may contact the source sooner (see the
+  per-process limit above). The held copy itself still has no maximum age: it is served for
+  as long as the source keeps failing, and each run says how old it is.
+* A run recorded before W21 FU-HELD-BODY-1 has no read facts. The API returns them as
+  `null` (not recorded), and the Scout page does not say that such a complete run read
+  every source in full.
 * `robots.txt` is recorded per source at onboarding, not evaluated at fetch time.
 * No connector metrics are exported; outcomes are structured log events
   (`connector.source_read`, `connector.source_failed`, `connector.source_taken_down`).

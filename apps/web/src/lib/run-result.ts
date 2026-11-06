@@ -3,11 +3,15 @@ import type { ScoutExecution } from '@/lib/scout-execution';
 import {
   runNextActions,
   runNextActionsForNonEditors,
+  runNextStepAfter,
   runResultCopy,
+  runResultSummaries,
   sourceLabel,
   type RunResult,
+  type RunSource,
 } from '@/lib/run-outcome';
 import { formatStat, statValue } from '@/lib/scout-stats';
+import { formatDateTime } from '@/lib/utils';
 
 /**
  * The lines of the run-result panel (W21 FU-Q1-1, Q1 (a+), PROPOSED): what ran, what did not
@@ -54,6 +58,36 @@ export interface RunResultLines {
   next: string | null;
 }
 
+/**
+ * W21 FU-HELD-BODY-1 (PROPOSED): the source was not contacted in this run - its last read failed
+ * and it was cooling down - and the stored copy of its last good read was used. It was not read.
+ */
+export function usedHeldCopy(source: RunSource): boolean {
+  return !source.failed && source.read_mode === 'held';
+}
+
+/**
+ * The status line's summary. A complete run whose record does not say how each source was read
+ * (a run recorded before `read_mode` existed, which may have used a stored copy) does not claim
+ * that every source was read in full: that uncertainty is kept, not resolved either way.
+ */
+export function runResultSummary(result: RunResult): string {
+  if (result.kind === 'complete' && result.sources?.some((s) => !s.failed && s.read_mode == null)) {
+    return runResultCopy.completeUnrecorded;
+  }
+  return runResultSummaries[result.kind];
+}
+
+/** A recorded time as the page shows times, or `null` when it was not recorded. */
+function shownTime(iso: string | null | undefined): string | null {
+  return iso ? formatDateTime(iso) : null;
+}
+
+function withRetry(line: string, source: RunSource): string {
+  const retry = shownTime(source.next_retry_at);
+  return retry ? line + runResultCopy.retryAfter(retry) : line;
+}
+
 export function runResultLines(
   result: RunResult,
   stats: ScoutRequestOut['stats'] | null | undefined,
@@ -71,21 +105,50 @@ export function runResultLines(
   }
   // `null`: the run recorded no per-source facts (a refusal recorded before they existed).
   if (result.sources) {
-    const read = result.sources.filter((source) => !source.failed);
+    // A source whose stored copy was used during a failure cool-down was not read (FU-HELD-BODY-1).
+    const read = result.sources.filter((source) => !source.failed && !usedHeldCopy(source));
     ran.push(
       result.sources.length
         ? runResultCopy.sourcesRead(read.length, result.sources.length)
         : runResultCopy.noSource,
     );
-    for (const source of read) {
-      ran.push(runResultCopy.sourceRead(sourceLabel(source.source_key), source.fetched));
+    for (const source of result.sources) {
+      if (source.failed) continue;
+      const label = sourceLabel(source.source_key);
+      ran.push(
+        usedHeldCopy(source)
+          ? runResultCopy.sourceHeldUsed(label, source.fetched)
+          : runResultCopy.sourceRead(label, source.fetched),
+      );
     }
     for (const source of result.sources) {
       const label = sourceLabel(source.source_key);
       if (source.clipped) didNot.push(runResultCopy.clipped(label, source.max_items));
-      if (source.failed) didNot.push(runResultCopy.failed(label, source.failure_reason));
+      if (source.failed) didNot.push(withRetry(runResultCopy.failed(label, source.failure_reason), source));
+      if (usedHeldCopy(source)) {
+        const line = runResultCopy.held(
+          label,
+          source.last_failure_reason ?? null,
+          shownTime(source.last_read_at),
+        );
+        didNot.push(withRetry(line, source));
+      }
     }
   }
-  const nextSteps = canEdit ? runNextActions : runNextActionsForNonEditors;
-  return { ran, didNot, next: result.next_action ? nextSteps[result.next_action] : null };
+  return { ran, didNot, next: nextStep(result, canEdit) };
+}
+
+/**
+ * The one next step. During a source's cool-down (`wait_for_source_retry`) it is to run again
+ * after the recorded retry time - never "run again later", which a run inside the cool-down cannot
+ * honour - or, with no time recorded, to wait (FU-HELD-BODY-1, PROPOSED).
+ */
+function nextStep(result: RunResult, canEdit: boolean): string | null {
+  if (!result.next_action) return null;
+  const retry = shownTime(result.next_retry_at);
+  if (result.next_action === 'wait_for_source_retry' && retry) {
+    const unread = (result.sources ?? []).filter((s) => s.failed || usedHeldCopy(s)).length;
+    return (canEdit ? runNextStepAfter.editor : runNextStepAfter.nonEditor)(retry, unread);
+  }
+  return (canEdit ? runNextActions : runNextActionsForNonEditors)[result.next_action];
 }

@@ -55,6 +55,7 @@ from app.connectors.fetch_limits import (
     XML_MALFORMED,
     XML_UNSAFE,
     SourceFetchReport,
+    SourceReadMode,
     lookahead_entries,
 )
 from app.connectors.ratelimit import TokenBucket
@@ -297,26 +298,45 @@ def keyword_match(signal: ConnectorSignal, keywords: tuple[str, ...]) -> bool:
 
 
 def source_report(
-    source_key: str, scope: FetchScope, *, fetched: int, eligible: int, clipped: bool
+    source_key: str,
+    scope: FetchScope,
+    *,
+    fetched: int,
+    eligible: int,
+    clipped: bool,
+    read_mode: SourceReadMode,
+    last_read_at: datetime | None = None,
+    next_retry_at: datetime | None = None,
+    last_failure_reason: str | None = None,
 ) -> SourceFetchReport:
-    """What one source delivered against its fetch limit (#268)."""
+    """What one source delivered against its fetch limit (#268), and how its content was
+    obtained (``read_mode``; W21 FU-HELD-BODY-1, PROPOSED: a writer always says)."""
     return SourceFetchReport(
         source_key=source_key,
         max_items=scope.max_items,
         fetched=fetched,
         eligible_seen=eligible,
         clipped_by_fetch_limit=clipped,
+        read_mode=read_mode,
+        last_read_at=last_read_at,
+        next_retry_at=next_retry_at,
+        last_failure_reason=last_failure_reason,
     )
 
 
 def failed_source_report(
-    source_key: str, scope: FetchScope, failure: FetchFailure
+    source_key: str,
+    scope: FetchScope,
+    failure: FetchFailure,
+    *,
+    next_retry_at: datetime | None = None,
 ) -> SourceFetchReport:
     """A source that contributed nothing because it failed (review r3 MINOR-1).
 
     ``fetched`` 0 is not "the source was empty": ``failed`` and ``failure_reason`` say it
     failed (a document rejected as a whole, e.g. malformed XML after the limit, is a
-    failed source, never 100 good entries)."""
+    failed source, never 100 good entries). ``next_retry_at``: while the source cools down
+    after the failure, when it may be contacted again (W21 FU-HELD-BODY-1, PROPOSED)."""
     return SourceFetchReport(
         source_key=source_key,
         max_items=scope.max_items,
@@ -325,6 +345,7 @@ def failed_source_report(
         clipped_by_fetch_limit=False,
         failed=True,
         failure_reason=failure_reason(failure),
+        next_retry_at=next_retry_at,
     )
 
 
@@ -391,6 +412,8 @@ class RssNewsConnector(SourceConnector):
                 fetched=len(window),
                 eligible=len(result.signals),
                 clipped=clipped,
+                # The sandbox reads its bundled feed in every run; it holds no copy.
+                read_mode=SourceReadMode.FETCHED,
             )
         )
         return result

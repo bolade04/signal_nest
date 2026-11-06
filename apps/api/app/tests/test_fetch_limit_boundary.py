@@ -345,6 +345,7 @@ def test_150_entry_source_through_the_real_registry_is_clipped_and_says_so(
             "eligible_seen": 100,
             "failed": False,
             "failure_reason": None,
+            "read_mode": "fetched",  # W21 FU-HELD-BODY-1: the sandbox reads its feed every run
         }
     ]
     assert "refused" not in stats  # the run succeeded: a clip is not a refusal

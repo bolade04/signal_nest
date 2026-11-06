@@ -1,14 +1,15 @@
 import { useId } from 'react';
 import type { ScoutRequestOut } from '@/api/types';
 import { Badge } from '@/components/ui/badge';
-import { runResultCopy, runResultIntent, runResultLabels, runResultSummaries } from '@/lib/run-outcome';
-import { isEarlierRunResult, runResultLines, showsRunResult } from '@/lib/run-result';
+import { runResultCopy, runResultIntent, runResultLabels } from '@/lib/run-outcome';
+import { isEarlierRunResult, runResultLines, runResultSummary, showsRunResult } from '@/lib/run-result';
 
 /**
  * The Scout page's run-result panel (W21 FU-Q1-1, Q1 (a+), PROPOSED): what the last run that read
  * its sources read, what it did not read and the one next step, from the API's typed
  * `run_outcome`. A complete run says so explicitly, so a partial run never looks like a complete
- * one. Nothing is shown when the API records no outcome (no result yet, or a run recorded before
+ * one, and a run that used a source's stored copy during its failure cool-down is partial, never
+ * complete (W21 FU-HELD-BODY-1). Nothing is shown when the API records no outcome (no result yet, or a run recorded before
  * per-source facts existed), or when the run read no source (the zero-result panel explains it;
  * review r1 MINOR-1). When the latest run ended without a result, the panel says that it shows an
  * earlier run's (review r1 MINOR-2). Read-only: for a member who can edit the Scout (`canEdit`,
@@ -48,7 +49,7 @@ export function RunResultPanel({
       {/* Announced when a finished run changes the result while the page is open. */}
       <p role="status" className="mt-1 flex flex-wrap items-center gap-2">
         <Badge intent={runResultIntent[result.kind]}>{runResultLabels[result.kind]}</Badge>
-        <span>{runResultSummaries[result.kind]}</span>
+        <span>{runResultSummary(result)}</span>
       </p>
       <dl className="mt-2 space-y-2">
         <div>

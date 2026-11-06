@@ -76,6 +76,7 @@ export type RunResultKind = RunResult['kind'];
 export type RunNextAction = NonNullable<RunResult['next_action']>;
 export type RunSource = components['schemas']['ScoutRunSource'];
 export type SourceFailureReason = components['schemas']['SourceFailureReason'];
+export type SourceReadMode = components['schemas']['SourceReadMode'];
 
 const items = (n: number) => `${n} ${n === 1 ? 'item' : 'items'}`;
 const sources = (n: number) => `${n} ${n === 1 ? 'source' : 'sources'}`;
@@ -107,6 +108,25 @@ export const runResultCopy = {
     read === consulted ? `Read ${sources(consulted)}.` : `Read ${read} of ${sources(consulted)}.`,
   noSource: 'No source was read.',
   sourceRead: (label: string, fetched: number) => `${label}: ${items(fetched)} read.`,
+  // W21 FU-HELD-BODY-1 (PROPOSED, pending the copy owner's sign-off). A source whose last read
+  // failed is not contacted during its cool-down; the run uses the stored copy of its last good
+  // read. That copy is never called a read of the source: "What ran" says the items came from the
+  // stored copy, and "What did not run" says the source was not contacted, why, how old the copy
+  // is (or that this is not recorded) and when the source can be tried again.
+  sourceHeldUsed: (label: string, fetched: number) => `${label}: ${items(fetched)} from a stored copy.`,
+  held: (label: string, reason: SourceFailureReason | null, lastReadAt: string | null) =>
+    `${label}: not contacted in this run, because its last read failed ` +
+    `(${reason ? sourceFailureReasons[reason] : 'reason not recorded'}). ` +
+    (lastReadAt
+      ? `The stored copy used was last read on ${lastReadAt}.`
+      : 'When the stored copy used was last read is not recorded.'),
+  /** Appended to a failed or held source's line while the source cools down. */
+  retryAfter: (time: string) => ` It can be tried again after ${time}.`,
+  /**
+   * The summary of a complete run whose record predates the read facts: the run may have used a
+   * stored copy, and the record cannot say, so "read in full" is not claimed.
+   */
+  completeUnrecorded: 'No source failed or was cut short. This record does not say whether each source was read in that run.',
   refusal: (bound: number | null) =>
     bound === null
       ? 'The run was refused: its sources returned more items than one run can analyse.'
@@ -137,10 +157,16 @@ export const runResultSummaries: Record<RunResultKind, string> = {
   refused: 'The run was refused before anything was analysed.',
 };
 
-/** The next step for a member who can edit and run the Scout (the EDITORS gate). */
+/**
+ * The next step for a member who can edit and run the Scout (the EDITORS gate).
+ * `wait_for_source_retry` here is the step when the retry time is not recorded; with a time, the
+ * step is `runNextStepAfter` (W21 FU-HELD-BODY-1, PROPOSED).
+ */
 export const runNextActions: Record<RunNextAction, string> = {
   narrow_request: 'Narrow this scout: edit it to use fewer source types or keywords, then run it again.',
   run_again_later: 'Run this scout again later. A source that failed may be available then.',
+  wait_for_source_retry:
+    'Wait before running this scout again. For a while after a failed read, a new run does not contact that source.',
   no_action: "No action needed: the results come from the items read within each source's limit.",
 };
 
@@ -150,8 +176,25 @@ export const runNextActionsForNonEditors: Record<RunNextAction, string> = {
     'Ask someone who can edit this scout to use fewer source types or keywords, then run it again.',
   run_again_later:
     'Ask someone who can run this scout to run it again later. A source that failed may be available then.',
+  wait_for_source_retry:
+    'Ask someone who can run this scout to wait before running it again. For a while after a failed read, a new run does not contact that source.',
   no_action: runNextActions.no_action,
 };
+
+/**
+ * `wait_for_source_retry` with its recorded time (W21 FU-HELD-BODY-1, PROPOSED): run again after
+ * it, not sooner. `unread` is how many sources the run could not read (failed or held).
+ */
+export const runNextStepAfter = {
+  editor: (time: string, unread: number) =>
+    `Run this scout again after ${time}. Until then, a new run will not contact ${theSources(unread)} it could not read.`,
+  nonEditor: (time: string, unread: number) =>
+    `Ask someone who can run this scout to run it again after ${time}. Until then, a new run will not contact ${theSources(unread)} it could not read.`,
+};
+
+function theSources(n: number): string {
+  return n === 1 ? 'the source' : 'the sources';
+}
 
 export const sourceFailureReasons: Record<SourceFailureReason, string> = {
   feed_too_large: 'the feed was too large',
