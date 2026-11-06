@@ -5,8 +5,10 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
+from app.connectors import fetch_limits
 from app.connectors.coverage import CoverageReason, CoverageStatus
 from app.core.enums import ScheduleInterval, ScheduleState, SourceType
+from app.infra.vector import SIGNAL_VOLUME_ABOVE_BOUND
 from app.jobs.outcomes import RunOutcome, RunOutcomeReason
 
 
@@ -123,6 +125,163 @@ def coverage_from_stats(stats: object) -> ScoutCoverage | None:
         return None
 
 
+# --------------------------------------------------------------------------- #
+# The latest run's outcome (Q1 (a+), W21 FU-Q1-1, PROPOSED): what ran, what did not, and one
+# next action, lifted from what the run recorded in ``stats``. The UI never reads those untyped
+# keys itself (``apps/web/src/lib/scout-stats.ts``).
+# --------------------------------------------------------------------------- #
+class ScoutRunOutcomeKind(StrEnum):
+    """How completely the latest recorded run read its sources.
+
+    ``complete``: the run completed and every source it consulted was read in full.
+    ``partial``: the run completed, but at least one source was clipped by its fetch limit or
+    failed. ``refused``: the run was refused at the per-run bound before anything was analysed."""
+
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+    REFUSED = "refused"
+
+
+class PartialFetchReason(StrEnum):
+    """Why a run did not read everything its sources held (``app.connectors.fetch_limits``)."""
+
+    SOURCE_FAILED = fetch_limits.SOURCE_FAILED
+    FETCH_LIMIT_REACHED = fetch_limits.FETCH_LIMIT_REACHED
+
+
+class SourceFailureReason(StrEnum):
+    """Why one source failed and contributed nothing (``app.connectors.fetch_limits``)."""
+
+    FEED_TOO_LARGE = fetch_limits.FEED_TOO_LARGE
+    XML_UNSAFE = fetch_limits.XML_UNSAFE
+    XML_MALFORMED = fetch_limits.XML_MALFORMED
+    RATE_LIMITED = fetch_limits.RATE_LIMITED
+    RETRIES_EXHAUSTED = fetch_limits.RETRIES_EXHAUSTED
+    RESPONSE_REFUSED = fetch_limits.RESPONSE_REFUSED
+    EGRESS_BLOCKED = fetch_limits.EGRESS_BLOCKED
+    FETCH_ERROR = fetch_limits.FETCH_ERROR
+
+
+class RunRefusalReason(StrEnum):
+    """Why a run was refused before analysis (P6-PLAT-1 strategy B)."""
+
+    SIGNAL_VOLUME_ABOVE_BOUND = SIGNAL_VOLUME_ABOVE_BOUND
+
+
+class ScoutRunNextAction(StrEnum):
+    """The one next step a customer can take in the product today.
+
+    ``narrow_request``: edit the Scout to use fewer source types or keywords, then run it again
+    (a refusal). ``run_again_later``: run the Scout again later (a source failed).
+    ``no_action``: nothing the customer can do changes the result (only a fetch limit clipped a
+    source: no setting raises it, and a re-run reads the same limit)."""
+
+    NARROW_REQUEST = "narrow_request"
+    RUN_AGAIN_LATER = "run_again_later"
+    NO_ACTION = "no_action"
+
+
+class ScoutRunSource(BaseModel):
+    """What one consulted source delivered in the run (one ``stats.fetch_limits`` entry).
+
+    ``fetched`` entries were read within the source's limit, ``eligible_seen`` of them matched the
+    Scout's keywords. ``clipped`` is true when the source held more than ``max_items`` (``null``:
+    the source declares no limit). ``failed`` is true when the source contributed nothing because
+    it failed; ``failure_reason`` is then its closed code (``null`` for a code this API does not
+    know, so the failure itself is never dropped). Counts and codes only."""
+
+    source_key: str
+    max_items: int | None
+    fetched: int
+    eligible_seen: int
+    clipped: bool
+    failed: bool
+    failure_reason: SourceFailureReason | None
+
+    @field_validator("failure_reason", mode="before")
+    @classmethod
+    def _known_reason(cls, value: object) -> object:
+        known = {r.value for r in SourceFailureReason}
+        return value if value is None or value in known else None
+
+
+class ScoutRunOutcome(BaseModel):
+    """The latest recorded run's outcome (Q1 (a+), W21 FU-Q1-1, PROPOSED).
+
+    Lifted read-only from ``stats``, which hold the result of the latest run that completed or
+    was refused at the bound (a cancelled, stopped, skipped or otherwise failed run writes no
+    stats; its outcome is on the job). **What ran:** ``sources`` (every consulted source, ``[]``
+    when none covered the market, ``null`` when the run recorded no per-source facts) and the
+    counts in ``stats`` (``RunStats`` keys). **What did not:** ``refusal_reason`` and ``bound``
+    for a refusal, ``partial_reasons`` and the clipped or failed ``sources``. **One next
+    action:** ``next_action`` (``null`` for a complete run)."""
+
+    kind: ScoutRunOutcomeKind
+    sources: list[ScoutRunSource] | None
+    partial_reasons: list[PartialFetchReason]
+    refusal_reason: RunRefusalReason | None
+    bound: int | None
+    next_action: ScoutRunNextAction | None
+
+    model_config = {"extra": "forbid"}
+
+
+def _next_action(
+    kind: ScoutRunOutcomeKind, reasons: list[PartialFetchReason]
+) -> ScoutRunNextAction | None:
+    if kind is ScoutRunOutcomeKind.REFUSED:
+        return ScoutRunNextAction.NARROW_REQUEST
+    if PartialFetchReason.SOURCE_FAILED in reasons:
+        return ScoutRunNextAction.RUN_AGAIN_LATER
+    if kind is ScoutRunOutcomeKind.PARTIAL:
+        return ScoutRunNextAction.NO_ACTION
+    return None
+
+
+def run_outcome_from_stats(stats: object) -> ScoutRunOutcome | None:
+    """The latest recorded run's outcome from its stats, or ``None`` when they record none.
+
+    ``None`` for a Scout that has not produced a result (``{}``), for a completed run recorded
+    before the per-source fetch facts existed (#268: without ``partial_fetch`` "complete" cannot
+    be told from "partial"), and for stats that do not validate (never a guess). A refusal
+    recorded before #268 is still a refusal, with ``sources`` null."""
+    if not isinstance(stats, dict):
+        return None
+    refused = stats.get("refused") is True
+    partial = stats.get("partial_fetch")
+    if not refused and not isinstance(partial, bool):
+        return None
+    try:
+        limits = stats.get("fetch_limits")
+        sources = (
+            [ScoutRunSource.model_validate(entry) for entry in limits]
+            if isinstance(limits, list)
+            else None
+        )
+        reasons = (
+            [PartialFetchReason(r) for r in stats.get("partial_fetch_reasons") or []]
+            if partial is True
+            else []
+        )
+        if refused:
+            kind = ScoutRunOutcomeKind.REFUSED
+            refusal_reason = RunRefusalReason(stats.get("refusal_reason"))
+            bound = stats.get("bound")
+        else:
+            kind = ScoutRunOutcomeKind.PARTIAL if partial else ScoutRunOutcomeKind.COMPLETE
+            refusal_reason, bound = None, None
+        return ScoutRunOutcome(
+            kind=kind,
+            sources=sources,
+            partial_reasons=reasons,
+            refusal_reason=refusal_reason,
+            bound=bound,
+            next_action=_next_action(kind, reasons),
+        )
+    except (ValidationError, ValueError, TypeError):
+        return None
+
+
 class ScoutExecutionState(StrEnum):
     """A Scout's derived execution state (D-25 recovery contract §4, PROPOSED)."""
 
@@ -191,6 +350,15 @@ class ScoutRequestOut(BaseModel):
     stats: dict
     #: The latest completed run's coverage outcome, lifted from ``stats``.
     coverage: ScoutCoverage | None = None
+    #: W21 FU-Q1-1 (PROPOSED): the latest recorded run's outcome, lifted from ``stats``.
+    run_outcome: ScoutRunOutcome | None = Field(
+        default=None,
+        description=(
+            "The latest recorded run's outcome (PROPOSED, Q1 (a+)): what ran, what did not and "
+            "one next action, lifted from stats. Null when the stats record none (no result yet, "
+            "or a completed run recorded before per-source fetch facts existed)."
+        ),
+    )
     #: D-25 recovery (PROPOSED): the derived execution state; W16 (PROPOSED): on the list too.
     execution: ScoutExecutionOut | None = Field(
         default=None,
@@ -209,6 +377,8 @@ class ScoutRequestOut(BaseModel):
     def _lift_coverage(self) -> ScoutRequestOut:
         if self.coverage is None:
             self.coverage = coverage_from_stats(self.stats)
+        if self.run_outcome is None:
+            self.run_outcome = run_outcome_from_stats(self.stats)
         return self
 
 
