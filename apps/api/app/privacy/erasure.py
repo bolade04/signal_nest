@@ -60,6 +60,7 @@ from app.briefs.models import RecommendationBrief
 from app.core.enums import Role
 from app.core.errors import AuthError, ConflictError, PermissionDeniedError, ValidationDomainError
 from app.core.security import verify_password
+from app.creative.models import CreativeDraft
 from app.db.models import Base
 from app.jobs.models import Job
 from app.jobs.status import ACTIVE_STATUSES
@@ -335,8 +336,9 @@ def anonymise_phase5_records_for_subject(
     """Clear every value of a Phase 5 compliance record that names the account; keep the rows.
 
     Operator decision ``O-6`` as this module already applies it to ``audit_logs``: the record
-    survives, the values naming the subject go. ``recommendation_briefs.created_by_snapshot``
-    and ``approvals.decided_by_snapshot`` become :data:`ERASED` when the row was made by
+    survives, the values naming the subject go. ``recommendation_briefs.created_by_snapshot``,
+    ``creative_drafts.created_by_snapshot`` (CF-2) and ``approvals.decided_by_snapshot``
+    become :data:`ERASED` when the row was made by
     ``user_id`` or the snapshot names the subject; an ``approvals.note`` naming the subject
     becomes NULL. The ``created_by`` / ``decided_by`` foreign keys are cleared afterwards by
     the foreign-key walk (``SET NULL``). Run it before the user row goes. Returns the rows
@@ -350,26 +352,26 @@ def anonymise_phase5_records_for_subject(
     )
     if not subject:
         return changed
-    briefs = RecommendationBrief.__table__
-    clauses = [prefilter(briefs.c.created_by_snapshot, subject)]
-    if user_id:
-        clauses.append(briefs.c.created_by == user_id)
-    for row in db.execute(
-        select(briefs.c.id, briefs.c.created_by, briefs.c.created_by_snapshot).where(
-            or_(*clauses)
-        )
-    ).all():
-        mine = bool(user_id) and row.created_by == user_id
-        if row.created_by_snapshot != ERASED and (
-            mine or _names(row.created_by_snapshot, subject)
-        ):
-            db.execute(
-                update(briefs)
-                .where(briefs.c.id == row.id)
-                .values(created_by_snapshot=ERASED)
-                .execution_options(synchronize_session=False)
+    for authored in (RecommendationBrief.__table__, CreativeDraft.__table__):
+        clauses = [prefilter(authored.c.created_by_snapshot, subject)]
+        if user_id:
+            clauses.append(authored.c.created_by == user_id)
+        for row in db.execute(
+            select(authored.c.id, authored.c.created_by, authored.c.created_by_snapshot).where(
+                or_(*clauses)
             )
-            changed["recommendation_briefs"] += 1
+        ).all():
+            mine = bool(user_id) and row.created_by == user_id
+            if row.created_by_snapshot != ERASED and (
+                mine or _names(row.created_by_snapshot, subject)
+            ):
+                db.execute(
+                    update(authored)
+                    .where(authored.c.id == row.id)
+                    .values(created_by_snapshot=ERASED)
+                    .execution_options(synchronize_session=False)
+                )
+                changed[authored.name] += 1
     approvals = Approval.__table__
     clauses = [prefilter(c, subject) for c in (approvals.c.decided_by_snapshot, approvals.c.note)]
     if user_id:
@@ -407,8 +409,8 @@ def anonymise_organization_approvals(db: Session, *, organization_id: str) -> in
     Kept: ``organization_id``, ``workspace_id`` (opaque ids of deleted scopes), the subject
     (type, id, version), the decision, its sequence, reason code and decided role, the
     simulation flag and ``created_at``. Cleared: ``decided_by`` (NULL), ``decided_by_snapshot``
-    (:data:`ERASED`) and the free-text ``note`` (NULL). ``brief_id`` is cleared by the
-    foreign-key walk when the organization's briefs are deleted.
+    (:data:`ERASED`) and the free-text ``note`` (NULL). ``brief_id`` and ``draft_id`` are
+    cleared by the foreign-key walk when the organization's briefs and drafts are deleted.
     """
     table = Approval.__table__
     result = db.execute(

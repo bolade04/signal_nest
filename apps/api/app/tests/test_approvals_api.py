@@ -371,6 +371,8 @@ class TestDecide:
             "subject_id",
             "subject_version",
             "brief_id",
+            # W21 CF-2 (I-CF2-1): the draft binding; NULL on a decision about a brief.
+            "draft_id",
             "decision",
             "decision_seq",
             "reason_code",
@@ -383,6 +385,7 @@ class TestDecide:
         }
         assert body["subject_type"] == "recommendation_brief"
         assert body["subject_id"] == body["brief_id"] == BRIEF_A1
+        assert body["draft_id"] is None
         assert (body["subject_version"], body["decision_seq"]) == (1, 1)
         assert (body["decision"], body["reason_code"], body["note"]) == (
             "approved",
