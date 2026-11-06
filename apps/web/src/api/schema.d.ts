@@ -4734,9 +4734,12 @@ export interface components {
         /**
          * PartialFetchReason
          * @description Why a run did not read everything its sources held (``app.connectors.fetch_limits``).
+         *
+         *     ``source_held`` (W21 FU-HELD-BODY-1, PROPOSED): a source was not contacted because its last
+         *     fetch failed and it was cooling down; the copy held from its last good read was used.
          * @enum {string}
          */
-        PartialFetchReason: "source_failed" | "fetch_limit_reached";
+        PartialFetchReason: "source_failed" | "source_held" | "fetch_limit_reached";
         /**
          * PasswordResetConfirmRequest
          * @description Set a new password with a reset token carried in the body, never in a URL.
@@ -5368,11 +5371,16 @@ export interface components {
          *
          *     ``narrow_request``: edit the Scout to use fewer source types or keywords, then run it again
          *     (a refusal). ``run_again_later``: run the Scout again later (a source failed).
-         *     ``no_action``: nothing the customer can do changes the result (only a fetch limit clipped a
-         *     source: no setting raises it, and a re-run reads the same limit).
+         *     ``wait_for_source_retry`` (W21 FU-HELD-BODY-1, PROPOSED): a source the run did not read
+         *     (failed, or its held copy used) is cooling down after a failed fetch, until
+         *     ``ScoutRunOutcome.next_retry_at`` (``null``: not recorded) in the worker that ran the run; run
+         *     the Scout again after then, since a run before then may not reach it (another worker, or a
+         *     restarted one, may reach it sooner). ``no_action``: nothing the
+         *     customer can do changes the result (only a fetch limit clipped a source: no setting raises
+         *     it, and a re-run reads the same limit).
          * @enum {string}
          */
-        ScoutRunNextAction: "narrow_request" | "run_again_later" | "no_action";
+        ScoutRunNextAction: "narrow_request" | "run_again_later" | "wait_for_source_retry" | "no_action";
         /**
          * ScoutRunOutcome
          * @description The latest recorded run's outcome (Q1 (a+), W21 FU-Q1-1, PROPOSED).
@@ -5382,14 +5390,19 @@ export interface components {
          *     stats; its outcome is on the job). **What ran:** ``sources`` (every consulted source, ``[]``
          *     when none covered the market, ``null`` when the run recorded no per-source facts) and the
          *     counts in ``stats`` (``RunStats`` keys). **What did not:** ``refusal_reason`` and ``bound``
-         *     for a refusal, ``partial_reasons`` and the clipped or failed ``sources``. **One next
-         *     action:** ``next_action`` (``null`` for a complete run).
+         *     for a refusal, ``partial_reasons`` and the clipped, failed or held ``sources``. **One next
+         *     action:** ``next_action`` (``null`` for a complete run), and ``next_retry_at`` with
+         *     ``wait_for_source_retry`` (W21 FU-HELD-BODY-1, PROPOSED): the latest ``next_retry_at`` of the
+         *     sources the run did not read, so a run after it may contact each of them again; ``null`` when
+         *     no such time was recorded, and for every other next action.
          */
         ScoutRunOutcome: {
             /** Bound */
             bound: number | null;
             kind: components["schemas"]["ScoutRunOutcomeKind"];
             next_action: components["schemas"]["ScoutRunNextAction"] | null;
+            /** Next Retry At */
+            next_retry_at: string | null;
             /** Partial Reasons */
             partial_reasons: components["schemas"]["PartialFetchReason"][];
             refusal_reason: components["schemas"]["RunRefusalReason"] | null;
@@ -5401,8 +5414,10 @@ export interface components {
          * @description How completely the latest recorded run read its sources.
          *
          *     ``complete``: the run completed and every source it consulted was read in full.
-         *     ``partial``: the run completed, but at least one source was clipped by its fetch limit or
-         *     failed. ``refused``: the run was refused at the per-run bound before anything was analysed.
+         *     ``partial``: the run completed, but at least one source was clipped by its fetch limit,
+         *     failed, or was not contacted during a failure cool-down and its held copy was used (W21
+         *     FU-HELD-BODY-1). ``refused``: the run was refused at the per-run bound before anything was
+         *     analysed.
          * @enum {string}
          */
         ScoutRunOutcomeKind: "complete" | "partial" | "refused";
@@ -5426,6 +5441,17 @@ export interface components {
          *     the source declares no limit). ``failed`` is true when the source contributed nothing because
          *     it failed; ``failure_reason`` is then its closed code (``null`` for a code this API does not
          *     know, so the failure itself is never dropped). Counts and codes only.
+         *
+         *     How the content was obtained (W21 FU-HELD-BODY-1, PROPOSED): ``read_mode`` (``null`` for a
+         *     failed source, and when the run did not record it - a run recorded before this fact existed,
+         *     whose sources may or may not have been read in that run). ``held`` means the source was not
+         *     contacted: its last fetch failed and it was cooling down, so the copy held from its last good
+         *     read was used; ``last_failure_reason`` is then that failure's closed code. ``last_read_at``:
+         *     when the source last answered successfully for the copy used (``null`` when not recorded: the
+         *     copy's age is then unknown). ``next_retry_at``: while the source cools down after a failed
+         *     fetch, the earliest time the worker that ran this run contacts it again (``null`` when it is
+         *     not cooling down, or this was not recorded). These times come from one worker process; another
+         *     worker, or a restarted one, keeps no such record and may contact the source sooner.
          */
         ScoutRunSource: {
             /** Clipped */
@@ -5437,8 +5463,14 @@ export interface components {
             failure_reason: components["schemas"]["SourceFailureReason"] | null;
             /** Fetched */
             fetched: number;
+            last_failure_reason?: components["schemas"]["SourceFailureReason"] | null;
+            /** Last Read At */
+            last_read_at?: string | null;
             /** Max Items */
             max_items: number | null;
+            /** Next Retry At */
+            next_retry_at?: string | null;
+            read_mode?: components["schemas"]["SourceReadMode"] | null;
             /** Source Key */
             source_key: string;
         };
@@ -5536,6 +5568,19 @@ export interface components {
             /** Source Type */
             source_type?: string;
         };
+        /**
+         * SourceReadMode
+         * @description How a source that was not failed provided the content a run used (``read_mode``).
+         *
+         *     ``fetched``: the source sent its content in this run (a live ``200``, or a simulated source
+         *     read in this run). ``revalidated``: the source answered this run's conditional request with
+         *     ``304 Not Modified``, so the copy held from its last good read is current. ``reused``: the
+         *     source was not contacted, because its last read succeeded less than one politeness interval
+         *     ago. ``held``: the source was not contacted, because its last fetch failed and it is cooling
+         *     down; the copy held from its last good read was used (its age is that read's age).
+         * @enum {string}
+         */
+        SourceReadMode: "fetched" | "revalidated" | "reused" | "held";
         /**
          * SourceType
          * @enum {string}

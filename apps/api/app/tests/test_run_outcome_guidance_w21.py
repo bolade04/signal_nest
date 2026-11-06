@@ -74,6 +74,18 @@ _WEB_FIXTURE = (
 #: How many findings were new or seen again depends on the cards earlier runs left; the web
 #: fixture keeps the captured split, and only the sum is pinned.
 _SPLIT = ("opportunities_new", "opportunities_seen_again")
+#: W21 FU-HELD-BODY-1: wall-clock times a run records (a source's last good read, its retry
+#: time); like ``execution.since``, only whether each is present is pinned against the fixture.
+_TIMES = ("last_read_at", "next_retry_at")
+
+
+def _unstamped(value):
+    """``value`` with every recorded wall-clock time replaced by whether it is present."""
+    if isinstance(value, dict):
+        return {k: (v is not None) if k in _TIMES else _unstamped(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_unstamped(v) for v in value]
+    return value
 
 
 def _web_fixture() -> dict:
@@ -86,7 +98,7 @@ def _assert_is_the_web_fixture(body: dict, case: str) -> None:
     wall-clock time for an idle Scout, so only its presence is pinned) and ``stats``."""
     want = _web_fixture()["cases"][case]
     assert body["status"] == want["status"]
-    assert body["run_outcome"] == want["run_outcome"]
+    assert _unstamped(body["run_outcome"]) == _unstamped(want["run_outcome"])
     assert body["coverage"] == want["coverage"]
 
     def unstamped(execution: dict) -> dict:
@@ -98,7 +110,7 @@ def _assert_is_the_web_fixture(body: dict, case: str) -> None:
     def unsplit(stats: dict) -> dict:
         return {k: v for k, v in stats.items() if k not in _SPLIT}
 
-    assert unsplit(body["stats"]) == unsplit(want["stats"])
+    assert _unstamped(unsplit(body["stats"])) == _unstamped(unsplit(want["stats"]))
     if _SPLIT[0] in body["stats"]:
         assert sum(body["stats"][k] for k in _SPLIT) == body["stats"]["opportunities"]
 
@@ -187,6 +199,9 @@ def replay(factory, committed, monkeypatch):
 
 
 def _source_row(key: str, *, max_items, fetched: int, clipped=False, failed=False, reason=None):
+    """A source of these runs' ``run_outcome``. The sandbox and demo library are read in every run
+    (``read_mode`` fetched; W21 FU-HELD-BODY-1) and hold no copy, so they record no read time and
+    never cool down; a failed source records no ``read_mode``."""
     return {
         "source_key": key,
         "max_items": max_items,
@@ -195,6 +210,10 @@ def _source_row(key: str, *, max_items, fetched: int, clipped=False, failed=Fals
         "clipped": clipped,
         "failed": failed,
         "failure_reason": reason,
+        "read_mode": None if failed else "fetched",
+        "last_read_at": None,
+        "next_retry_at": None,
+        "last_failure_reason": None,
     }
 
 
@@ -216,6 +235,7 @@ def test_complete_run_reads_complete_with_its_source(factory, client):
         "refusal_reason": None,
         "bound": None,
         "next_action": None,
+        "next_retry_at": None,
     }
     assert body["stats"]["scanned"] > 0  # what ran: the counts stay in stats (RunStats keys)
     _assert_is_the_web_fixture(body, "complete")
@@ -233,6 +253,7 @@ def test_clipped_run_is_partial_fetch_limit_reached_with_no_action(client, repla
         "refusal_reason": None,
         "bound": None,
         "next_action": "no_action",
+        "next_retry_at": None,
     }
     _assert_is_the_web_fixture(body, "partial_fetch_limit_reached")
 
@@ -252,6 +273,7 @@ def test_failed_source_is_partial_source_failed_run_again_later(client, replay):
         "refusal_reason": None,
         "bound": None,
         "next_action": "run_again_later",
+        "next_retry_at": None,
     }
     _assert_is_the_web_fixture(body, "partial_source_failed")
 
@@ -273,6 +295,7 @@ def test_refused_run_at_the_bound_says_why_and_to_narrow_the_scout(client, repla
         "refusal_reason": "signal_volume_above_bound",
         "bound": _BOUND,
         "next_action": "narrow_request",
+        "next_retry_at": None,
     }
     assert body["coverage"] is None  # a refused run did not complete (P6-DATA-2, unchanged)
     _assert_is_the_web_fixture(body, "refused_at_bound")
@@ -305,6 +328,7 @@ def test_a_run_that_read_no_source_lifts_complete_with_no_sources(factory, clien
         "refusal_reason": None,
         "bound": None,
         "next_action": None,
+        "next_retry_at": None,
     }
     _assert_is_the_web_fixture(body, "no_source")
 
@@ -445,7 +469,11 @@ def test_the_closed_vocabularies_match_the_writers():
         for name, value in vars(fetch_limits).items()
         if name.isupper() and isinstance(value, str)
     }
-    partial = {fetch_limits.SOURCE_FAILED, fetch_limits.FETCH_LIMIT_REACHED}
+    partial = {
+        fetch_limits.SOURCE_FAILED,
+        fetch_limits.SOURCE_HELD,  # W21 FU-HELD-BODY-1
+        fetch_limits.FETCH_LIMIT_REACHED,
+    }
     assert {r.value for r in PartialFetchReason} == partial
     assert {r.value for r in SourceFailureReason} == written - partial
     assert {r.value for r in RunRefusalReason} == {SIGNAL_VOLUME_ABOVE_BOUND}

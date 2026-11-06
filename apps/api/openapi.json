@@ -6568,9 +6568,10 @@
         "type": "object"
       },
       "PartialFetchReason": {
-        "description": "Why a run did not read everything its sources held (``app.connectors.fetch_limits``).",
+        "description": "Why a run did not read everything its sources held (``app.connectors.fetch_limits``).\n\n``source_held`` (W21 FU-HELD-BODY-1, PROPOSED): a source was not contacted because its last\nfetch failed and it was cooling down; the copy held from its last good read was used.",
         "enum": [
           "source_failed",
+          "source_held",
           "fetch_limit_reached"
         ],
         "title": "PartialFetchReason",
@@ -8235,10 +8236,11 @@
         "type": "object"
       },
       "ScoutRunNextAction": {
-        "description": "The one next step a customer can take in the product today.\n\n``narrow_request``: edit the Scout to use fewer source types or keywords, then run it again\n(a refusal). ``run_again_later``: run the Scout again later (a source failed).\n``no_action``: nothing the customer can do changes the result (only a fetch limit clipped a\nsource: no setting raises it, and a re-run reads the same limit).",
+        "description": "The one next step a customer can take in the product today.\n\n``narrow_request``: edit the Scout to use fewer source types or keywords, then run it again\n(a refusal). ``run_again_later``: run the Scout again later (a source failed).\n``wait_for_source_retry`` (W21 FU-HELD-BODY-1, PROPOSED): a source the run did not read\n(failed, or its held copy used) is cooling down after a failed fetch, until\n``ScoutRunOutcome.next_retry_at`` (``null``: not recorded) in the worker that ran the run; run\nthe Scout again after then, since a run before then may not reach it (another worker, or a\nrestarted one, may reach it sooner). ``no_action``: nothing the\ncustomer can do changes the result (only a fetch limit clipped a source: no setting raises\nit, and a re-run reads the same limit).",
         "enum": [
           "narrow_request",
           "run_again_later",
+          "wait_for_source_retry",
           "no_action"
         ],
         "title": "ScoutRunNextAction",
@@ -8246,7 +8248,7 @@
       },
       "ScoutRunOutcome": {
         "additionalProperties": false,
-        "description": "The latest recorded run's outcome (Q1 (a+), W21 FU-Q1-1, PROPOSED).\n\nLifted read-only from ``stats``, which hold the result of the latest run that completed or\nwas refused at the bound (a cancelled, stopped, skipped or otherwise failed run writes no\nstats; its outcome is on the job). **What ran:** ``sources`` (every consulted source, ``[]``\nwhen none covered the market, ``null`` when the run recorded no per-source facts) and the\ncounts in ``stats`` (``RunStats`` keys). **What did not:** ``refusal_reason`` and ``bound``\nfor a refusal, ``partial_reasons`` and the clipped or failed ``sources``. **One next\naction:** ``next_action`` (``null`` for a complete run).",
+        "description": "The latest recorded run's outcome (Q1 (a+), W21 FU-Q1-1, PROPOSED).\n\nLifted read-only from ``stats``, which hold the result of the latest run that completed or\nwas refused at the bound (a cancelled, stopped, skipped or otherwise failed run writes no\nstats; its outcome is on the job). **What ran:** ``sources`` (every consulted source, ``[]``\nwhen none covered the market, ``null`` when the run recorded no per-source facts) and the\ncounts in ``stats`` (``RunStats`` keys). **What did not:** ``refusal_reason`` and ``bound``\nfor a refusal, ``partial_reasons`` and the clipped, failed or held ``sources``. **One next\naction:** ``next_action`` (``null`` for a complete run), and ``next_retry_at`` with\n``wait_for_source_retry`` (W21 FU-HELD-BODY-1, PROPOSED): the latest ``next_retry_at`` of the\nsources the run did not read, so a run after it may contact each of them again; ``null`` when\nno such time was recorded, and for every other next action.",
         "properties": {
           "bound": {
             "anyOf": [
@@ -8271,6 +8273,18 @@
                 "type": "null"
               }
             ]
+          },
+          "next_retry_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Retry At"
           },
           "partial_reasons": {
             "items": {
@@ -8310,13 +8324,14 @@
           "partial_reasons",
           "refusal_reason",
           "bound",
-          "next_action"
+          "next_action",
+          "next_retry_at"
         ],
         "title": "ScoutRunOutcome",
         "type": "object"
       },
       "ScoutRunOutcomeKind": {
-        "description": "How completely the latest recorded run read its sources.\n\n``complete``: the run completed and every source it consulted was read in full.\n``partial``: the run completed, but at least one source was clipped by its fetch limit or\nfailed. ``refused``: the run was refused at the per-run bound before anything was analysed.",
+        "description": "How completely the latest recorded run read its sources.\n\n``complete``: the run completed and every source it consulted was read in full.\n``partial``: the run completed, but at least one source was clipped by its fetch limit,\nfailed, or was not contacted during a failure cool-down and its held copy was used (W21\nFU-HELD-BODY-1). ``refused``: the run was refused at the per-run bound before anything was\nanalysed.",
         "enum": [
           "complete",
           "partial",
@@ -8350,7 +8365,7 @@
         "type": "object"
       },
       "ScoutRunSource": {
-        "description": "What one consulted source delivered in the run (one ``stats.fetch_limits`` entry).\n\n``fetched`` entries were read within the source's limit, ``eligible_seen`` of them matched the\nScout's keywords. ``clipped`` is true when the source held more than ``max_items`` (``null``:\nthe source declares no limit). ``failed`` is true when the source contributed nothing because\nit failed; ``failure_reason`` is then its closed code (``null`` for a code this API does not\nknow, so the failure itself is never dropped). Counts and codes only.",
+        "description": "What one consulted source delivered in the run (one ``stats.fetch_limits`` entry).\n\n``fetched`` entries were read within the source's limit, ``eligible_seen`` of them matched the\nScout's keywords. ``clipped`` is true when the source held more than ``max_items`` (``null``:\nthe source declares no limit). ``failed`` is true when the source contributed nothing because\nit failed; ``failure_reason`` is then its closed code (``null`` for a code this API does not\nknow, so the failure itself is never dropped). Counts and codes only.\n\nHow the content was obtained (W21 FU-HELD-BODY-1, PROPOSED): ``read_mode`` (``null`` for a\nfailed source, and when the run did not record it - a run recorded before this fact existed,\nwhose sources may or may not have been read in that run). ``held`` means the source was not\ncontacted: its last fetch failed and it was cooling down, so the copy held from its last good\nread was used; ``last_failure_reason`` is then that failure's closed code. ``last_read_at``:\nwhen the source last answered successfully for the copy used (``null`` when not recorded: the\ncopy's age is then unknown). ``next_retry_at``: while the source cools down after a failed\nfetch, the earliest time the worker that ran this run contacts it again (``null`` when it is\nnot cooling down, or this was not recorded). These times come from one worker process; another\nworker, or a restarted one, keeps no such record and may contact the source sooner.",
         "properties": {
           "clipped": {
             "title": "Clipped",
@@ -8378,6 +8393,28 @@
             "title": "Fetched",
             "type": "integer"
           },
+          "last_failure_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceFailureReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_read_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Read At"
+          },
           "max_items": {
             "anyOf": [
               {
@@ -8388,6 +8425,28 @@
               }
             ],
             "title": "Max Items"
+          },
+          "next_retry_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Retry At"
+          },
+          "read_mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceReadMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "source_key": {
             "title": "Source Key",
@@ -8600,6 +8659,17 @@
         },
         "title": "SourcePrefPatch",
         "type": "object"
+      },
+      "SourceReadMode": {
+        "description": "How a source that was not failed provided the content a run used (``read_mode``).\n\n``fetched``: the source sent its content in this run (a live ``200``, or a simulated source\nread in this run). ``revalidated``: the source answered this run's conditional request with\n``304 Not Modified``, so the copy held from its last good read is current. ``reused``: the\nsource was not contacted, because its last read succeeded less than one politeness interval\nago. ``held``: the source was not contacted, because its last fetch failed and it is cooling\ndown; the copy held from its last good read was used (its age is that read's age).",
+        "enum": [
+          "fetched",
+          "revalidated",
+          "reused",
+          "held"
+        ],
+        "title": "SourceReadMode",
+        "type": "string"
       },
       "SourceType": {
         "enum": [

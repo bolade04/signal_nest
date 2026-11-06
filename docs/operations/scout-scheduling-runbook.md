@@ -362,7 +362,11 @@ Source: `apps/api/app/scouting_requests/routes.py`.
       `narrow_request` (a refusal: edit the Scout to fewer source types or keywords),
       `run_again_later` (a source failed) or `no_action` (only a fetch limit clipped a source).
       It is null when the stats record none (no result yet, or a completed run recorded before
-      the per-source facts existed). The Scout page shows it as "Result of the last run that
+      the per-source facts existed). W21 FU-HELD-BODY-1 (PROPOSED): a live source that was not
+      contacted during its failure cool-down, its held copy used instead (`read_mode: held`),
+      makes the run `partial` (`source_held`), never `complete`; that run, and a run whose failed
+      live source is cooling down, gets `wait_for_source_retry` with `next_retry_at` instead of
+      `run_again_later` (see `live-data-sources.md` §6). The Scout page shows it as "Result of the last run that
       read its sources", says when the latest run ended without a result (so the panel shows an
       earlier run's), shows nothing for a run that read no source (the zero-result panel explains
       it), and for a refused run lets the D-25 notice point at the panel's one next step instead of
