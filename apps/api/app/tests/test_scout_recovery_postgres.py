@@ -65,9 +65,7 @@ def _postgres_required() -> None:
 # helpers
 # --------------------------------------------------------------------------- #
 def _mock_llm(monkeypatch) -> None:
-    monkeypatch.setattr(
-        pipeline,
-        "llm_service",
+    monkeypatch.setattr("app.llm.service.llm_service",
         LLMService(
             MockLLMProvider(model="mock-1", seed=offline_settings().llm_mock_seed),
             settings=offline_settings(),

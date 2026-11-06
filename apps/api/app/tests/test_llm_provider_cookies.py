@@ -108,7 +108,9 @@ def _provider(name: str):
 
 def _call(provider, tenant: str) -> None:
     response = provider.generate(
-        LLMRequest(task="classify_signal", inputs={"content": "x"}, tenant_ref=tenant),
+        LLMRequest(
+            task="classify_signal", inputs={"content": "x", "audiences": None}, tenant_ref=tenant
+        ),
         "classify_signal",
         "v1",
     )
