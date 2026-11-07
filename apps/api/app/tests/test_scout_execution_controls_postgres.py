@@ -23,13 +23,15 @@ from app.connectors.base import FailureKind
 from app.connectors.feedcache import FeedCache
 from app.connectors.live import LiveRssConnector
 from app.connectors.retry import ConnectorFetchError
+from app.core.config import Settings
 from app.jobs import pipeline
 from app.jobs.admission import RunAdmission
-from app.jobs.models import Job
+from app.jobs.models import Job, JobEvent
 from app.jobs.reconcile import UNKNOWN_END, list_unresolved, resolve
 from app.jobs.schemas import JobOut
-from app.jobs.status import JobStatus
-from app.jobs.store import DurableJobStore
+from app.jobs.status import JobError, JobErrorCode, JobStatus
+from app.jobs.store import DurableJobStore, JobLeaseLostError
+from app.jobs.worker import JobRunner
 from app.llm.base import LLMTimeoutError, LLMUsage
 from app.llm.mock import MockLLMProvider
 from app.llm.models import LLMBudgetReservation, LLMUsageEvent
@@ -49,6 +51,7 @@ from app.tests.test_live_rss_connector import record, target
 from app.tests.test_scout_pause_postgres import (
     JOIN_SECONDS,
     MARKET,
+    Background,
     Sources,
     World,
     _end_state,
@@ -186,36 +189,151 @@ def _ledger(w: World) -> dict:
         }
 
 
+def _job_row(w: World) -> dict:
+    """The job row as the assertions and the deadline diagnostics report it."""
+    with w.factory() as s:
+        job = s.get(Job, w.job_id)
+        return {
+            "status": job.status,
+            "attempt_count": job.attempt_count,
+            "worker_id": job.worker_id,
+            "lease_expires_at": job.lease_expires_at,
+            "available_at": job.available_at,
+            "last_error": (job.last_error_code, job.last_error_summary),
+        }
+
+
 # --------------------------------------------------------------------------- #
 # §6.1-3: a zombie after lease expiry, repeated recoveries, the bound
 # --------------------------------------------------------------------------- #
-def test_a_zombie_admits_nothing_and_repeated_recoveries_keep_one_unresolved_admission(
-    world, monkeypatch
-):
-    """The original attempt is parked inside an admitted model call when its lease lapses.
-    Three successive recoveries re-claim the job; each takes ownership from the lapsed owner
-    and waits (no lock held) at its first model admission behind the zombie's outstanding
-    admission (K = 1), and becomes a stale zombie itself at the next recovery. At every
-    sample: unresolved <= 1 and sends in flight <= 1. Released, the original records its KNOWN
-    end (resolving its admission) and admits nothing more; the stale waiters stop; the newest
-    attempt runs the Scout to completion. The original's reservation was released at the
-    first re-claim; its late settlement still writes exactly one usage row."""
-    w = world
+#: Interval of the predicate polls below (seconds). Every wait ends on an observed
+#: condition or on its deadline, which fails the test; none is a timed pause.
+POLL_SECONDS = 0.02
+
+
+def _expire_then_heartbeat(w: World) -> dict:
+    """A test-local trigger: the test's expiry write, then the current owner's heartbeat
+    exactly as its heartbeat thread issues it (``DurableJobStore.heartbeat``, fenced by the
+    credential the row carries: the owner's own). Both commit in ONE transaction, so nothing
+    reads the lapsed lease in between: for the recovery poll that follows, a heartbeat landed
+    between the expiry and its scan. Returns the lease after the expiry and after the beat, and
+    the time just after the commit."""
+    with w.factory() as s:
+        s.execute(
+            update(Job)
+            .where(Job.id == w.job_id)
+            .values(lease_expires_at=datetime.now(UTC) - timedelta(hours=1))
+        )
+        job = s.get(Job, w.job_id)
+        expired = job.lease_expires_at
+        DurableJobStore().heartbeat(
+            s, job, worker_id=job.worker_id, lease_token=job.lease_token, lease_seconds=30.0
+        )
+        s.commit()
+        return {
+            "expired": expired,
+            "renewed": job.lease_expires_at,
+            "status": job.status,
+            "at": datetime.now(UTC),
+        }
+
+
+class ShareHeldStore(DurableJobStore):
+    """A test-local trigger: holds ``FOR SHARE`` on the job row, from a session of its own,
+    across this poll's lease recovery. That is the lock a waiting attempt's admission read
+    (``RunAdmission.check``) takes on every try, so the recovery's ``FOR UPDATE SKIP LOCKED``
+    skips the row and the poll finds nothing to run."""
+
+    def __init__(self, w: World):
+        self.w = w
+        self.recovered: list[int] = []
+
+    def recover_expired_leases(self, db, **kwargs):
+        with self.w.engine.connect() as conn, conn.begin():
+            conn.execute(text("select id from jobs where id = :j for share"), {"j": self.w.job_id})
+            recovered = super().recover_expired_leases(db, **kwargs)
+        self.recovered.append(recovered)
+        return recovered
+
+
+class AdmissionWaits:
+    """Records each attempt an external admission refused on K = 1.
+
+    ``RunAdmission._blocking`` runs only after such a refusal, right before the attempt
+    waits (holding no lock) behind the Scout's outstanding admission. "Attempt N was refused
+    at its model admission" therefore means attempt N claimed the Scout and is waiting."""
+
+    def __init__(self, monkeypatch):
+        self.refused: list[tuple[int, str]] = []
+        real = RunAdmission._blocking
+
+        def blocking(admission, operation):
+            self.refused.append((admission.attempt, operation))
+            return real(admission, operation)
+
+        monkeypatch.setattr(RunAdmission, "_blocking", blocking)
+
+    def waiting(self, attempt: int) -> bool:
+        return (attempt, "model") in self.refused
+
+
+def _recover_to(
+    w: World, waits: AdmissionWaits, *, attempt: int, runner, expire
+) -> tuple[Background, int]:
+    """One recovery: expire the lease, then poll until attempt ``attempt`` is running and
+    waiting at its model admission. Returns that attempt's poll and the idle polls' count.
+
+    One poll is not always enough (FU-ZOMBIE-POLL). ``poll_once`` returns False, having done
+    nothing, when its ``FOR UPDATE SKIP LOCKED`` recovery meets a waiting attempt's
+    ``FOR SHARE`` on the job row, when the running attempt's heartbeat renewed the lease
+    between the expiry and the scan, or when that attempt saw its own lease lapse first and
+    failed itself to ``retry_wait`` (due again after its backoff). Such a poll is re-issued
+    after a fresh expiry. A poll that claims the job keeps running: it is the new attempt.
+    The deadline fails the test with what it saw; nothing falls through."""
+    deadline = time.monotonic() + JOIN_SECONDS
+    polls, idle, poll = 0, 0, None
+    while True:
+        row = _job_row(w)
+        if poll is not None and row["attempt_count"] == attempt and waits.waiting(attempt):
+            return poll, idle
+        if poll is not None and not poll.is_alive():
+            if poll.join_ok() is not False:  # re-raises the poll's error, if any
+                raise AssertionError(
+                    f"recovery to attempt {attempt}: a poll ran a job to completion while the"
+                    f" original operation was outstanding; job {row}; refused {waits.refused}"
+                )
+            idle, poll = idle + 1, None
+        if time.monotonic() > deadline:
+            raise AssertionError(
+                f"recovery to attempt {attempt}: not running and waiting at its model"
+                f" admission after {JOIN_SECONDS} s ({polls} polls, {idle} idle);"
+                f" job {row}; refused {waits.refused}"
+            )
+        if poll is None:
+            polls += 1
+            expire(attempt - 1, polls)
+            poll = _start_worker(w, runner(attempt - 1, polls))
+        time.sleep(POLL_SECONDS)
+
+
+def _zombie_recoveries(w: World, monkeypatch, *, runner=None, expire=None) -> dict:
+    """The §6.1-3 choreography. ``runner(recovery, poll)`` builds each poll's runner and
+    ``expire(recovery, poll)`` writes each expiry (trigger seams). Returns the idle polls per
+    recovery."""
+    runner = runner or (lambda _recovery, _poll: _runner(w))
+    expire = expire or (lambda _recovery, _poll: _expire_lease(w, w.job_id))
     provider = Provider(park={1})
     _use(monkeypatch, provider)
+    waits = AdmissionWaits(monkeypatch)
     sampler = Sampler(w, provider)
     workers = [_start_worker(w)]
     assert provider.parked.wait(JOIN_SECONDS)
-    for _ in range(3):  # three recoveries while the original operation is outstanding
-        _expire_lease(w, w.job_id)
-        workers.append(_start_worker(w, _runner(w)))
-        deadline = time.monotonic() + JOIN_SECONDS
-        while time.monotonic() < deadline:  # wait until the new attempt is running
-            with w.factory() as s:
-                if s.get(Job, w.job_id).attempt_count == len(workers):
-                    break
-            time.sleep(0.02)
-        time.sleep(0.3)
+    idle = {}
+    for recovery in (1, 2, 3):  # three recoveries while the original operation is outstanding
+        poll, idle[recovery] = _recover_to(
+            w, waits, attempt=recovery + 1, runner=runner, expire=expire
+        )
+        workers.append(poll)
     assert len(provider.calls) == 1  # no recovery admitted a model call
     provider.release.set()
     for worker in workers:
@@ -233,6 +351,114 @@ def test_a_zombie_admits_nothing_and_repeated_recoveries_keep_one_unresolved_adm
     calls = len(provider.calls)
     assert ledger["admissions"] == calls and ledger["usage"] == calls
     assert ledger["reservations"] == calls
+    return idle
+
+
+def test_a_zombie_admits_nothing_and_repeated_recoveries_keep_one_unresolved_admission(
+    world, monkeypatch
+):
+    """The original attempt is parked inside an admitted model call when its lease lapses.
+    Three successive recoveries re-claim the job; each takes ownership from the lapsed owner
+    and waits (no lock held) at its first model admission behind the zombie's outstanding
+    admission (K = 1), and becomes a stale zombie itself at the next recovery. At every
+    sample: unresolved <= 1 and sends in flight <= 1. Released, the original records its KNOWN
+    end (resolving its admission) and admits nothing more; the stale waiters stop; the newest
+    attempt runs the Scout to completion. The original's reservation was released at the
+    first re-claim; its late settlement still writes exactly one usage row."""
+    _zombie_recoveries(world, monkeypatch)
+
+
+def test_the_zombie_recoveries_survive_a_skipped_row_and_a_renewed_lease(world, monkeypatch):
+    """FU-ZOMBIE-POLL: the choreography above with both triggers of a poll that finds nothing
+    to run, injected once each. The second recovery's first poll runs while another session
+    holds ``FOR SHARE`` on the job row (as a waiting attempt's admission read does); the
+    third recovery's lease is renewed by the running attempt's heartbeat right after the
+    expiry. Each such poll returns False, the recovery expires the lease again and polls
+    again, and the run ends exactly as above."""
+    w = world
+    share = ShareHeldStore(w)
+    beats: list[dict] = []
+
+    def runner(recovery: int, poll: int) -> JobRunner:
+        if (recovery, poll) == (2, 1):
+            return JobRunner(
+                settings=Settings(_env_file=None), session_factory=w.factory, store=share
+            )
+        return _runner(w)
+
+    def expire(recovery: int, poll: int) -> None:
+        if (recovery, poll) == (3, 1):
+            beats.append(_expire_then_heartbeat(w))
+        else:
+            _expire_lease(w, w.job_id)
+
+    idle = _zombie_recoveries(w, monkeypatch, runner=runner, expire=expire)
+    assert share.recovered == [0]  # the injected poll's recovery recovered nothing
+    assert len(beats) == 1 and beats[0]["status"] == JobStatus.RUNNING.value
+    assert beats[0]["expired"] < beats[0]["at"] < beats[0]["renewed"]  # the beat landed
+    assert idle[2] >= 1 and idle[3] >= 1  # each injected trigger cost one idle poll
+
+
+# --------------------------------------------------------------------------- #
+# W21-REV-INTIND-A O-5: a stale attempt's failure is fenced before its transition is checked
+# --------------------------------------------------------------------------- #
+def _stale_attempt_then(w: World, then: JobStatus) -> tuple[str, str]:
+    """Attempt 1 claims and runs; its lease expires and is recovered; attempt 2 claims and
+    runs, then fails retryably (``retry_wait``) or completes (``succeeded``). Returns attempt
+    1's credential (its worker id and lease token). ``running``: attempt 2 is still running."""
+    store = DurableJobStore()
+    with w.factory() as s:
+        job = store.claim_one(s, worker_id="w-stale", lease_seconds=30)
+        store.mark_running(s, job, worker_id="w-stale", lease_token=job.lease_token)
+        s.commit()
+        stale = (job.worker_id, job.lease_token)
+    _expire_lease(w, w.job_id)
+    with w.factory() as s:
+        assert store.recover_expired_leases(s) == 1
+        s.commit()
+    with w.factory() as s:
+        job = store.claim_one(s, worker_id="w-new", lease_seconds=30)
+        assert job is not None and job.id == w.job_id
+        store.mark_running(s, job, worker_id="w-new", lease_token=job.lease_token)
+        if then is JobStatus.RETRY_WAIT:
+            store.fail(
+                s, job, worker_id="w-new", lease_token=job.lease_token,
+                error=JobError(JobErrorCode.TRANSIENT, "x"), base_seconds=2, max_seconds=300,
+            )
+        elif then is JobStatus.SUCCEEDED:
+            store.complete(s, job, worker_id="w-new", lease_token=job.lease_token)
+        s.commit()
+    return stale
+
+
+@pytest.mark.parametrize("then", [JobStatus.RETRY_WAIT, JobStatus.SUCCEEDED, JobStatus.RUNNING])
+@pytest.mark.parametrize("retryable", [True, False])
+def test_a_stale_attempts_failure_raises_lease_lost_and_writes_nothing(world, then, retryable):
+    """O-5: the stale attempt re-reads the job after its rollback and finds it moved on
+    (``retry_wait`` after another attempt failed, ``succeeded``, or ``running`` under the new
+    attempt, the one case the old order already fenced). Its ``fail`` must stop on
+    the ownership fence (``JobLeaseLostError``, which the worker logs as a lost lease), never
+    on a transition check of a status it no longer owns (``InvalidJobTransition``, which
+    escaped ``poll_once``: the FU-ZOMBIE-POLL signature). Nothing is written."""
+    w = world
+    worker_id, token = _stale_attempt_then(w, then)
+    before = _job_row(w)
+    count_events = select(func.count()).select_from(JobEvent).where(JobEvent.job_id == w.job_id)
+    with w.factory() as s:
+        events = s.scalar(count_events)
+    error = JobError(JobErrorCode.TRANSIENT if retryable else JobErrorCode.NON_RETRYABLE, "late")
+    with w.factory() as s:
+        job = s.get(Job, w.job_id)  # what the stale attempt re-reads after its rollback
+        assert job.status == then.value
+        with pytest.raises(JobLeaseLostError):
+            DurableJobStore().fail(
+                s, job, worker_id=worker_id, lease_token=token, error=error,
+                base_seconds=2, max_seconds=300,
+            )
+        s.rollback()
+    assert _job_row(w) == before
+    with w.factory() as s:
+        assert s.scalar(count_events) == events
 
 
 def test_the_migrated_schema_enforces_k1_with_the_partial_unique_index(world):
@@ -297,8 +523,29 @@ def test_cancel_during_an_admitted_operation_stops_at_the_next_admission(world, 
 # --------------------------------------------------------------------------- #
 # §6.5: a manual run overlapping a scheduled run
 # --------------------------------------------------------------------------- #
-def test_an_overlapping_claim_is_refused_while_the_owner_is_valid(world, monkeypatch):
-    w = world
+#: The job lease of this scenario's two workers (seconds). FU-OVERLAP-LEASE: in CI the rival
+#: stalled about 30 s between its job claim and its run claim, with no renewal, so the
+#: default 30 s lease lapsed and the rival stopped ``lease_lost`` before it could be refused.
+#: The scenario pins the owner check, not lease timing (lease lapse has tests of its own), so
+#: both workers hold a lease far above any scheduling stall.
+OVERLAP_LEASE_SECONDS = 600.0
+#: The injected stall: one second past the default lease, as in the CI failure.
+STALL = timedelta(seconds=31)
+
+
+def _overlap_runner(w: World) -> JobRunner:
+    return JobRunner(
+        settings=Settings(_env_file=None, worker_lease_seconds=OVERLAP_LEASE_SECONDS),
+        session_factory=w.factory,
+        store=DurableJobStore(),
+    )
+
+
+def _overlapping_claim(w: World, monkeypatch, *, before_rival_claim=None) -> str:
+    """The owner parks inside its first model call; a rival job for the same Scout is then
+    claimed by another worker, whose run claim must be refused (``skipped_owner_active``).
+    ``before_rival_claim(owner_job_id, rival_job_id)`` runs right before the rival's run
+    claim (a trigger seam). Returns the rival's job id."""
     provider = Provider(park={1})
     _use(monkeypatch, provider)
     from app.jobs.service import enqueue_scout_request
@@ -317,9 +564,18 @@ def test_an_overlapping_claim_is_refused_while_the_owner_is_valid(world, monkeyp
             run_fence=req.run_fence,
         ).id
         s.commit()
-    first = _start_worker(w)
+    if before_rival_claim is not None:
+        real_claim = RunAdmission.claim
+
+        def claim(admission, *, now):
+            if admission.job_id == rival:
+                before_rival_claim(w.job_id, rival)
+            return real_claim(admission, now=now)
+
+        monkeypatch.setattr(RunAdmission, "claim", claim)
+    first = _start_worker(w, _overlap_runner(w))
     assert provider.parked.wait(JOIN_SECONDS)
-    assert _start_worker(w, _runner(w)).join_ok() is True
+    assert _start_worker(w, _overlap_runner(w)).join_ok() is True
     provider.release.set()
     assert first.join_ok() is True
     with w.factory() as s:
@@ -329,6 +585,39 @@ def test_an_overlapping_claim_is_refused_while_the_owner_is_valid(world, monkeyp
         }
     assert outcomes == {"completed", "skipped_owner_active"}
     assert provider.max_inflight == 1
+    return rival
+
+
+def test_an_overlapping_claim_is_refused_while_the_owner_is_valid(world, monkeypatch):
+    _overlapping_claim(world, monkeypatch)
+
+
+def test_an_overlapping_claim_is_refused_after_the_rival_stalls_past_the_default_lease(
+    world, monkeypatch
+):
+    """FU-OVERLAP-LEASE: the CI failure's trigger, injected. Right before the rival's run
+    claim, the rival's lease is moved back by ``STALL`` (31 s): its lease as it stands after
+    the rival stalled that long between its job claim and its run claim with no renewal (the
+    owner, whose heartbeat kept renewing in CI, is left as it is). With the default 30 s
+    lease the rival then stops ``lease_lost`` at its run claim, the CI signature; with this
+    scenario's lease it is still valid, and the owner check refuses it."""
+    w = world
+    shifted: list[timedelta] = []
+
+    def stall(_owner: str, rival: str) -> None:
+        with w.factory() as s:
+            lease = select(Job.lease_expires_at).where(Job.id == rival)
+            before = s.scalar(lease)
+            s.execute(
+                update(Job)
+                .where(Job.id == rival)
+                .values(lease_expires_at=Job.lease_expires_at - STALL)
+            )
+            s.commit()
+            shifted.append(before - s.scalar(lease))
+
+    _overlapping_claim(w, monkeypatch, before_rival_claim=stall)
+    assert shifted == [STALL]  # the trigger fired, once, on the rival
 
 
 # --------------------------------------------------------------------------- #
