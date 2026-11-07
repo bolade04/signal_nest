@@ -1193,6 +1193,11 @@ def test_dark_state_shipped_defaults_resolve_every_capability_disabled(factory) 
         Capability.OPPORTUNITY_FEEDBACK: DecisionSource.GLOBAL_CONFIGURATION,
         Capability.SCOUT_SCHEDULING: DecisionSource.SAFETY_CEILING,
         Capability.CONNECTOR_RSS: DecisionSource.GLOBAL_CONFIGURATION,
+        # Project Phase 5 (W21 CF-1/CF-2/CF-3): three more flag-bound capabilities, no
+        # environment ceiling, so their global flag decides.
+        Capability.RECOMMENDATION_BRIEFS: DecisionSource.GLOBAL_CONFIGURATION,
+        Capability.CREATIVE_GENERATION: DecisionSource.GLOBAL_CONFIGURATION,
+        Capability.CONTENT_EXPORT: DecisionSource.GLOBAL_CONFIGURATION,
     }
     assert set(expected) == set(iter_capabilities())
     with factory() as s:

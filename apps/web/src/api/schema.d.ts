@@ -431,7 +431,7 @@ export interface paths {
          *     An unknown ``capability`` value is rejected as 422 by the typed enum before any
          *     resolution. A cross-tenant or absent workspace is a non-enumerating 404.
          *
-         *     With shipped defaults (all three global flags ``False``, the scheduling environment
+         *     With shipped defaults (every global flag ``False``, the scheduling environment
          *     ceiling engaged) and no real override row, every capability resolves disabled —
          *     ``scout_scheduling`` via ``safety_ceiling`` with ``environment_ceiling_lifted=false``
          *     (whatever its overrides), the others via ``global_configuration`` — the surface is

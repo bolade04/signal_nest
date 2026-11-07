@@ -227,6 +227,10 @@ class TestDarkByDefault:
             "opportunity_feedback": ("global_configuration", None),
             "scout_scheduling": ("safety_ceiling", False),
             "connector_rss": ("global_configuration", None),
+            # Project Phase 5 (W21 CF-1/CF-2/CF-3): flag-bound, no environment ceiling.
+            "recommendation_briefs": ("global_configuration", None),
+            "creative_generation": ("global_configuration", None),
+            "content_export": ("global_configuration", None),
         }
         items = h.effective().json()["items"]
         assert {item["capability"] for item in items} == set(expected)

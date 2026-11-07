@@ -59,9 +59,9 @@ at the request boundary. The effective, overrides, set, and clear routes authori
 validate the operator-supplied tenant scope (the workspace must exist and be owned by the
 supplied organization) before touching override state, mapping a cross-tenant or absent
 workspace to a non-enumerating 404 — never revealing whether the workspace exists.
-Under the shipped configuration (all three global flags ``False``, the scheduling ceiling
+Under the shipped configuration (every global flag ``False``, the scheduling ceiling
 engaged) every capability resolves disabled: ``scout_scheduling`` via ``safety_ceiling``
-whatever its overrides, the other two via ``global_configuration`` unless an honored
+whatever its overrides, the other five via ``global_configuration`` unless an honored
 per-workspace override is present.
 
 **Which capabilities have a live gate.** This is the fact these routes turn on. Since
@@ -357,7 +357,7 @@ def internal_capability_effective(
     An unknown ``capability`` value is rejected as 422 by the typed enum before any
     resolution. A cross-tenant or absent workspace is a non-enumerating 404.
 
-    With shipped defaults (all three global flags ``False``, the scheduling environment
+    With shipped defaults (every global flag ``False``, the scheduling environment
     ceiling engaged) and no real override row, every capability resolves disabled —
     ``scout_scheduling`` via ``safety_ceiling`` with ``environment_ceiling_lifted=false``
     (whatever its overrides), the others via ``global_configuration`` — the surface is
