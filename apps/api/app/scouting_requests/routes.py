@@ -23,6 +23,7 @@ from app.core.enums import Role, ScoutRequestStatus
 from app.core.errors import CapabilityUnavailableError, NotFoundError, ValidationDomainError
 from app.core.logging import get_logger, log_event, trace_id_ctx
 from app.core.pagination import MAX_PAGE_SIZE, PAGINATION_RESPONSES, paginate
+from app.db.request_tx import WriteDb
 from app.db.session import get_db
 from app.jobs.service import enqueue_scout_request
 from app.llm.metering import ensure_run_allowed
@@ -209,7 +210,7 @@ def list_scout_requests(
 def create_scout_request(
     workspace_id: str,
     body: ScoutRequestCreate,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     ctx: TenantContext = Depends(EDITORS),
 ) -> ScoutRequestOut:
     brand = get_primary_brand(db, workspace_id)
@@ -275,7 +276,7 @@ def update_scout_request(
     workspace_id: str,
     request_id: str,
     body: ScoutRequestUpdate,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     ctx: TenantContext = Depends(EDITORS),
 ) -> ScoutRequestOut:
     """Edit a Scout's name, source types, keywords, market override or notes (W16 §B, PROPOSED).
@@ -387,7 +388,7 @@ def pause_scout_request(
 def resume_scout_request(
     workspace_id: str,
     request_id: str,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     ctx: TenantContext = Depends(EDITORS),
 ) -> ScoutRequestOut:
     request = _get_scoped(db, workspace_id, request_id)
@@ -603,7 +604,7 @@ def create_scout_schedule(
     workspace_id: str,
     request_id: str,
     body: ScoutScheduleCreate,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     ctx: TenantContext = Depends(EDITORS),
 ) -> ScoutScheduleOut:
     """Attach the single recurring schedule to a request (editor + feature-gated).
@@ -631,7 +632,7 @@ def create_scout_schedule(
 def pause_scout_schedule(
     workspace_id: str,
     request_id: str,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     ctx: TenantContext = Depends(EDITORS),
 ) -> ScoutScheduleOut:
     """Pause the schedule (idempotent). No further runs are fanned out until resume."""
@@ -650,7 +651,7 @@ def pause_scout_schedule(
 def resume_scout_schedule(
     workspace_id: str,
     request_id: str,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     ctx: TenantContext = Depends(EDITORS),
 ) -> ScoutScheduleOut:
     """Resume or activate the schedule, recomputing the next run from now.
@@ -676,7 +677,7 @@ def resume_scout_schedule(
 def delete_scout_schedule(
     workspace_id: str,
     request_id: str,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     ctx: TenantContext = Depends(EDITORS),
 ) -> Response:
     """Hard-delete the schedule. Any in-flight tick self-terminates on next fire."""

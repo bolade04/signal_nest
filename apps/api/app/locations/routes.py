@@ -15,6 +15,7 @@ from app.core.errors import (
     SignalNestError,
     ValidationDomainError,
 )
+from app.db.request_tx import WriteDb
 from app.db.session import get_db
 from app.geography.geocoder import GeocodeFailure, GeocodingService, get_geocoding_service
 from app.locations import service as location_service
@@ -125,7 +126,7 @@ def list_locations(
 def create_location(
     workspace_id: str,
     body: LocationBase,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     ctx: TenantContext = Depends(require_role(Role.OWNER, Role.ADMIN, Role.MARKETER)),
 ) -> BusinessLocation:
     brand = get_primary_brand(db, workspace_id)
@@ -156,7 +157,7 @@ def update_location(
     workspace_id: str,
     location_id: str,
     body: LocationBase,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     ctx: TenantContext = Depends(require_role(Role.OWNER, Role.ADMIN, Role.MARKETER)),
 ) -> BusinessLocation:
     location = db.get(BusinessLocation, location_id)
@@ -190,7 +191,7 @@ def _record_lifecycle(
 def deactivate_location(
     workspace_id: str,
     location_id: str,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     ctx: TenantContext = Depends(EDITORS),
 ) -> BusinessLocation:
     """Retire a location without deleting it or any of its history (P6-UI-023).
@@ -211,7 +212,7 @@ def deactivate_location(
 def reactivate_location(
     workspace_id: str,
     location_id: str,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     ctx: TenantContext = Depends(EDITORS),
 ) -> BusinessLocation:
     """Return a deactivated location to service; a no-op (200) when already active."""
@@ -250,7 +251,7 @@ def upsert_geo_coverage(
     workspace_id: str,
     location_id: str,
     body: GeoCoverageBase,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     ctx: TenantContext = Depends(require_role(Role.OWNER, Role.ADMIN, Role.MARKETER)),
 ) -> GeoCoverageRule:
     location = db.get(BusinessLocation, location_id)

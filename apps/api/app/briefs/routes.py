@@ -38,9 +38,10 @@ The boundary mirrors the opportunity-feedback router (:mod:`app.feedback.routes`
   workspace (an honored override included). Member-gated like the brief reads. Advisory
   only: every brief endpoint re-decides and answers 503 while disabled.
 
-Transaction ownership follows the house rule: the request-scoped ``get_db`` commits. The one
-exception is deliberate: when no brief is produced after a model call, the route commits the
-meter's usage rows before answering, so spend is never rolled back with the error.
+Transaction ownership: the service flushes; ``WriteDb`` (:mod:`app.db.request_tx`) commits
+before the response is sent. The one exception is deliberate: when no brief is produced after a
+model call, the route commits the meter's usage rows itself before re-raising, so spend is never
+rolled back with the error.
 """
 
 from __future__ import annotations
@@ -66,6 +67,7 @@ from app.core.config import get_settings
 from app.core.enums import Role
 from app.core.errors import CapabilityUnavailableError, NotFoundError
 from app.core.logging import get_logger, log_event
+from app.db.request_tx import WriteDb
 from app.db.session import get_db
 from app.intelligence.records import SignalIntelligenceRecord
 from app.llm.service import LLMService, get_llm_service
@@ -216,7 +218,7 @@ def create_opportunity_brief(
     workspace_id: str,
     opportunity_id: str,
     body: RecommendationBriefCreate,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     ctx: TenantContext = Depends(EDITORS),
     llm: LLMService = Depends(get_llm_service),
 ) -> RecommendationBriefOut:
