@@ -25,11 +25,11 @@ from app.connectors.live import LiveRssConnector
 from app.connectors.retry import ConnectorFetchError
 from app.jobs import pipeline
 from app.jobs.admission import RunAdmission
-from app.jobs.models import Job
+from app.jobs.models import Job, JobEvent
 from app.jobs.reconcile import UNKNOWN_END, list_unresolved, resolve
 from app.jobs.schemas import JobOut
-from app.jobs.status import JobStatus
-from app.jobs.store import DurableJobStore
+from app.jobs.status import JobError, JobErrorCode, JobStatus
+from app.jobs.store import DurableJobStore, JobLeaseLostError
 from app.llm.base import LLMTimeoutError, LLMUsage
 from app.llm.mock import MockLLMProvider
 from app.llm.models import LLMBudgetReservation, LLMUsageEvent
@@ -186,6 +186,20 @@ def _ledger(w: World) -> dict:
         }
 
 
+def _job_row(w: World) -> dict:
+    """The job row as the assertions and the deadline diagnostics report it."""
+    with w.factory() as s:
+        job = s.get(Job, w.job_id)
+        return {
+            "status": job.status,
+            "attempt_count": job.attempt_count,
+            "worker_id": job.worker_id,
+            "lease_expires_at": job.lease_expires_at,
+            "available_at": job.available_at,
+            "last_error": (job.last_error_code, job.last_error_summary),
+        }
+
+
 # --------------------------------------------------------------------------- #
 # §6.1-3: a zombie after lease expiry, repeated recoveries, the bound
 # --------------------------------------------------------------------------- #
@@ -233,6 +247,68 @@ def test_a_zombie_admits_nothing_and_repeated_recoveries_keep_one_unresolved_adm
     calls = len(provider.calls)
     assert ledger["admissions"] == calls and ledger["usage"] == calls
     assert ledger["reservations"] == calls
+
+
+# --------------------------------------------------------------------------- #
+# W21-REV-INTIND-A O-5: a stale attempt's failure is fenced before its transition is checked
+# --------------------------------------------------------------------------- #
+def _stale_attempt_then(w: World, then: JobStatus) -> tuple[str, str]:
+    """Attempt 1 claims and runs; its lease expires and is recovered; attempt 2 claims and
+    runs, then fails retryably (``retry_wait``) or completes (``succeeded``). Returns attempt
+    1's credential (its worker id and lease token). ``running``: attempt 2 is still running."""
+    store = DurableJobStore()
+    with w.factory() as s:
+        job = store.claim_one(s, worker_id="w-stale", lease_seconds=30)
+        store.mark_running(s, job, worker_id="w-stale", lease_token=job.lease_token)
+        s.commit()
+        stale = (job.worker_id, job.lease_token)
+    _expire_lease(w, w.job_id)
+    with w.factory() as s:
+        assert store.recover_expired_leases(s) == 1
+        s.commit()
+    with w.factory() as s:
+        job = store.claim_one(s, worker_id="w-new", lease_seconds=30)
+        assert job is not None and job.id == w.job_id
+        store.mark_running(s, job, worker_id="w-new", lease_token=job.lease_token)
+        if then is JobStatus.RETRY_WAIT:
+            store.fail(
+                s, job, worker_id="w-new", lease_token=job.lease_token,
+                error=JobError(JobErrorCode.TRANSIENT, "x"), base_seconds=2, max_seconds=300,
+            )
+        elif then is JobStatus.SUCCEEDED:
+            store.complete(s, job, worker_id="w-new", lease_token=job.lease_token)
+        s.commit()
+    return stale
+
+
+@pytest.mark.parametrize("then", [JobStatus.RETRY_WAIT, JobStatus.SUCCEEDED, JobStatus.RUNNING])
+@pytest.mark.parametrize("retryable", [True, False])
+def test_a_stale_attempts_failure_raises_lease_lost_and_writes_nothing(world, then, retryable):
+    """O-5: the stale attempt re-reads the job after its rollback and finds it moved on
+    (``retry_wait`` after another attempt failed, ``succeeded``, or ``running`` under the new
+    attempt, the one case the old order already fenced). Its ``fail`` must stop on
+    the ownership fence (``JobLeaseLostError``, which the worker logs as a lost lease), never
+    on a transition check of a status it no longer owns (``InvalidJobTransition``, which
+    escaped ``poll_once``: the FU-ZOMBIE-POLL signature). Nothing is written."""
+    w = world
+    worker_id, token = _stale_attempt_then(w, then)
+    before = _job_row(w)
+    count_events = select(func.count()).select_from(JobEvent).where(JobEvent.job_id == w.job_id)
+    with w.factory() as s:
+        events = s.scalar(count_events)
+    error = JobError(JobErrorCode.TRANSIENT if retryable else JobErrorCode.NON_RETRYABLE, "late")
+    with w.factory() as s:
+        job = s.get(Job, w.job_id)  # what the stale attempt re-reads after its rollback
+        assert job.status == then.value
+        with pytest.raises(JobLeaseLostError):
+            DurableJobStore().fail(
+                s, job, worker_id=worker_id, lease_token=token, error=error,
+                base_seconds=2, max_seconds=300,
+            )
+        s.rollback()
+    assert _job_row(w) == before
+    with w.factory() as s:
+        assert s.scalar(count_events) == events
 
 
 def test_the_migrated_schema_enforces_k1_with_the_partial_unique_index(world):
