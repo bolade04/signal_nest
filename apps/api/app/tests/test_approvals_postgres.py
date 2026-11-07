@@ -261,10 +261,11 @@ def _second_decider_waits_on_the_subject_lock(w: World, monkeypatch) -> None:
     try:
         # It blocks on the subject's row lock (FOR UPDATE on recommendation_briefs, held by
         # the first decider) ...
-        _wait_for(
+        waiting = _wait_for(
             lambda: _waiting_on_the_subject_lock(w, holder[0]),
             "the second decider to wait on the subject's row lock",
         )
+        assert waiting, waiting  # the poll returned on the wait on the subject's row lock
         # ... and it has not read the sequence yet.
         time.sleep(0.5)
         assert second.is_alive() and reads == ["first"]
