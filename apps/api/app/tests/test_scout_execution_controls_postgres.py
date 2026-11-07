@@ -523,8 +523,29 @@ def test_cancel_during_an_admitted_operation_stops_at_the_next_admission(world, 
 # --------------------------------------------------------------------------- #
 # §6.5: a manual run overlapping a scheduled run
 # --------------------------------------------------------------------------- #
-def test_an_overlapping_claim_is_refused_while_the_owner_is_valid(world, monkeypatch):
-    w = world
+#: The job lease of this scenario's two workers (seconds). FU-OVERLAP-LEASE: in CI the rival
+#: stalled about 30 s between its job claim and its run claim, with no renewal, so the
+#: default 30 s lease lapsed and the rival stopped ``lease_lost`` before it could be refused.
+#: The scenario pins the owner check, not lease timing (lease lapse has tests of its own), so
+#: both workers hold a lease far above any scheduling stall.
+OVERLAP_LEASE_SECONDS = 600.0
+#: The injected stall: one second past the default lease, as in the CI failure.
+STALL = timedelta(seconds=31)
+
+
+def _overlap_runner(w: World) -> JobRunner:
+    return JobRunner(
+        settings=Settings(_env_file=None, worker_lease_seconds=OVERLAP_LEASE_SECONDS),
+        session_factory=w.factory,
+        store=DurableJobStore(),
+    )
+
+
+def _overlapping_claim(w: World, monkeypatch, *, before_rival_claim=None) -> str:
+    """The owner parks inside its first model call; a rival job for the same Scout is then
+    claimed by another worker, whose run claim must be refused (``skipped_owner_active``).
+    ``before_rival_claim(owner_job_id, rival_job_id)`` runs right before the rival's run
+    claim (a trigger seam). Returns the rival's job id."""
     provider = Provider(park={1})
     _use(monkeypatch, provider)
     from app.jobs.service import enqueue_scout_request
@@ -543,9 +564,18 @@ def test_an_overlapping_claim_is_refused_while_the_owner_is_valid(world, monkeyp
             run_fence=req.run_fence,
         ).id
         s.commit()
-    first = _start_worker(w)
+    if before_rival_claim is not None:
+        real_claim = RunAdmission.claim
+
+        def claim(admission, *, now):
+            if admission.job_id == rival:
+                before_rival_claim(w.job_id, rival)
+            return real_claim(admission, now=now)
+
+        monkeypatch.setattr(RunAdmission, "claim", claim)
+    first = _start_worker(w, _overlap_runner(w))
     assert provider.parked.wait(JOIN_SECONDS)
-    assert _start_worker(w, _runner(w)).join_ok() is True
+    assert _start_worker(w, _overlap_runner(w)).join_ok() is True
     provider.release.set()
     assert first.join_ok() is True
     with w.factory() as s:
@@ -555,6 +585,39 @@ def test_an_overlapping_claim_is_refused_while_the_owner_is_valid(world, monkeyp
         }
     assert outcomes == {"completed", "skipped_owner_active"}
     assert provider.max_inflight == 1
+    return rival
+
+
+def test_an_overlapping_claim_is_refused_while_the_owner_is_valid(world, monkeypatch):
+    _overlapping_claim(world, monkeypatch)
+
+
+def test_an_overlapping_claim_is_refused_after_the_rival_stalls_past_the_default_lease(
+    world, monkeypatch
+):
+    """FU-OVERLAP-LEASE: the CI failure's trigger, injected. Right before the rival's run
+    claim, the rival's lease is moved back by ``STALL`` (31 s): its lease as it stands after
+    the rival stalled that long between its job claim and its run claim with no renewal (the
+    owner, whose heartbeat kept renewing in CI, is left as it is). With the default 30 s
+    lease the rival then stops ``lease_lost`` at its run claim, the CI signature; with this
+    scenario's lease it is still valid, and the owner check refuses it."""
+    w = world
+    shifted: list[timedelta] = []
+
+    def stall(_owner: str, rival: str) -> None:
+        with w.factory() as s:
+            lease = select(Job.lease_expires_at).where(Job.id == rival)
+            before = s.scalar(lease)
+            s.execute(
+                update(Job)
+                .where(Job.id == rival)
+                .values(lease_expires_at=Job.lease_expires_at - STALL)
+            )
+            s.commit()
+            shifted.append(before - s.scalar(lease))
+
+    _overlapping_claim(w, monkeypatch, before_rival_claim=stall)
+    assert shifted == [STALL]  # the trigger fired, once, on the rival
 
 
 # --------------------------------------------------------------------------- #
