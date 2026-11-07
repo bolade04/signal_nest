@@ -6,6 +6,7 @@ from typing import Annotated, Any
 from pydantic import BaseModel, ConfigDict, Field, create_model, field_validator
 
 from app.core.enums import CampaignMode, CampaignStatus
+from app.jurisdiction.codes import is_jurisdiction_code
 
 #: Upper bound on a campaign's ``location_ids`` / an offer's ``eligible_location_ids``.
 #: Every listed id is checked against the workspace's locations in one query (P6-PLAT-8),
@@ -85,6 +86,29 @@ class ClaimIn(BaseModel):
     category: str | None = None
     risk_level: str = "low"
     notes: str | None = None
+    #: Jurisdiction-conditioned claim rules (Project Phase 5D §2, 5D-W1): the jurisdictions the
+    #: entry applies in; empty (the default) means every jurisdiction, the meaning of every
+    #: entry written before the field existed. Each value must be a jurisdiction code in the
+    #: frozen grammar (:mod:`app.jurisdiction.codes`), else 422. Published as a plain string
+    #: list; the grammar is enforced by the validator below. The claims review reads it
+    #: through :func:`app.claims.engine.active_entries`.
+    jurisdiction_codes: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Jurisdiction codes the entry applies in (ISO 3166-1 alpha-2, optionally '-' and "
+            "an ISO 3166-2 subdivision part: GB, US-TX). Empty means every jurisdiction."
+        ),
+    )
+
+    @field_validator("jurisdiction_codes")
+    @classmethod
+    def _jurisdiction_codes(cls, v: list[str]) -> list[str]:
+        if not all(is_jurisdiction_code(code) for code in v):
+            raise ValueError(
+                "must list jurisdiction codes: an upper-case ISO 3166-1 alpha-2 country code, "
+                "optionally '-' and a subdivision part of 1-3 letters or digits (GB, US-TX)"
+            )
+        return v
 
 
 class SourcePrefIn(BaseModel):

@@ -18,6 +18,24 @@ the CF-2 soft retirement) removes it from every review from then on, whichever c
 the library. The scouting pipeline's claim check (``app.jobs.pipeline``) runs on third-party
 discussion text and passes no library at all, so no library entry — active or retired — can
 reach it.
+
+**Jurisdiction-restricted entries (Project Phase 5D, 5D-W1; exit criterion 6).** An entry whose
+``jurisdiction_codes`` lists codes applies only where those codes say, as decided by the
+shared jurisdiction gate :func:`app.jurisdiction.resolver.jurisdiction_permits` (the gate every
+jurisdiction consumer shares; never a substring). Which way an unknown answer falls depends on
+what the entry does, so the review can only become stricter (fail closed):
+
+* an entry that **permits** (``approved``) applies only where the draft's jurisdiction is a
+  code inside one of the entry's codes (the gate's ``allowed`` limb);
+* an entry that **restricts** (a blocking kind, or ``required_disclaimer``) applies unless the
+  draft's jurisdiction is a code known to lie outside every one of the entry's codes (the
+  gate's ``excluded`` limb: a code that may overlap one of them, or an entry value that is
+  not a code, cannot be ruled out);
+* a draft with **no jurisdiction** (``None``: none was captured, the state of every draft until
+  lane 5D-W3 captures one) or an ``UNRESOLVED`` or malformed one therefore gets every
+  restricted entry that restricts and none that permits.
+
+An entry with ``NULL`` or an empty list applies everywhere, as before.
 """
 
 from __future__ import annotations
@@ -28,6 +46,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from app.core.enums import ClaimRisk
+from app.jurisdiction.resolver import jurisdiction_permits
 from app.llm.untrusted import normalise
 
 # Industries requiring stricter controls.
@@ -191,19 +210,63 @@ def is_approved_kind(kind: str | None) -> bool:
 
 @dataclass(frozen=True)
 class LibraryEntry:
-    """One claims-library entry as the engine reads it (a plain projection of the row)."""
+    """One claims-library entry as the engine reads it (a plain projection of the row).
+
+    ``jurisdiction_codes`` is the entry's restriction as :func:`jurisdiction_restriction`
+    reads the stored column: ``None`` applies everywhere."""
 
     id: str
     text: str
     kind: str
     retired_at: datetime | None = None
+    jurisdiction_codes: tuple[str, ...] | None = None
 
 
-def active_entries(entries: Iterable[LibraryEntry]) -> list[LibraryEntry]:
-    """The entries a review applies: every entry that is not retired (CF-2 soft retirement).
+def jurisdiction_restriction(stored: object) -> tuple[str, ...] | None:
+    """An entry's jurisdiction restriction from its stored ``jurisdiction_codes`` value.
 
-    A retired entry blocks nothing, requires nothing and approves nothing."""
-    return [e for e in entries if e.retired_at is None]
+    ``None`` (applies everywhere) for ``NULL`` or an empty list, the column's meaning (CF-3).
+    Otherwise the listed values; a value that is not a string becomes ``""``, and a stored value
+    that is not a list becomes ``("",)``: a restriction naming nothing readable, which no
+    jurisdiction lies inside and none can be ruled out of (fail closed both ways)."""
+    if stored is None:
+        return None
+    if isinstance(stored, list | tuple):
+        if not stored:
+            return None
+        return tuple(code if isinstance(code, str) else "" for code in stored)
+    return ("",)
+
+
+def _restricts(kind: str | None) -> bool:
+    """Whether an entry of ``kind`` can only make a draft's review stricter."""
+    return is_blocking_kind(kind) or is_disclaimer_kind(kind)
+
+
+def applies_in_jurisdiction(entry: LibraryEntry, jurisdiction: str | None) -> bool:
+    """Whether ``entry`` applies to a draft of ``jurisdiction`` (fail closed; module docstring)."""
+    restriction = jurisdiction_restriction(entry.jurisdiction_codes)
+    if restriction is None:
+        return True
+    if _restricts(entry.kind):
+        return not jurisdiction_permits(jurisdiction, excluded=restriction)
+    return jurisdiction_permits(jurisdiction, allowed=restriction)
+
+
+def active_entries(
+    entries: Iterable[LibraryEntry], *, jurisdiction: str | None = None
+) -> list[LibraryEntry]:
+    """The entries a review applies: every entry that is not retired (CF-2 soft retirement)
+    and applies in the draft's ``jurisdiction`` (:func:`applies_in_jurisdiction`; ``None``, the
+    default, is a draft with no captured jurisdiction).
+
+    A retired entry blocks nothing, requires nothing and approves nothing; nor does a
+    jurisdiction-restricted entry where it does not apply."""
+    return [
+        e
+        for e in entries
+        if e.retired_at is None and applies_in_jurisdiction(e, jurisdiction)
+    ]
 
 
 def _unique(texts: Iterable[str]) -> list[str]:
@@ -248,6 +311,8 @@ def review_against_library(
     industry: str | None,
     entries: Iterable[LibraryEntry],
     extra_disclaimers: Sequence[str] = (),
+    *,
+    jurisdiction: str | None = None,
 ) -> LibraryReview:
     """Review generated ``text`` against the workspace's claims library (Phase 5C §2).
 
@@ -256,9 +321,10 @@ def review_against_library(
     makes the result ``blocked``); the hit entries' ids are returned. Required disclaimers
     are the active ``required_disclaimer`` entries (canonical form) plus
     ``extra_disclaimers`` (the offer calendar's), each resolved when the text contains it.
-    Retired entries are ignored (:func:`active_entries`).
+    Retired entries, and jurisdiction-restricted entries that do not apply in the draft's
+    ``jurisdiction``, are ignored (:func:`active_entries`).
     """
-    active = active_entries(entries)
+    active = active_entries(entries, jurisdiction=jurisdiction)
     folded = fold(text)
     blocked = [e for e in active if is_blocking_kind(e.kind) and fold(e.text)]
     safety = check_claim_safety(folded, industry, blocked_claims=[fold(e.text) for e in blocked])

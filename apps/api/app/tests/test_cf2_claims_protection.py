@@ -235,7 +235,8 @@ def test_a_steward_creates_updates_and_retires_with_an_audit_trail(
     assert [(a["action"], a["context"]) for a in audits] == [
         (
             "claims_library_entry.created",
-            {"fields": ["category", "kind", "notes", "risk_level", "text"]},
+            # ``jurisdiction_codes`` since 5D-W1 (the ClaimIn field; names only, never values).
+            {"fields": ["category", "jurisdiction_codes", "kind", "notes", "risk_level", "text"]},
         ),
         ("claims_library_entry.updated", {"fields": ["kind"]}),
         ("claims_library_entry.retired", {"fields": ["retired_at"]}),

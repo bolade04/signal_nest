@@ -30,7 +30,7 @@ from app.audit.actions import AuditAction
 from app.audit.service import record_audit
 from app.campaign_context.models import ClaimsLibraryEntry
 from app.campaign_context.schemas import ClaimIn
-from app.claims.engine import LibraryEntry
+from app.claims.engine import LibraryEntry, jurisdiction_restriction
 from app.core.enums import Role
 
 #: The claims library's stewards: exact roles, no rank inheritance (W21 CF-2).
@@ -76,7 +76,8 @@ def audit_claim_created(
 
 
 def load_library(db: Session, workspace_id: str) -> list[LibraryEntry]:
-    """The workspace's active (not retired) library entries, oldest first.
+    """The workspace's active (not retired) library entries, oldest first, each with its
+    jurisdiction restriction (Project Phase 5D; :func:`app.claims.engine.jurisdiction_restriction`).
 
     Not truncated: a review that silently read only part of the library could miss a
     blocked claim (fail open)."""
@@ -86,6 +87,7 @@ def load_library(db: Session, workspace_id: str) -> list[LibraryEntry]:
             ClaimsLibraryEntry.text,
             ClaimsLibraryEntry.kind,
             ClaimsLibraryEntry.retired_at,
+            ClaimsLibraryEntry.jurisdiction_codes,
         )
         .where(
             ClaimsLibraryEntry.workspace_id == workspace_id,
@@ -94,7 +96,13 @@ def load_library(db: Session, workspace_id: str) -> list[LibraryEntry]:
         .order_by(ClaimsLibraryEntry.created_at, ClaimsLibraryEntry.id)
     ).all()
     return [
-        LibraryEntry(id=r.id, text=r.text or "", kind=r.kind, retired_at=r.retired_at)
+        LibraryEntry(
+            id=r.id,
+            text=r.text or "",
+            kind=r.kind,
+            retired_at=r.retired_at,
+            jurisdiction_codes=jurisdiction_restriction(r.jurisdiction_codes),
+        )
         for r in rows
     ]
 
