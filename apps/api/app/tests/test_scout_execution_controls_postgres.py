@@ -23,6 +23,7 @@ from app.connectors.base import FailureKind
 from app.connectors.feedcache import FeedCache
 from app.connectors.live import LiveRssConnector
 from app.connectors.retry import ConnectorFetchError
+from app.core.config import Settings
 from app.jobs import pipeline
 from app.jobs.admission import RunAdmission
 from app.jobs.models import Job, JobEvent
@@ -30,6 +31,7 @@ from app.jobs.reconcile import UNKNOWN_END, list_unresolved, resolve
 from app.jobs.schemas import JobOut
 from app.jobs.status import JobError, JobErrorCode, JobStatus
 from app.jobs.store import DurableJobStore, JobLeaseLostError
+from app.jobs.worker import JobRunner
 from app.llm.base import LLMTimeoutError, LLMUsage
 from app.llm.mock import MockLLMProvider
 from app.llm.models import LLMBudgetReservation, LLMUsageEvent
@@ -49,6 +51,7 @@ from app.tests.test_live_rss_connector import record, target
 from app.tests.test_scout_pause_postgres import (
     JOIN_SECONDS,
     MARKET,
+    Background,
     Sources,
     World,
     _end_state,
@@ -203,33 +206,134 @@ def _job_row(w: World) -> dict:
 # --------------------------------------------------------------------------- #
 # §6.1-3: a zombie after lease expiry, repeated recoveries, the bound
 # --------------------------------------------------------------------------- #
-def test_a_zombie_admits_nothing_and_repeated_recoveries_keep_one_unresolved_admission(
-    world, monkeypatch
-):
-    """The original attempt is parked inside an admitted model call when its lease lapses.
-    Three successive recoveries re-claim the job; each takes ownership from the lapsed owner
-    and waits (no lock held) at its first model admission behind the zombie's outstanding
-    admission (K = 1), and becomes a stale zombie itself at the next recovery. At every
-    sample: unresolved <= 1 and sends in flight <= 1. Released, the original records its KNOWN
-    end (resolving its admission) and admits nothing more; the stale waiters stop; the newest
-    attempt runs the Scout to completion. The original's reservation was released at the
-    first re-claim; its late settlement still writes exactly one usage row."""
-    w = world
+#: Interval of the predicate polls below (seconds). Every wait ends on an observed
+#: condition or on its deadline, which fails the test; none is a timed pause.
+POLL_SECONDS = 0.02
+
+
+def _expire_then_heartbeat(w: World) -> dict:
+    """A test-local trigger: the test's expiry write, then the current owner's heartbeat
+    exactly as its heartbeat thread issues it (``DurableJobStore.heartbeat``, fenced by the
+    credential the row carries: the owner's own). Both commit in ONE transaction, so nothing
+    reads the lapsed lease in between: for the recovery poll that follows, a heartbeat landed
+    between the expiry and its scan. Returns the lease after the expiry and after the beat, and
+    the time just after the commit."""
+    with w.factory() as s:
+        s.execute(
+            update(Job)
+            .where(Job.id == w.job_id)
+            .values(lease_expires_at=datetime.now(UTC) - timedelta(hours=1))
+        )
+        job = s.get(Job, w.job_id)
+        expired = job.lease_expires_at
+        DurableJobStore().heartbeat(
+            s, job, worker_id=job.worker_id, lease_token=job.lease_token, lease_seconds=30.0
+        )
+        s.commit()
+        return {
+            "expired": expired,
+            "renewed": job.lease_expires_at,
+            "status": job.status,
+            "at": datetime.now(UTC),
+        }
+
+
+class ShareHeldStore(DurableJobStore):
+    """A test-local trigger: holds ``FOR SHARE`` on the job row, from a session of its own,
+    across this poll's lease recovery. That is the lock a waiting attempt's admission read
+    (``RunAdmission.check``) takes on every try, so the recovery's ``FOR UPDATE SKIP LOCKED``
+    skips the row and the poll finds nothing to run."""
+
+    def __init__(self, w: World):
+        self.w = w
+        self.recovered: list[int] = []
+
+    def recover_expired_leases(self, db, **kwargs):
+        with self.w.engine.connect() as conn, conn.begin():
+            conn.execute(text("select id from jobs where id = :j for share"), {"j": self.w.job_id})
+            recovered = super().recover_expired_leases(db, **kwargs)
+        self.recovered.append(recovered)
+        return recovered
+
+
+class AdmissionWaits:
+    """Records each attempt an external admission refused on K = 1.
+
+    ``RunAdmission._blocking`` runs only after such a refusal, right before the attempt
+    waits (holding no lock) behind the Scout's outstanding admission. "Attempt N was refused
+    at its model admission" therefore means attempt N claimed the Scout and is waiting."""
+
+    def __init__(self, monkeypatch):
+        self.refused: list[tuple[int, str]] = []
+        real = RunAdmission._blocking
+
+        def blocking(admission, operation):
+            self.refused.append((admission.attempt, operation))
+            return real(admission, operation)
+
+        monkeypatch.setattr(RunAdmission, "_blocking", blocking)
+
+    def waiting(self, attempt: int) -> bool:
+        return (attempt, "model") in self.refused
+
+
+def _recover_to(
+    w: World, waits: AdmissionWaits, *, attempt: int, runner, expire
+) -> tuple[Background, int]:
+    """One recovery: expire the lease, then poll until attempt ``attempt`` is running and
+    waiting at its model admission. Returns that attempt's poll and the idle polls' count.
+
+    One poll is not always enough (FU-ZOMBIE-POLL). ``poll_once`` returns False, having done
+    nothing, when its ``FOR UPDATE SKIP LOCKED`` recovery meets a waiting attempt's
+    ``FOR SHARE`` on the job row, when the running attempt's heartbeat renewed the lease
+    between the expiry and the scan, or when that attempt saw its own lease lapse first and
+    failed itself to ``retry_wait`` (due again after its backoff). Such a poll is re-issued
+    after a fresh expiry. A poll that claims the job keeps running: it is the new attempt.
+    The deadline fails the test with what it saw; nothing falls through."""
+    deadline = time.monotonic() + JOIN_SECONDS
+    polls, idle, poll = 0, 0, None
+    while True:
+        row = _job_row(w)
+        if poll is not None and row["attempt_count"] == attempt and waits.waiting(attempt):
+            return poll, idle
+        if poll is not None and not poll.is_alive():
+            if poll.join_ok() is not False:  # re-raises the poll's error, if any
+                raise AssertionError(
+                    f"recovery to attempt {attempt}: a poll ran a job to completion while the"
+                    f" original operation was outstanding; job {row}; refused {waits.refused}"
+                )
+            idle, poll = idle + 1, None
+        if time.monotonic() > deadline:
+            raise AssertionError(
+                f"recovery to attempt {attempt}: not running and waiting at its model"
+                f" admission after {JOIN_SECONDS} s ({polls} polls, {idle} idle);"
+                f" job {row}; refused {waits.refused}"
+            )
+        if poll is None:
+            polls += 1
+            expire(attempt - 1, polls)
+            poll = _start_worker(w, runner(attempt - 1, polls))
+        time.sleep(POLL_SECONDS)
+
+
+def _zombie_recoveries(w: World, monkeypatch, *, runner=None, expire=None) -> dict:
+    """The §6.1-3 choreography. ``runner(recovery, poll)`` builds each poll's runner and
+    ``expire(recovery, poll)`` writes each expiry (trigger seams). Returns the idle polls per
+    recovery."""
+    runner = runner or (lambda _recovery, _poll: _runner(w))
+    expire = expire or (lambda _recovery, _poll: _expire_lease(w, w.job_id))
     provider = Provider(park={1})
     _use(monkeypatch, provider)
+    waits = AdmissionWaits(monkeypatch)
     sampler = Sampler(w, provider)
     workers = [_start_worker(w)]
     assert provider.parked.wait(JOIN_SECONDS)
-    for _ in range(3):  # three recoveries while the original operation is outstanding
-        _expire_lease(w, w.job_id)
-        workers.append(_start_worker(w, _runner(w)))
-        deadline = time.monotonic() + JOIN_SECONDS
-        while time.monotonic() < deadline:  # wait until the new attempt is running
-            with w.factory() as s:
-                if s.get(Job, w.job_id).attempt_count == len(workers):
-                    break
-            time.sleep(0.02)
-        time.sleep(0.3)
+    idle = {}
+    for recovery in (1, 2, 3):  # three recoveries while the original operation is outstanding
+        poll, idle[recovery] = _recover_to(
+            w, waits, attempt=recovery + 1, runner=runner, expire=expire
+        )
+        workers.append(poll)
     assert len(provider.calls) == 1  # no recovery admitted a model call
     provider.release.set()
     for worker in workers:
@@ -247,6 +351,52 @@ def test_a_zombie_admits_nothing_and_repeated_recoveries_keep_one_unresolved_adm
     calls = len(provider.calls)
     assert ledger["admissions"] == calls and ledger["usage"] == calls
     assert ledger["reservations"] == calls
+    return idle
+
+
+def test_a_zombie_admits_nothing_and_repeated_recoveries_keep_one_unresolved_admission(
+    world, monkeypatch
+):
+    """The original attempt is parked inside an admitted model call when its lease lapses.
+    Three successive recoveries re-claim the job; each takes ownership from the lapsed owner
+    and waits (no lock held) at its first model admission behind the zombie's outstanding
+    admission (K = 1), and becomes a stale zombie itself at the next recovery. At every
+    sample: unresolved <= 1 and sends in flight <= 1. Released, the original records its KNOWN
+    end (resolving its admission) and admits nothing more; the stale waiters stop; the newest
+    attempt runs the Scout to completion. The original's reservation was released at the
+    first re-claim; its late settlement still writes exactly one usage row."""
+    _zombie_recoveries(world, monkeypatch)
+
+
+def test_the_zombie_recoveries_survive_a_skipped_row_and_a_renewed_lease(world, monkeypatch):
+    """FU-ZOMBIE-POLL: the choreography above with both triggers of a poll that finds nothing
+    to run, injected once each. The second recovery's first poll runs while another session
+    holds ``FOR SHARE`` on the job row (as a waiting attempt's admission read does); the
+    third recovery's lease is renewed by the running attempt's heartbeat right after the
+    expiry. Each such poll returns False, the recovery expires the lease again and polls
+    again, and the run ends exactly as above."""
+    w = world
+    share = ShareHeldStore(w)
+    beats: list[dict] = []
+
+    def runner(recovery: int, poll: int) -> JobRunner:
+        if (recovery, poll) == (2, 1):
+            return JobRunner(
+                settings=Settings(_env_file=None), session_factory=w.factory, store=share
+            )
+        return _runner(w)
+
+    def expire(recovery: int, poll: int) -> None:
+        if (recovery, poll) == (3, 1):
+            beats.append(_expire_then_heartbeat(w))
+        else:
+            _expire_lease(w, w.job_id)
+
+    idle = _zombie_recoveries(w, monkeypatch, runner=runner, expire=expire)
+    assert share.recovered == [0]  # the injected poll's recovery recovered nothing
+    assert len(beats) == 1 and beats[0]["status"] == JobStatus.RUNNING.value
+    assert beats[0]["expired"] < beats[0]["at"] < beats[0]["renewed"]  # the beat landed
+    assert idle[2] >= 1 and idle[3] >= 1  # each injected trigger cost one idle poll
 
 
 # --------------------------------------------------------------------------- #
