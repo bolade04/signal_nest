@@ -90,19 +90,24 @@ def _clean(factory):
 
     Cleanup runs after the test so an assertion failure leaves the rows for
     inspection; the flag is reset here too so a test that turned it on cannot leak
-    into the next.
+    into the next. So is scheduling's environment ceiling (FU-267-C1), which
+    ``flag_on`` lifts and which is engaged by default.
     """
     get_settings().scout_scheduling_enabled = False
+    get_settings().scout_scheduling_ceiling_lifted = False
     yield
     with factory() as s:
         s.query(Job).delete(synchronize_session=False)
         s.query(ScoutSchedule).delete(synchronize_session=False)
         s.commit()
     get_settings().scout_scheduling_enabled = False
+    get_settings().scout_scheduling_ceiling_lifted = False
 
 
 @pytest.fixture
 def flag_on():
+    # Live scheduling needs the environment ceiling lifted as well as the flag.
+    get_settings().scout_scheduling_ceiling_lifted = True
     get_settings().scout_scheduling_enabled = True
 
 

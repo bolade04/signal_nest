@@ -292,6 +292,8 @@ def test_an_existing_request_cannot_run_while_its_location_is_deactivated(world:
 
 def test_no_schedule_create_or_resume_while_deactivated(world: World, monkeypatch):
     monkeypatch.setattr(get_settings(), "scout_scheduling_enabled", True)
+    # Live scheduling needs the environment ceiling lifted as well (FU-267-C1).
+    monkeypatch.setattr(get_settings(), "scout_scheduling_ceiling_lifted", True)
     loc = world.location("Weekend market")
     request = world.created(
         f"/workspaces/{world.ws}/scout-requests", {"name": "Weekend", "location_id": loc}
@@ -323,6 +325,8 @@ def _schedules(world: World) -> list[dict]:
 # --------------------------------------------------------------------------- #
 def test_refused_while_an_enabled_schedule_exists(world: World, monkeypatch):
     monkeypatch.setattr(get_settings(), "scout_scheduling_enabled", True)
+    # Live scheduling needs the environment ceiling lifted as well (FU-267-C1).
+    monkeypatch.setattr(get_settings(), "scout_scheduling_ceiling_lifted", True)
     loc = world.location("Busy store")
     request = world.created(
         f"/workspaces/{world.ws}/scout-requests", {"name": "Busy", "location_id": loc}

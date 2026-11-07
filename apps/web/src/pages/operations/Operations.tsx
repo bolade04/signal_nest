@@ -93,6 +93,14 @@ function CapabilityRow({
       <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
         <span>
           Global flag: {effective?.global_flag ? 'on' : 'off'}
+          {/* Only a capability with an environment ceiling (scheduling, FU-267-C1)
+              reports its setting; null means the capability has none. */}
+          {effective?.environment_ceiling_lifted != null ? (
+            <>
+              {' · '}Environment ceiling:{' '}
+              {effective.environment_ceiling_lifted ? 'lifted' : 'engaged'}
+            </>
+          ) : null}
           {/* Stored-row visibility is driven by the override ROW, not the
               resolver's has_override: a stored row the resolver refuses to
               honor (has_override=false) must still be visible and clearable. */}
@@ -101,7 +109,9 @@ function CapabilityRow({
               {' · '}Override: {override.enabled ? 'enabled' : 'disabled'}
               {override.reason ? ` — “${override.reason}”` : ''}
               {effective && !effective.has_override
-                ? ' (not honored — secure default applies)'
+                ? effective.decided_by === 'safety_ceiling'
+                  ? ' (not honored — safety ceiling applies)'
+                  : ' (not honored — secure default applies)'
                 : ''}
             </>
           ) : (
@@ -201,7 +211,9 @@ export function OperationsPage() {
         });
         toast({
           title: `${pending.label} override set`,
-          description: `Now ${pending.kind === 'enable' ? 'enabled' : 'disabled'} for ${activeWorkspace?.name ?? 'this workspace'}.`,
+          // The override is recorded intent: the safety ceiling still outranks it, so
+          // the row's effective state, not this toast, says what applies.
+          description: `Override recorded as ${pending.kind === 'enable' ? 'enabled' : 'disabled'} for ${activeWorkspace?.name ?? 'this workspace'}.`,
           intent: 'success',
         });
       }
@@ -424,7 +436,7 @@ export function OperationsPage() {
         }
         description={
           pending?.kind === 'clear'
-            ? 'The workspace returns to the global configuration or the secure default. This change is audited.'
+            ? 'The workspace returns to whichever rule then decides: the safety ceiling, the global configuration or the secure default. This change is audited.'
             : pending?.kind === 'enable'
               ? `Sets a workspace override enabling ${pending.label} for ${activeWorkspace?.name ?? 'the selected workspace'} only, subject to the safety ceiling. No other workspace is affected. This change is audited.`
               : `Sets a workspace override disabling ${pending?.label ?? 'this capability'} for ${activeWorkspace?.name ?? 'the selected workspace'} regardless of the global flag. This change is audited.`

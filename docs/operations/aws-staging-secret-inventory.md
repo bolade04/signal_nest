@@ -53,7 +53,7 @@ The inventory is derived **only** from repository evidence, not assumption:
   **UPPERCASED** (`SettingsConfigDict(case_sensitive=False)`). The one exception is
   `migration_mode`, whose `validation_alias` also admits `SN_MIGRATION_MODE` (§3.5).
 - Field enumeration is taken mechanically from `Settings.model_fields`. As of this
-  document the model declares **152 fields**, of which **10** are marked
+  document the model declares **153 fields**, of which **10** are marked
   `repr=False` (secret-bearing, host-identifying or internal) and **0** use `SecretStr`.
   *(Recounted 2026-11-01 on `main` `102393fa`: the previous figure, 87 fields and 9
   `repr=False`, dated from 2026-07-21 and had drifted as settings were added; the 48
@@ -61,7 +61,8 @@ The inventory is derived **only** from repository evidence, not assumption:
   `recommendation_briefs_enabled`: 145 → 146. Project Phase 5 CF-2 added
   `creative_generation_enabled` and the four 5C ceilings: 146 → 151. Project Phase 5 CF-3
   added `content_export_enabled` and no other setting (no notification or retention setting:
-  no new retention class, no duration): 151 → 152.)*
+  no new retention class, no duration): 151 → 152. FU-267-C1 (W21 SCHEDCEIL, the scheduling
+  environment ceiling) added `scout_scheduling_ceiling_lifted`: 152 → 153.)*
 - Secret sensitivity is read from the `repr=False` markers plus the field semantics
   documented in `config.py` and the runtime contract.
 - Staging requirement/forbidden conditions are read from the unconditional
@@ -112,7 +113,7 @@ that the one-disposition-per-field rule is auditable; §3.7 reconciles the count
 | `llm_allow_dev_fallback` | `LLM_ALLOW_DEV_FALLBACK` | no | Developer fallback; validator rejects `true` in staging, so it stays at its `False` default. |
 | `connector_rss_replay_origin` | `CONNECTOR_RSS_REPLAY_ORIGIN` | no | Development/test only: a loopback origin serving recorded feed captures; refused in staging/production, so it stays unset. |
 
-### 3.5 Non-secret configuration — 140 fields
+### 3.5 Non-secret configuration — 141 fields
 
 Safe as plaintext task-definition environment (or the model default). Grouped by
 concern; every row's disposition is **non-secret configuration**.
@@ -123,6 +124,7 @@ concern; every row's disposition is **non-secret configuration**.
 | --- | --- | --- |
 | `opportunity_feedback_enabled` | `OPPORTUNITY_FEEDBACK_ENABLED` | Must remain `False`; activation is a separate authorized gate, not INFRA-3. |
 | `scout_scheduling_enabled` | `SCOUT_SCHEDULING_ENABLED` | Must remain `False`. |
+| `scout_scheduling_ceiling_lifted` | `SCOUT_SCHEDULING_CEILING_LIFTED` | The scheduling environment ceiling (FU-267-C1, D-25-c (b)); must remain `False` (engaged). Lifting it is a scheduling activation, gated by Addendum v8 §I, not INFRA-3. |
 | `connector_rss_enabled` | `CONNECTOR_RSS_ENABLED` | Must remain `False`. |
 | `connector_rss_live_enabled` | `CONNECTOR_RSS_LIVE_ENABLED` | Live RSS egress master switch; must remain `False` (first-source decision P6-D03). |
 | `recommendation_briefs_enabled` | `RECOMMENDATION_BRIEFS_ENABLED` | Project Phase 5A (CF-1); must remain `False` — activation is a separate future authorization (Project Phase 5 plan §10). |
@@ -285,12 +287,13 @@ resource name into logs, but it is safe to supply as plaintext task environment.
 | IAM-derived | 2 |
 | Absent in staging | 2 |
 | Local-development-only | 4 |
-| Non-secret configuration | 140 |
-| **Total** | **152** |
+| Non-secret configuration | 141 |
+| **Total** | **153** |
 
-`4 + 2 + 2 + 4 + 140 = 152`, equal to the model's declared field count
+`4 + 2 + 2 + 4 + 141 = 153`, equal to the model's declared field count
 (`len(Settings.model_fields)`, recounted mechanically on 2026-11-01 and moved 145 → 146 by
-Project Phase 5 CF-1, 146 → 151 by CF-2 and 151 → 152 by CF-3). **Zero fields
+Project Phase 5 CF-1, 146 → 151 by CF-2, 151 → 152 by CF-3 and 152 → 153 by FU-267-C1's
+`scout_scheduling_ceiling_lifted`). **Zero fields
 are unclassified**, and **all 10 `repr=False` fields** (`secret_key`, `database_url`,
 `redis_url`, `llm_api_key` → Secrets Manager; `s3_access_key_id`,
 `s3_secret_access_key` → IAM-derived; `otlp_endpoint`, `s3_endpoint_url` → absent;

@@ -228,11 +228,11 @@ this step changes nothing; clear the override instead.
    with full history intact.
 
 Additional layers: the resolver's deny-biased precedence stays intact, but its
-`safety_ceiling` slot is **reserved and not yet operable** for a registered
-capability — `_ceiling_blocks` fires only for a capability *absent* from
-`CAPABILITY_REGISTRY`, and all three are registered. It is not a lever you can
-pull today; do not plan a rollback around it. A defective gate integration can be
-reverted at the code level (Phase 4B-A commit).
+`safety_ceiling` slot is **not operable for feedback**: `_ceiling_blocks` fires only
+for a capability *absent* from `CAPABILITY_REGISTRY` and, since FU-267-C1, for
+`scout_scheduling` under its environment ceiling. Feedback is registered and has no
+environment ceiling, so this is not a lever you can pull for it; do not plan a rollback
+around it. A defective gate integration can be reverted at the code level (Phase 4B-A commit).
 
 Under Phase 4B a **per-workspace stop is supported** via the scoped override clear
 above; there is still **no org-wide toggle** — override scope is per-workspace only.

@@ -89,6 +89,10 @@ def flag_on(monkeypatch):
 def flag_off_by_default(monkeypatch):
     # The feature is dark unless a test opts in via ``flag_on``.
     monkeypatch.setattr(get_settings(), "scout_scheduling_enabled", False)
+    # Scheduling's environment ceiling (FU-267-C1) is lifted for this module: it tests
+    # the precedence below it; the engaged ceiling is covered by
+    # test_scheduling_environment_ceiling.py.
+    monkeypatch.setattr(get_settings(), "scout_scheduling_ceiling_lifted", True)
 
 
 def _request(s, market_key: str) -> ScoutRequest:

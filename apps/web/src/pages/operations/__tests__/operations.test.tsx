@@ -3,7 +3,7 @@ import { within } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { App } from '@/App';
 import { API_PREFIX } from '@/api/config';
-import { resetCapabilityOverrides } from '@/test/handlers';
+import { resetCapabilityOverrides, setSchedulingCeilingLifted } from '@/test/handlers';
 import { server } from '@/test/server';
 import { renderApp } from '@/test/utils';
 
@@ -45,9 +45,10 @@ describe('operations page — operator access', () => {
     expect(await screen.findByText('Capability activation')).toBeInTheDocument();
 
     // All six registered capabilities render with the dark default explained:
-    // disabled, decided by the global configuration. (Recommendation Briefs joined
-    // the registry at Project Phase 5 CF-1, Creative Generation at CF-2, Content
-    // Export at CF-3.)
+    // disabled; scheduling by its engaged environment ceiling (FU-267-C1), the
+    // other five by the global configuration. (Recommendation Briefs joined the
+    // registry at Project Phase 5 CF-1, Creative Generation at CF-2, Content Export
+    // at CF-3.)
     for (const label of [
       'Opportunity Feedback',
       'Scout Scheduling',
@@ -59,7 +60,12 @@ describe('operations page — operator access', () => {
       expect(await screen.findByText(label)).toBeInTheDocument();
     }
     expect(screen.getAllByText('Disabled')).toHaveLength(6);
-    expect(screen.getAllByText('Global configuration')).toHaveLength(6);
+    expect(screen.getAllByText('Global configuration')).toHaveLength(5);
+    const scheduling = await capabilityRow(screen, 'Scout Scheduling');
+    expect(within(scheduling).getByText('Safety ceiling')).toBeInTheDocument();
+    expect(within(scheduling).getByText(/environment ceiling: engaged/i)).toBeInTheDocument();
+    // Only scheduling has an environment ceiling to report.
+    expect(screen.getAllByText(/environment ceiling:/i)).toHaveLength(1);
 
     // Queue health from the composed overview read.
     expect(await screen.findByText('Stuck jobs')).toBeInTheDocument();
@@ -142,21 +148,50 @@ describe('operations page — override mutations', () => {
   });
 
   it('clears an override behind a destructive confirmation, returning to the dark default', async () => {
+    // Where the environment has lifted scheduling's ceiling, the ordinary
+    // precedence applies to it.
+    setSchedulingCeilingLifted(true);
     const screen = renderApp(<App />, { route: '/operations' });
     const { user } = screen;
 
     const row = await capabilityRow(screen, 'Scout Scheduling');
+    expect(within(row).getByText(/environment ceiling: lifted/i)).toBeInTheDocument();
     await user.click(await within(row).findByRole('button', { name: /^disable/i }));
     await user.click(await screen.findByRole('button', { name: /^confirm$/i }));
     expect(await within(row).findByText('Workspace override')).toBeInTheDocument();
 
     await user.click(within(row).getByRole('button', { name: /^clear/i }));
     const dialog = await screen.findByRole('dialog');
+    // Truthful for every capability: with scheduling's ceiling engaged, clearing
+    // leaves the safety ceiling deciding, not the global configuration.
+    expect(
+      within(dialog).getByText(
+        'The workspace returns to whichever rule then decides: the safety ceiling, the global configuration or the secure default. This change is audited.',
+      ),
+    ).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: /clear override/i }));
 
     expect(await screen.findByText(/override cleared for scout scheduling/i)).toBeInTheDocument();
     expect(await within(row).findByText('Global configuration')).toBeInTheDocument();
     expect(within(row).getByText('Disabled')).toBeInTheDocument();
+  });
+
+  it('shows the engaged scheduling ceiling outranking a recorded enable override', async () => {
+    const screen = renderApp(<App />, { route: '/operations' });
+    const { user } = screen;
+
+    const row = await capabilityRow(screen, 'Scout Scheduling');
+    await user.click(await within(row).findByRole('button', { name: /^enable/i }));
+    await user.click(await screen.findByRole('button', { name: /^confirm$/i }));
+
+    // The intent is recorded, but the ceiling decides: still disabled, and the row
+    // names the ceiling, not the secure default, as the reason.
+    expect(await screen.findByText(/override recorded as enabled/i)).toBeInTheDocument();
+    expect(await within(row).findByText(/not honored — safety ceiling applies/i)).toBeInTheDocument();
+    expect(within(row).getByText('Safety ceiling')).toBeInTheDocument();
+    expect(within(row).getByText('Disabled')).toBeInTheDocument();
+    expect(within(row).getByText(/environment ceiling: engaged/i)).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: /^clear/i })).toBeEnabled();
   });
 
   it('never offers per-workspace enablement for a capability the registry prohibits', async () => {
@@ -187,6 +222,7 @@ describe('operations page — override mutations', () => {
               global_flag: false,
               has_override: false,
               override_value: null,
+              environment_ceiling_lifted: null,
             },
           ],
         }),

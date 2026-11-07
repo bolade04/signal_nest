@@ -161,6 +161,9 @@ def world(template, tmp_path, monkeypatch) -> Iterator[World]:
     factory = failing_commit_factory(request_engine, switch)
     settings = get_settings()
     monkeypatch.setattr(settings, "scout_scheduling_enabled", True)
+    # Live scheduling needs the environment ceiling lifted as well (FU-267-C1, W21
+    # integration): the schedule routes #7-#10 answer 503 capability_unavailable under it.
+    monkeypatch.setattr(settings, "scout_scheduling_ceiling_lifted", True)
     monkeypatch.setattr(settings, "opportunity_feedback_enabled", True)
     previous = app.dependency_overrides.get(get_db)
     app.dependency_overrides[get_db] = mirror_get_db(factory)
