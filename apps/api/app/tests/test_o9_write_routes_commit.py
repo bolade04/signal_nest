@@ -1,10 +1,13 @@
-"""O9 (FU-267-F7): the Tier 0 and Tier 1 write routes commit before they answer.
+"""O9 (FU-267-F7): the Tier 0, Tier 1 and Tier 2 write routes commit before they answer.
 
 ``P6-W21-O9-01/AUDIT.md`` §2.1 lists the routes that wrote through ``get_db`` and relied on its
-post-yield commit, which FastAPI runs after the response has been sent. The 19 routes here
-(inventory numbers 1-19) now declare ``db: Session = WriteDb``
-(:mod:`app.db.request_tx`). For each, on the real application and its real routes, with only
-``get_db`` overridden and committed state read through a separate engine (the witness):
+post-yield commit, which FastAPI runs after the response has been sent. The 46 routes here
+(inventory numbers 1-46) now declare ``db: Session = WriteDb`` (:mod:`app.db.request_tx`):
+Tier 0/1 are numbers 1-19; Tier 2 is the 27 campaign-context routes, 20-28 (POST), 29-37
+(PATCH) and 38-46 (DELETE) of the nine collections. For the claims library (#25, #34, #43) the
+audit row, and for its DELETE the soft retirement, are part of the write. For each route, on
+the real application and its real routes, with only ``get_db`` overridden and committed state
+read through a separate engine (the witness):
 
 * **T1, failure injection** (one test per route class of AUDIT §4.3): the commit fails, the
   client gets a 500 (not a 2xx), and the witness sees neither the change nor its audit row;
@@ -44,6 +47,18 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.audit.models import AuditLog
 from app.brands.models import Brand, BusinessProfile
+from app.brands.service import get_primary_brand
+from app.campaign_context.models import (
+    AudienceProfile,
+    BrandVoiceProfile,
+    Campaign,
+    ChannelPreference,
+    ClaimsLibraryEntry,
+    CompetitorProfile,
+    OfferCalendarEntry,
+    ProductProfile,
+    SourcePreference,
+)
 from app.capabilities.models import WorkspaceCapabilityOverride
 from app.capabilities.registry import Capability
 from app.capabilities.service import set_capability_override
@@ -199,7 +214,7 @@ def world(template, tmp_path, monkeypatch) -> Iterator[World]:
 
 
 # --------------------------------------------------------------------------- #
-# The 19 routes (AUDIT §2.1 numbers; class per AUDIT §4.3)
+# The 46 routes (AUDIT §2.1 numbers; class per AUDIT §4.3)
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
 class Case:
@@ -298,6 +313,145 @@ _FEEDBACK_OVERRIDES = (
     WorkspaceCapabilityOverride.capability == FEEDBACK,
 )
 _LONDON_SCHEDULE = (ScoutSchedule.scout_request_id == scout("london"),)
+
+
+@dataclass(frozen=True)
+class _Collection:
+    """One campaign-context collection (``campaign_context/routes.py``, ``_ENTITIES``)."""
+
+    path: str
+    model: type
+    #: A valid create body; ``column`` is one of its text fields.
+    create: dict
+    column: str
+    #: The protected claims library writes an audit row with every write (W21 CF-2).
+    audits: tuple[str, str, str] | None = None
+
+    @property
+    def row_id(self) -> str:
+        """The id of the row ``_context_row`` commits for the PATCH and DELETE cases."""
+        return f"o9-{self.path}"
+
+
+_COLLECTIONS = (
+    _Collection("products", ProductProfile, {"name": "o9-created"}, "name"),
+    _Collection("audiences", AudienceProfile, {"label": "o9-created"}, "label"),
+    _Collection("competitors", CompetitorProfile, {"name": "o9-created"}, "name"),
+    _Collection("brand-voice", BrandVoiceProfile, {"example_copy": "o9-created"}, "example_copy"),
+    _Collection(
+        "offers",
+        OfferCalendarEntry,
+        {"name": "o9-created", "eligible_location_ids": [loc("dallas")]},
+        "name",
+    ),
+    _Collection(
+        "claims",
+        ClaimsLibraryEntry,
+        {"text": "o9-created", "kind": "approved"},
+        "text",
+        audits=(
+            "claims_library_entry.created",
+            "claims_library_entry.updated",
+            "claims_library_entry.retired",
+        ),
+    ),
+    _Collection(
+        "source-preferences", SourcePreference, {"source_type": "o9-created"}, "source_type"
+    ),
+    _Collection("channel-preferences", ChannelPreference, {"channel": "o9-created"}, "channel"),
+    _Collection(
+        "campaigns", Campaign, {"name": "o9-created", "location_ids": [loc("dallas")]}, "name"
+    ),
+)
+
+
+def _context_row(c: _Collection):
+    """``prepare``: a committed row of the collection in the demo workspace, whose
+    ``column`` reads ``o9-stored``."""
+
+    def make(w: World) -> None:
+        def add(s: Session) -> None:
+            s.add(
+                c.model(
+                    id=c.row_id,
+                    organization_id=ORG,
+                    workspace_id=WS,
+                    brand_id=get_primary_brand(s, WS).id,
+                    **{**c.create, c.column: "o9-stored"},
+                )
+            )
+
+        w.write(add)
+
+    return make
+
+
+def _gone(c: _Collection):
+    """``observe`` for a DELETE: the claims library soft-retires (``retired_at`` set, the row
+    kept); every other collection deletes the row."""
+    if c.audits:
+        return lambda s, w: (
+            s.scalar(select(ClaimsLibraryEntry.retired_at).where(ClaimsLibraryEntry.id == c.row_id))
+            is not None
+        )
+    return lambda s, w: (
+        s.scalar(select(func.count()).select_from(c.model).where(c.model.id == c.row_id)) == 0
+    )
+
+
+def _tier_2_cases() -> tuple[Case, ...]:
+    """AUDIT §2.1 numbers 20-46: class I (POST), II (PATCH) and IV (DELETE) per collection."""
+    posts, patches, deletes = [], [], []
+    for i, c in enumerate(_COLLECTIONS):
+        collection, item = f"{_W}/{c.path}", f"{_W}/{c.path}/{{item_id}}"
+        url, item_url = f"{_WS_URL}/{c.path}", f"{_WS_URL}/{c.path}/{c.row_id}"
+        created, updated, retired = c.audits or (None, None, None)
+        column = getattr(c.model, c.column)
+        posts.append(
+            Case(
+                no=20 + i,
+                klass="I",
+                method="POST",
+                route=collection,
+                url=lambda w, u=url: u,
+                status=201,
+                observe=_count(c.model, c.model.workspace_id == WS, column == "o9-created"),
+                after=1,
+                audit=created,
+                body=c.create,
+            )
+        )
+        patches.append(
+            Case(
+                no=29 + i,
+                klass="II",
+                method="PATCH",
+                route=item,
+                url=lambda w, u=item_url: u,
+                status=200,
+                observe=_col(column, c.model.id == c.row_id),
+                after="o9-edited",
+                audit=updated,
+                body={c.column: "o9-edited"},
+                prepare=_context_row(c),
+            )
+        )
+        deletes.append(
+            Case(
+                no=38 + i,
+                klass="IV",
+                method="DELETE",
+                route=item,
+                url=lambda w, u=item_url: u,
+                status=204,
+                observe=_gone(c),
+                after=True,
+                audit=retired,
+                prepare=_context_row(c),
+            )
+        )
+    return (*posts, *patches, *deletes)
+
 
 CASES: tuple[Case, ...] = (
     Case(
@@ -536,6 +690,7 @@ CASES: tuple[Case, ...] = (
         audit=None,
         body={"name": "O9 renamed", "city": "Dallas", "country": "US"},
     ),
+    *_tier_2_cases(),
 )
 BY_NO = {c.no: c for c in CASES}
 
@@ -559,11 +714,12 @@ def _all() -> list:
     return [pytest.param(c, id=c.id) for c in CASES]
 
 
-def test_the_cases_are_the_nineteen_tier_0_and_1_routes_and_all_use_write_db():
-    """AUDIT §6 steps 1-2: inventory numbers 1-19, each a served route on ``WriteDb``."""
+def test_the_cases_are_the_46_tier_0_1_and_2_routes_and_all_use_write_db():
+    """AUDIT §6 steps 1-3: inventory numbers 1-46, each a served route on ``WriteDb``."""
     from fastapi.routing import iter_route_contexts
 
-    assert sorted(BY_NO) == list(range(1, 20))
+    assert sorted(BY_NO) == list(range(1, 47))
+    assert len({(c.method, c.route) for c in CASES}) == 46
     served = {}
     for rc in iter_route_contexts(app.routes):
         if getattr(rc, "dependant", None) is None:
