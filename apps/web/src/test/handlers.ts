@@ -1039,7 +1039,16 @@ export const CONTEXT_FIELD_RULES: ContextRules = {
     landing_url: 'string?',
     is_active: 'boolean',
   },
-  claims: { text: 'string+', kind: 'string', category: 'string?', risk_level: 'string', notes: 'string?' },
+  // Project Phase 5D (5D-W1): `jurisdiction_codes`, a string list (empty = every jurisdiction); the
+  // API refuses a value outside the jurisdiction-code grammar, which no screen sends yet.
+  claims: {
+    text: 'string+',
+    kind: 'string',
+    category: 'string?',
+    risk_level: 'string',
+    notes: 'string?',
+    jurisdiction_codes: 'string[]',
+  },
   'source-preferences': { source_type: 'string', enabled: 'boolean', config: 'object' },
   'channel-preferences': { channel: 'string', enabled: 'boolean', weekly_volume: 'integer?' },
   // W21 CF-3 (Phase 5D campaign hardening): `mode` and `status` are closed enums (CampaignMode,
@@ -1087,7 +1096,7 @@ export const CONTEXT_ROW_DEFAULTS: ContextDefaults = {
     landing_url: null,
     is_active: true,
   },
-  claims: { text: '', kind: 'approved', category: null, risk_level: 'low', notes: null },
+  claims: { text: '', kind: 'approved', category: null, risk_level: 'low', notes: null, jurisdiction_codes: [] },
   'source-preferences': { source_type: '', enabled: true, config: {} },
   'channel-preferences': { channel: '', enabled: true, weekly_volume: null },
   campaigns: { name: '', goal: null, mode: 'per_location', location_ids: [], status: 'active' },

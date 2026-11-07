@@ -1363,10 +1363,18 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Campaigns */
+        /**
+         * List Campaigns
+         * @description The workspace's campaigns, oldest first, each with its location memberships.
+         */
         get: operations["list_campaigns_api_v1_workspaces__workspace_id__campaigns_get"];
         put?: never;
-        /** Create Campaigns */
+        /**
+         * Create Campaigns
+         * @description Create a campaign. Every location in ``location_ids`` must be an active location of this
+         *     workspace (else ``404``, or ``422`` for a deactivated one); the memberships are written in
+         *     the same transaction.
+         */
         post: operations["create_campaigns_api_v1_workspaces__workspace_id__campaigns_post"];
         delete?: never;
         options?: never;
@@ -1381,14 +1389,26 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Get Campaign
+         * @description One campaign of this workspace; a campaign of any other workspace is not found.
+         */
+        get: operations["get_campaign_api_v1_workspaces__workspace_id__campaigns__item_id__get"];
         put?: never;
         post?: never;
-        /** Delete Campaigns */
+        /**
+         * Delete Campaigns
+         * @description Delete a campaign and its location memberships.
+         */
         delete: operations["delete_campaigns_api_v1_workspaces__workspace_id__campaigns__item_id__delete"];
         options?: never;
         head?: never;
-        /** Update Campaigns */
+        /**
+         * Update Campaigns
+         * @description Change only the fields sent. A sent ``location_ids`` replaces the campaign's memberships
+         *     whole: locations it adds are validated as on create (a deactivated location already a
+         *     member may stay), and memberships it omits are removed, in the same transaction.
+         */
         patch: operations["update_campaigns_api_v1_workspaces__workspace_id__campaigns__item_id__patch"];
         trace?: never;
     };
@@ -2836,6 +2856,39 @@ export interface components {
          * @enum {string}
          */
         CampaignMode: "same_for_all" | "per_location" | "grouped" | "recommend";
+        /**
+         * CampaignOut
+         * @description A campaign as the dedicated campaigns router answers it (Project Phase 5D, 5D-W1).
+         *
+         *     Projected: the row's tenant columns ``organization_id`` and ``workspace_id`` are not
+         *     echoed (Phase 5D plan §2; exit criterion 2; live change 8(c)). ``location_ids`` is the
+         *     campaign's membership as the ``campaign_locations`` join table holds it, in location-id
+         *     order; the request's order is not kept (a membership is a set).
+         */
+        CampaignOut: {
+            /** Brand Id */
+            brand_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Goal */
+            goal: string | null;
+            /** Id */
+            id: string;
+            /** Location Ids */
+            location_ids: string[];
+            mode: components["schemas"]["CampaignMode"];
+            /** Name */
+            name: string;
+            status: components["schemas"]["CampaignStatus"];
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
         /** CampaignPatch */
         CampaignPatch: {
             /** Goal */
@@ -3111,6 +3164,11 @@ export interface components {
             /** Category */
             category?: string | null;
             /**
+             * Jurisdiction Codes
+             * @description Jurisdiction codes the entry applies in (ISO 3166-1 alpha-2, optionally '-' and an ISO 3166-2 subdivision part: GB, US-TX). Empty means every jurisdiction.
+             */
+            jurisdiction_codes?: string[];
+            /**
              * Kind
              * @default approved
              */
@@ -3129,6 +3187,11 @@ export interface components {
         ClaimPatch: {
             /** Category */
             category?: string | null;
+            /**
+             * Jurisdiction Codes
+             * @description Jurisdiction codes the entry applies in (ISO 3166-1 alpha-2, optionally '-' and an ISO 3166-2 subdivision part: GB, US-TX). Empty means every jurisdiction.
+             */
+            jurisdiction_codes?: string[];
             /** Kind */
             kind?: string;
             /** Notes */
@@ -8308,9 +8371,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": components["schemas"]["CampaignOut"][];
                 };
             };
             /** @description Validation Error */
@@ -8347,9 +8408,41 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["CampaignOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_campaign_api_v1_workspaces__workspace_id__campaigns__item_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CampaignOut"];
                 };
             };
             /** @description Validation Error */
@@ -8419,9 +8512,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["CampaignOut"];
                 };
             };
             /** @description Validation Error */
