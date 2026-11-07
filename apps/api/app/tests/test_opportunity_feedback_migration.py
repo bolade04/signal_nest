@@ -141,7 +141,7 @@ def test_single_head(db_path) -> None:
     # Exactly one head line — no divergent branches.
     heads = [ln for ln in result.stdout.splitlines() if ln.strip()]
     assert len(heads) == 1, result.stdout
-    assert "c3f8e1a6d2b9" in heads[0]
+    assert "d5f616c0ec97" in heads[0]  # 5D-W1's campaign-location data repair
 
 
 def test_downgrade_is_surgical_and_preserves_business_data(db_path) -> None:

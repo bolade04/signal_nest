@@ -36,7 +36,10 @@ from app.tests.test_postgres_migration_proof import (
     _version,
 )
 
-HEAD = "c3f8e1a6d2b9"
+#: This revision (W21 CF-3).
+CF3 = "c3f8e1a6d2b9"
+#: The code head (5D-W1's campaign-location data repair, Amendment D-1), which follows it.
+HEAD = "d5f616c0ec97"
 CF2 = "a7d2e9f4c1b8"
 NEW_TABLES = {"campaign_locations", "exports", "notifications", "notification_preferences"}
 
@@ -143,7 +146,7 @@ def test_the_backfill_and_normalisation_on_postgresql(pg_url: str) -> None:
         _campaign("camp-b", "ws-b1", "org-b", ["loc-b1"], "grouped", "draft"),
     ])
 
-    up = _run(["upgrade", "head"], pg_url)
+    up = _run(["upgrade", CF3], pg_url)
 
     assert up.returncode == 0, up.stdout + up.stderr
     out = up.stdout + up.stderr
@@ -164,6 +167,7 @@ def test_the_backfill_and_normalisation_on_postgresql(pg_url: str) -> None:
         "camp-malformed": ("same_for_all", "paused"),
         "camp-b": ("grouped", "draft"),
     }
+    _alembic(pg_url, "upgrade", "head")  # check needs the head
     _alembic(pg_url, "check")
 
 
@@ -211,7 +215,7 @@ def test_the_constraints_hold_on_postgresql(pg_url: str) -> None:
 
 
 def test_the_downgrade_guards_and_round_trip_on_postgresql(pg_url: str) -> None:
-    _alembic(pg_url, "upgrade", "head")
+    _alembic(pg_url, "upgrade", CF3)  # this revision's own downgrade is one step down
     _world(pg_url)
     claim = {"organization_id": "org-a", "workspace_id": "ws-a1", "brand_id": "brand-ws-a1",
              "text": "c", "kind": "approved", "risk_level": "low"}
@@ -231,7 +235,7 @@ def test_the_downgrade_guards_and_round_trip_on_postgresql(pg_url: str) -> None:
         result = _run(["-x", f"confirm={token}", "downgrade", "-1"], pg_url)
         assert result.returncode != 0
         assert message in result.stdout + result.stderr, result.stdout + result.stderr
-        assert _version(pg_url) == [HEAD] and NEW_TABLES <= _tables(pg_url)
+        assert _version(pg_url) == [CF3] and NEW_TABLES <= _tables(pg_url)
 
     refused("export record(s) exist")
     engine = create_engine(pg_url)
