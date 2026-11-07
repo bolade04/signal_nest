@@ -19,6 +19,7 @@ Gate: :func:`require_postgres` -- with ``TEST_POSTGRES_URL`` unset these tests F
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
 from collections.abc import Iterator
@@ -105,16 +106,20 @@ def _decide(
     go: threading.Event | None = None,
     hold: threading.Event | None = None,
     holding: threading.Event | None = None,
+    backend: list[int] | None = None,
 ) -> tuple:
     """One decision in its own session, as the route makes it; returns its outcome.
 
     ``before_decide``/``go``: signal once the transaction has read (its snapshot exists),
     then wait to be released. ``holding``/``hold``: signal once the decision is flushed
-    (lock held, row uncommitted), then wait before committing.
+    (lock held, row uncommitted), then wait before committing. ``backend``: receives the
+    session's server process id.
     """
     with w.factory() as s:
         if isolation is not None:
             s.connection(execution_options={"isolation_level": isolation})
+        if backend is not None:
+            backend.append(s.execute(text("SELECT pg_backend_pid()")).scalar_one())
         user = s.get(User, reviewer)
         brief = s.get(RecommendationBrief, BRIEF)
         ctx = TenantContext(
@@ -162,26 +167,49 @@ class _Runner(threading.Thread):
         return self.result
 
 
-def _waiting_on_lock(w: World) -> list[str]:
-    """Queries of this database's backends now blocked on a heavyweight lock."""
+def _lock_waiters(w: World) -> list[dict]:
+    """This database's backends now in a heavyweight-lock wait: pid, blockers and query."""
     with w.observer.connect() as c:
         rows = c.execute(
             text(
-                "SELECT query FROM pg_stat_activity "
-                "WHERE datname = current_database() AND wait_event_type = 'Lock'"
+                "SELECT pid, pg_blocking_pids(pid) AS blockers, wait_event, query"
+                " FROM pg_stat_activity"
+                " WHERE datname = current_database() AND wait_event_type = 'Lock'"
             )
-        ).all()
-    return [r[0] for r in rows]
+        ).mappings()
+        return [dict(row) for row in rows]
 
 
-def _wait_for(predicate, what: str):
+def _waiting_on_the_subject_lock(w: World, holder: int) -> tuple[list[dict], list[dict]]:
+    """``(matching, seen)``: the backends seen in a lock wait, and those among them waiting on
+    the subject's row lock held by ``holder`` (the ``FOR UPDATE`` on
+    ``recommendation_briefs``, blocked by that backend).
+
+    The query text is part of the predicate, not checked once afterwards (FU-LOCKWAIT-POLL):
+    a backend can be seen in its lock wait while ``pg_stat_activity`` still shows its
+    previous statement's text (measured: ``SELECT workspaces ...``)."""
+    seen = _lock_waiters(w)
+    matching = [
+        r
+        for r in seen
+        if holder in (r["blockers"] or [])
+        and "FOR UPDATE" in r["query"]
+        and "recommendation_briefs" in r["query"]
+    ]
+    return matching, seen
+
+
+def _wait_for(observe, what: str):
+    """Poll ``observe() -> (value, seen)`` until ``value`` is truthy; at the deadline, fail with
+    the last ``seen``."""
     deadline = time.monotonic() + POLL_SECONDS
+    seen = None
     while time.monotonic() < deadline:
-        value = predicate()
+        value, seen = observe()
         if value:
             return value
         time.sleep(0.05)
-    raise AssertionError(f"timed out waiting for {what}")
+    raise AssertionError(f"timed out waiting for {what} after {POLL_SECONDS} s; last seen: {seen}")
 
 
 def _stored(w: World) -> list[tuple]:
@@ -209,10 +237,7 @@ def test_the_session_isolation_is_read_committed_on_the_production_engine(world:
     assert level == "read committed"
 
 
-def test_a_second_decider_waits_on_the_subject_lock_before_reading_the_sequence(
-    world: World, monkeypatch
-):
-    w = world
+def _second_decider_waits_on_the_subject_lock(w: World, monkeypatch) -> None:
     reads: list[str] = []
     real_next = svc._next_decision_seq
 
@@ -222,8 +247,10 @@ def test_a_second_decider_waits_on_the_subject_lock_before_reading_the_sequence(
 
     monkeypatch.setattr(svc, "_next_decision_seq", spy)
     holding, hold = threading.Event(), threading.Event()
+    holder: list[int] = []
     first = _Runner(
-        _decide, w, REVIEWERS[0], ApprovalDecision.APPROVED, holding=holding, hold=hold
+        _decide, w, REVIEWERS[0], ApprovalDecision.APPROVED, holding=holding, hold=hold,
+        backend=holder,
     )
     first.name = "first"
     first.start()
@@ -232,9 +259,13 @@ def test_a_second_decider_waits_on_the_subject_lock_before_reading_the_sequence(
     second.name = "second"
     second.start()
     try:
-        waiting = _wait_for(lambda: _waiting_on_lock(w), "the second decider to block")
-        # It blocks on the subject's row lock, and it has not read the sequence yet.
-        assert any("FOR UPDATE" in q and "recommendation_briefs" in q for q in waiting), waiting
+        # It blocks on the subject's row lock (FOR UPDATE on recommendation_briefs, held by
+        # the first decider) ...
+        _wait_for(
+            lambda: _waiting_on_the_subject_lock(w, holder[0]),
+            "the second decider to wait on the subject's row lock",
+        )
+        # ... and it has not read the sequence yet.
         time.sleep(0.5)
         assert second.is_alive() and reads == ["first"]
     finally:
@@ -247,6 +278,46 @@ def test_a_second_decider_waits_on_the_subject_lock_before_reading_the_sequence(
         (2, "rejected", REVIEWERS[1]),
     ]
     assert _audited(w) == 2
+
+
+def test_a_second_decider_waits_on_the_subject_lock_before_reading_the_sequence(
+    world: World, monkeypatch
+):
+    _second_decider_waits_on_the_subject_lock(world, monkeypatch)
+
+
+#: The text ``pg_stat_activity`` showed for the waiting backend in a local failure of
+#: FU-LOCKWAIT-POLL (W21-REV-CARRY-01 raw/d294): the second decider's statement before its
+#: ``FOR UPDATE``.
+LAGGING_TEXT = (
+    "SELECT workspaces.organization_id, workspaces.name, workspaces.slug,"
+    " workspaces.onboarding_completed, workspaces.id, workspaces.created_at,"
+    " workspaces.updated_at \nFROM workspaces \nWHERE workspaces.id = $1::VARCHAR"
+)
+
+
+def test_the_wait_on_the_subject_lock_is_recognized_through_a_lagging_query_text(
+    world: World, monkeypatch
+):
+    """FU-LOCKWAIT-POLL: the failure's trigger, injected. The first observation that shows a
+    backend in a lock wait reports that backend's previous statement as its query text, as
+    ``pg_stat_activity`` did in the local failures. The observation is not the predicate; the
+    test keeps polling until the wait on the subject's row lock is seen, and passes as
+    above."""
+    w = world
+    real = _lock_waiters
+    lagged: list[list[dict]] = []
+
+    def lock_waiters(world_: World) -> list[dict]:
+        seen = real(world_)
+        if seen and not lagged:
+            lagged.append(seen)
+            return [{**row, "query": LAGGING_TEXT} for row in seen]
+        return seen
+
+    monkeypatch.setattr(sys.modules[__name__], "_lock_waiters", lock_waiters)
+    _second_decider_waits_on_the_subject_lock(w, monkeypatch)
+    assert len(lagged) == 1  # the trigger fired: the first sight of the wait carried old text
 
 
 def test_many_concurrent_deciders_get_a_gapless_unique_sequence(world: World):
