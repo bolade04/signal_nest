@@ -37,7 +37,7 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.routing import iter_route_contexts
@@ -241,9 +241,10 @@ def test_members_read_editors_write_outsiders_are_refused(env) -> None:
 # 2. Membership is the campaign_locations join table (I-CF3-2)
 # --------------------------------------------------------------------------- #
 def test_create_writes_the_memberships_and_mirrors_them(env) -> None:
-    second, third = _add_locations(env, WS_A, "Second", "Third")
-    created = _create(env, [third, OWN_LOCATION, second])
-    expected = sorted([third, OWN_LOCATION, second])
+    ids = [*_add_locations(env, WS_A, "Second", "Third"), OWN_LOCATION]
+    expected = sorted(ids)
+    # Sent in reverse location-id order, so the request order never equals the answer's.
+    created = _create(env, sorted(ids, reverse=True))
     assert created["location_ids"] == expected  # a set, answered in location-id order
     rows = _memberships(env, created["id"])
     assert sorted(r["location_id"] for r in rows) == expected
@@ -254,15 +255,51 @@ def test_create_writes_the_memberships_and_mirrors_them(env) -> None:
 
 def test_update_reconciles_both_ways_in_place(env) -> None:
     l2, l3 = _add_locations(env, WS_A, "L2", "L3")
-    created = _create(env, [OWN_LOCATION, l2])
+    created = _create(env, sorted([OWN_LOCATION, l2], reverse=True))
     kept_row = next(r for r in _memberships(env, created["id"]) if r["location_id"] == l2)
-    r = _send(env, "PATCH", f"{CAMPAIGNS}/{created['id']}", body={"location_ids": [l3, l2]})
+    r = _send(
+        env,
+        "PATCH",
+        f"{CAMPAIGNS}/{created['id']}",
+        body={"location_ids": sorted([l2, l3], reverse=True)},
+    )
     assert r.status_code == 200, r.text
     assert r.json()["location_ids"] == sorted([l2, l3])
     assert _member_ids(env, created["id"]) == sorted([l2, l3])  # the stale pair is deleted
     # The membership that stays is the same row (not deleted and re-inserted).
     assert next(r for r in _memberships(env, created["id"]) if r["location_id"] == l2) == kept_row
     assert _stored(env, created["id"])["location_ids"] == sorted([l2, l3])
+
+
+def test_reads_answer_location_id_order_whatever_the_stored_order(env) -> None:
+    """GET-one, the list and a rename-only PATCH read the memberships from the join table and
+    answer them in location-id order, whatever order the rows were written in (review
+    W21-REV-5DW1 r1, C-1: the rows here are inserted in descending location-id order with
+    increasing ``created_at``, so neither insertion nor age order is location-id order)."""
+    created = _create(env, [])
+    ids = sorted([*_add_locations(env, WS_A, "Read-a", "Read-b", "Read-c"), OWN_LOCATION])
+    start = datetime.now(UTC)
+    with Session(bind=env.witness) as s:
+        for n, location_id in enumerate(reversed(ids)):
+            s.add(
+                CampaignLocation(
+                    organization_id=ORG_A,
+                    workspace_id=WS_A,
+                    campaign_id=created["id"],
+                    location_id=location_id,
+                    created_at=start + timedelta(seconds=n),
+                )
+            )
+            s.flush()
+        s.commit()
+    item = f"{CAMPAIGNS}/{created['id']}"
+    one = _send(env, "GET", item)
+    assert one.status_code == 200 and one.json()["location_ids"] == ids
+    (listed,) = [r for r in _send(env, "GET", CAMPAIGNS).json() if r["id"] == created["id"]]
+    assert listed["location_ids"] == ids
+    renamed = _send(env, "PATCH", item, body={"name": "Renamed"})
+    assert renamed.status_code == 200 and renamed.json()["location_ids"] == ids
+    assert _member_ids(env, created["id"]) == ids  # a rename writes no membership
 
 
 def test_update_to_an_empty_list_removes_every_membership(env) -> None:
