@@ -7,6 +7,8 @@ authoring D2 AM and integration cycle D2 PM; **R1** wave D3 AM; build **D3 PM–
 (four rebalanced lanes W1–W4, longest lane 1.15 against a 1.5-day window); **I-5A
 integration cycle D5 AM**; **R2** wave D5 PM.
 
+**Status update (2026-11-07, W21 tracking pass, at `main` `3564c6d0`; the status above is kept as written):** implemented and merged, dark, under the operator's W21 programme instruction of 2026-11-01 (see the status update in `docs/project-phase-5-plan.md`): the CF-1 contracts (#282 `702a584a`), the 5A build (#291 `077cc2e9`), the I-5A integration together with I-5B (#293 `ed4d4a68`) and the 5A-W4 adversarial battery (#296 `6724d3f5`). Every brief endpoint is gated by `Capability.RECOMMENDATION_BRIEFS`, and `recommendation_briefs_enabled` defaults to false (`apps/api/app/core/config.py:523`). Not done: no brief records a jurisdiction yet (nothing writes `jurisdiction_code` until 5D-W3), and activation waits on the master plan's §10 gates. Merged does not mean activated, deployed or closed out.
+
 ## 1. Objective
 
 Introduce a first-class, **immutable, versioned recommendation-brief entity** bound
