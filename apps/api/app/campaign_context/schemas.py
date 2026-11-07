@@ -5,6 +5,8 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, create_model, field_validator
 
+from app.core.enums import CampaignMode, CampaignStatus
+
 #: Upper bound on a campaign's ``location_ids`` / an offer's ``eligible_location_ids``.
 #: Every listed id is checked against the workspace's locations in one query (P6-PLAT-8),
 #: so the list is bounded rather than left to grow without limit.
@@ -100,9 +102,13 @@ class ChannelPrefIn(BaseModel):
 class CampaignIn(BaseModel):
     name: str = Field(min_length=1)
     goal: str | None = None
-    mode: str = "per_location"
+    #: Closed vocabularies since Project Phase 5D campaign hardening (W21 CF-3): the CF-3
+    #: migration installed ``ck_campaign_mode`` / ``ck_campaign_status``, so a value outside
+    #: them is refused here (422) rather than by the database. A disclosed, live narrowing:
+    #: the create and update routes accepted any string before.
+    mode: CampaignMode = CampaignMode.PER_LOCATION
     location_ids: list[str] = Field(default_factory=list, max_length=MAX_LOCATION_IDS)
-    status: str = "active"
+    status: CampaignStatus = CampaignStatus.ACTIVE
 
     @field_validator("location_ids")
     @classmethod

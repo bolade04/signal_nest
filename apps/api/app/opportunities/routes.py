@@ -16,11 +16,13 @@ from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app.audit.actions import opportunity_status_action
 from app.audit.service import record_audit
 from app.auth.dependencies import TenantContext, get_tenant_context, require_role
 from app.core.enums import OpportunityStatus, Role
 from app.core.errors import NotFoundError, ValidationDomainError
 from app.core.pagination import MAX_PAGE_SIZE, PAGINATION_RESPONSES, paginate
+from app.db.request_tx import WriteDb
 from app.db.session import get_db
 from app.intelligence.read_service import get_opportunity_intelligence
 from app.intelligence.schemas import OpportunityIntelligenceResponse
@@ -202,7 +204,7 @@ def update_opportunity_status(
     workspace_id: str,
     opportunity_id: str,
     body: OpportunityStatusUpdate,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     ctx: TenantContext = Depends(EDITORS),
 ) -> OpportunityCard:
     opp = _get_scoped(db, workspace_id, opportunity_id)
@@ -217,7 +219,7 @@ def update_opportunity_status(
         organization_id=ctx.organization.id,
         workspace_id=workspace_id,
         actor_user_id=ctx.user.id,
-        action=f"opportunity.{body.status}",
+        action=opportunity_status_action(body.status),
         entity_type="opportunity",
         entity_id=opp.id,
     )

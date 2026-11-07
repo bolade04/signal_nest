@@ -108,6 +108,13 @@ export type FeedbackOut = S['FeedbackOut'];
 export type FeedbackHistoryOut = S['FeedbackHistoryOut'];
 export type FeedbackReason = S['FeedbackReason'];
 
+// ---- Project Phase 5A recommendation briefs (lane P5A; generated contract types) ----
+export type RecommendationBriefCreate = S['RecommendationBriefCreate'];
+export type RecommendationBriefOut = S['RecommendationBriefOut'];
+export type RecommendationBriefListOut = S['RecommendationBriefListOut'];
+export type RecommendationBriefCapability = S['RecommendationBriefCapabilityOut'];
+// ---- end Phase 5A recommendation briefs ----
+
 export type ProductIn = S['ProductIn'];
 export type AudienceIn = S['AudienceIn'];
 export type CompetitorIn = S['CompetitorIn'];
@@ -119,6 +126,33 @@ export type SourcePrefIn = S['SourcePrefIn'];
 export type ChannelPrefIn = S['ChannelPrefIn'];
 
 export type FeedbackCapability = S['FeedbackCapabilityOut'];
+
+// ---- Phase 5B approvals (W21 lane P5B) — begin -------------------------------------
+// A decision binds one exact, immutable brief version; the controlling decision is the
+// one with the highest `decision_seq` (the first item of a history page). The queue is
+// the approver's work list: briefs awaiting a decision, in the frozen brief projection.
+export type ApprovalDecision = S['ApprovalDecision'];
+export type ApprovalReason = S['ApprovalReason'];
+export type ApprovalDecisionCreate = S['ApprovalDecisionCreate'];
+export type ApprovalOut = S['ApprovalOut'];
+export type ApprovalHistoryOut = S['ApprovalHistoryOut'];
+// The brief projection (RecommendationBriefOut / RecommendationBriefListOut) is aliased once,
+// in the Phase 5A block above (I-5A/I-5B integration: one alias per type).
+// ---- Phase 5B approvals (W21 lane P5B) — end ---------------------------------------
+
+// --- Project Phase 5C: text creative generation (W21 lane P5C) — BEGIN ---------
+// Generated contract types only. A draft is one immutable version generated from an
+// approved recommendation brief; its output-side content review is embedded.
+export type CreativeChannel = S['CreativeChannel'];
+export type ClaimRisk = S['ClaimRisk'];
+export type CreativeDraftCreate = S['CreativeDraftCreate'];
+export type CreativeDraftOut = S['CreativeDraftOut'];
+export type CreativeDraftListOut = S['CreativeDraftListOut'];
+export type ContentReviewOut = S['ContentReviewOut'];
+export type ContentFindingOut = S['ContentFindingOut'];
+export type CreativeGenerationQueuedOut = S['CreativeGenerationQueuedOut'];
+export type CreativeCapability = S['CreativeGenerationCapabilityOut'];
+// --- Project Phase 5C: text creative generation (W21 lane P5C) — END -----------
 
 export type RuntimeSummary = S['RuntimeSummaryOut'];
 export type RuntimeCapability = S['CapabilityOut'];

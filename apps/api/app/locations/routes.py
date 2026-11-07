@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.audit.actions import AuditAction
 from app.audit.service import record_audit
 from app.auth.dependencies import TenantContext, get_tenant_context, require_role
 from app.brands.service import get_primary_brand
@@ -14,6 +15,7 @@ from app.core.errors import (
     SignalNestError,
     ValidationDomainError,
 )
+from app.db.request_tx import WriteDb
 from app.db.session import get_db
 from app.geography.geocoder import GeocodeFailure, GeocodingService, get_geocoding_service
 from app.locations import service as location_service
@@ -124,7 +126,7 @@ def list_locations(
 def create_location(
     workspace_id: str,
     body: LocationBase,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     ctx: TenantContext = Depends(require_role(Role.OWNER, Role.ADMIN, Role.MARKETER)),
 ) -> BusinessLocation:
     brand = get_primary_brand(db, workspace_id)
@@ -143,7 +145,7 @@ def create_location(
         organization_id=ctx.organization.id,
         workspace_id=workspace_id,
         actor_user_id=ctx.user.id,
-        action="location.created",
+        action=AuditAction.LOCATION_CREATED,
         entity_type="business_location",
         entity_id=location.id,
     )
@@ -155,7 +157,7 @@ def update_location(
     workspace_id: str,
     location_id: str,
     body: LocationBase,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     ctx: TenantContext = Depends(require_role(Role.OWNER, Role.ADMIN, Role.MARKETER)),
 ) -> BusinessLocation:
     location = db.get(BusinessLocation, location_id)
@@ -169,7 +171,7 @@ def update_location(
 
 
 def _record_lifecycle(
-    db: Session, ctx: TenantContext, location: BusinessLocation, action: str
+    db: Session, ctx: TenantContext, location: BusinessLocation, action: AuditAction
 ) -> None:
     record_audit(
         db,
@@ -189,7 +191,7 @@ def _record_lifecycle(
 def deactivate_location(
     workspace_id: str,
     location_id: str,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     ctx: TenantContext = Depends(EDITORS),
 ) -> BusinessLocation:
     """Retire a location without deleting it or any of its history (P6-UI-023).
@@ -199,7 +201,7 @@ def deactivate_location(
     """
     location = _get_scoped(db, workspace_id, location_id)
     if location_service.deactivate(db, location):
-        _record_lifecycle(db, ctx, location, "location.deactivated")
+        _record_lifecycle(db, ctx, location, AuditAction.LOCATION_DEACTIVATED)
     return location
 
 
@@ -210,13 +212,13 @@ def deactivate_location(
 def reactivate_location(
     workspace_id: str,
     location_id: str,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     ctx: TenantContext = Depends(EDITORS),
 ) -> BusinessLocation:
     """Return a deactivated location to service; a no-op (200) when already active."""
     location = _get_scoped(db, workspace_id, location_id)
     if location_service.reactivate(db, location):
-        _record_lifecycle(db, ctx, location, "location.reactivated")
+        _record_lifecycle(db, ctx, location, AuditAction.LOCATION_REACTIVATED)
     return location
 
 
@@ -249,7 +251,7 @@ def upsert_geo_coverage(
     workspace_id: str,
     location_id: str,
     body: GeoCoverageBase,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     ctx: TenantContext = Depends(require_role(Role.OWNER, Role.ADMIN, Role.MARKETER)),
 ) -> GeoCoverageRule:
     location = db.get(BusinessLocation, location_id)
@@ -276,7 +278,7 @@ def upsert_geo_coverage(
         organization_id=ctx.organization.id,
         workspace_id=workspace_id,
         actor_user_id=ctx.user.id,
-        action="geo_coverage.updated",
+        action=AuditAction.GEO_COVERAGE_UPDATED,
         entity_type="geo_coverage_rule",
         entity_id=rule.id,
     )

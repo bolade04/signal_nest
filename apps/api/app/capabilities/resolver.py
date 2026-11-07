@@ -49,11 +49,16 @@ enforcement point and its reflection share:
   (:func:`app.scouting_requests.connectors._rss_enabled_for`): live connector
   selection. Not ``workspace_enableable``, so only the global flag can enable it; a
   disable override (or the ceiling) turns it off for a workspace.
+* ``recommendation_briefs`` — LIVE gate since Project Phase 5A
+  (``app.briefs.routes._resolve_briefs_capability``): every brief endpoint. An honored
+  enable override makes that workspace's brief endpoints serve while
+  ``recommendation_briefs_enabled`` stays ``False``. Before any per-workspace enable
+  (plan §10): a jurisdiction backfill plan for pre-5D briefs, or a recorded operator
+  decision blocking export and generation of rows with NULL ``jurisdiction_code``.
 
-With all three global flags ``False``, no override row and the scheduling ceiling
-engaged (the shipped configuration), every capability resolves **disabled**:
-``scout_scheduling`` via the safety-ceiling rule, the other two via the
-global-configuration rule.
+With every global flag ``False``, no override row and the scheduling ceiling engaged
+(the shipped configuration), every capability resolves **disabled**: ``scout_scheduling``
+via the safety-ceiling rule, the other five via the global-configuration rule.
 """
 
 from __future__ import annotations

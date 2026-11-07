@@ -119,6 +119,9 @@ _PRE_DISPATCH_ERRORS = (httpx.ConnectError,)
 
 
 def _render(request: LLMRequest) -> str:
+    """The user turn. Fail-closed: a template/input mismatch raises
+    :class:`~app.llm.base.LLMPromptRenderError` and no request is built (Phase 5A); there
+    is no fallback that sends an unrendered template."""
     return render_prompt(request.task, request.inputs, request.max_untrusted_chars)
 
 

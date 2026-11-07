@@ -14,6 +14,7 @@ from app.auth.dependencies import (
 )
 from app.core.enums import Role
 from app.core.errors import NotFoundError, PermissionDeniedError
+from app.db.request_tx import WriteDb
 from app.db.session import get_db
 from app.organizations import invitations as invitation_service
 from app.organizations import members as member_service
@@ -79,7 +80,7 @@ def list_workspaces(
 )
 def create_workspace(
     body: WorkspaceCreate,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     ctx: OrganizationContext = Depends(require_exact_organization_roles(Role.OWNER, Role.ADMIN)),
 ) -> Workspace:
     # Membership, organization existence and the exact OWNER/ADMIN check are done by the
@@ -187,6 +188,11 @@ def change_member_role(
     db: Session = Depends(get_db),
     ctx: OrganizationContext = Depends(ORGANIZATION_ADMINS),
 ) -> OrganizationMemberOut:
+    """Change a member's role. The role is organization-wide: it applies in every workspace
+    of the organization (there are no workspace-scoped roles). Granting ``reviewer`` therefore
+    makes the member an approver of recommendation briefs in every workspace (Phase 5B, O-2).
+    Exactly OWNER or ADMIN; nobody changes their own role, assigns a role above their own,
+    or grants or changes ``owner`` unless they are an owner; the last owner stays. Audited."""
     row = member_service.change_member_role(db, ctx=ctx, target_user_id=user_id, new_role=body.role)
     db.commit()
     return OrganizationMemberOut.model_validate(row)

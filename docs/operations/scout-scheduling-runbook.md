@@ -293,6 +293,11 @@ Source: `apps/api/app/scouting_requests/routes.py`.
     to that row's own deadline (fetch: 20 s + lease; model: 3 x 30 s + lease). It never
     waits for a row with an unknown end. **Wait expiry:** the job fails (`NON_RETRYABLE`,
     `admission_unresolved`), the request ends `failed`, the admission stays unresolved.
+    The failed job records how it waited in its `result_summary` (W21 FU-Q1-2, PROPOSED):
+    `{"admission_wait": "none"}` when it was refused at the first look (the blocking row
+    already had an unknown end or a passed deadline: nothing waited), `"until_deadline"` when
+    it waited and the row's deadline passed, `"until_unknown_end"` when it waited and the row
+    recorded an unknown end. A closed code only; it changes no end state.
   - **Persisted deadlines (D-25 recovery, PROPOSED).** Each admission stores its deadline
     (`deadline_at`) and the basis it was computed from (`deadline_rule = client_plus_lease`,
     the admitting worker's client deadline for the operation and its lease, in seconds),
@@ -380,10 +385,30 @@ Source: `apps/api/app/scouting_requests/routes.py`.
       run of the Scout was in progress); `stopped` (`stopped_owner_superseded`,
       `stopped_lease_lost`, `status_changed_during_run`, `request_gone`, or an unknown
       outcome); `cancelled`; `failed` with `earlier_operation_timed_out`
-      (`admission_unresolved`), `too_many_signals`, `retries_exhausted` (dead-lettered
+      (`admission_unresolved` with `admission_wait: until_deadline` only),
+      `earlier_operation_unresolved` (every other `admission_unresolved`: refused at once,
+      waited until an unknown end, or recorded before the wait was recorded; W21 FU-Q1-2,
+      PROPOSED), `too_many_signals`, `retries_exhausted` (dead-lettered
       transient), `worker_stopped_responding` (dead-lettered timeout) or `internal`. A
       succeeded job whose run stopped or was skipped is never shown as Completed; job
       lifecycle states are unchanged and the raw codes stay visible as secondary text.
+    - *Latest run result (W21 FU-Q1-1, Q1 (a+), PROPOSED).* `ScoutRequestOut.run_outcome`
+      lifts what the latest recorded run (the latest run that completed or was refused at the
+      bound) wrote to `stats` into a typed outcome: `kind` (`complete`, `partial`, `refused`);
+      `sources`, every consulted source with its fetched count, clip and failure (a closed
+      failure code); `partial_reasons`; `refusal_reason` and `bound`; and one `next_action`:
+      `narrow_request` (a refusal: edit the Scout to fewer source types or keywords),
+      `run_again_later` (a source failed) or `no_action` (only a fetch limit clipped a source).
+      It is null when the stats record none (no result yet, or a completed run recorded before
+      the per-source facts existed). W21 FU-HELD-BODY-1 (PROPOSED): a live source that was not
+      contacted during its failure cool-down, its held copy used instead (`read_mode: held`),
+      makes the run `partial` (`source_held`), never `complete`; that run, and a run whose failed
+      live source is cooling down, gets `wait_for_source_retry` with `next_retry_at` instead of
+      `run_again_later` (see `live-data-sources.md` §6). The Scout page shows it as "Result of the last run that
+      read its sources", says when the latest run ended without a result (so the panel shows an
+      earlier run's), shows nothing for a run that read no source (the zero-result panel explains
+      it), and for a refused run lets the D-25 notice point at the panel's one next step instead of
+      its own "run again". Its wording is PROPOSED and awaits a copy owner.
     - *Markets.* For a Scout tied to a location, the sources see its market text read in the
       location's country ("Lagos, Lagos" of a Lagos, NG location → "Lagos, Lagos, NG", served
       by the "Lagos, NG" sample market). Text that names a country is unchanged (an explicit
@@ -415,9 +440,22 @@ Source: `apps/api/app/scouting_requests/routes.py`.
     **Caveat:** the deadline guard covers SignalNest's client side only. After the deadline
     the external party (the provider or the feed's server) may still be working;
     reconciling is the operator's declaration that it is not, and the bound then rests on
-    that declaration. A blocked Scout is now visible (the `blocked` listing and the customer
-    indication above), but there is still no alert or metric: operators must look. This
-    operational burden is a stated limitation.
+    that declaration. A blocked Scout is visible (the `blocked` listing and the customer
+    indication above). **Operator signal (FU-267-A1, PROPOSED):** every worker's registry
+    heartbeat sets the gauges `scouts_blocked` and `scouts_blocked_oldest_age_seconds`
+    (exactly the Scouts `blocked` lists; no labels; no traffic needed), and
+    `GET /api/v1/internal/system/overview` reports `scouts.blocked_count` and
+    `scouts.oldest_blocked_age_seconds`. On SQLite (no ledger) the gauges are absent and the
+    overview says `ledger_kept: false`. The alert is defined in
+    [alerts.md](./alerts.md) §21 and the response in
+    [incident_response.md](./incident_response.md) §13; it fires only where metrics are
+    exported (`METRICS_ENABLED=true`, `METRICS_EXPORTER=emf` on the worker) and an alarm
+    is configured (missing data notifies as `INSUFFICIENT_DATA`, never reads as OK) —
+    neither is wired in any environment yet, so until then operators must poll the
+    overview. The heartbeat's read is bounded on PostgreSQL (a transaction-scoped
+    `lock_timeout` of 2 s and `statement_timeout` of 5 s by default, at most a quarter of the
+    stale margin for any margin of at least 0.4 s): a read that hits the bound is logged and
+    sets no gauge, and delays the next registry heartbeat by at most about that bound.
   - **Cancel (a PROPOSED cancellation change).** Cancelling a running scout job now stops
     the run at its next admission (including while it waits): the job ends `cancelled`.
     **Cancel recovery (D-25 recovery, PROPOSED):** whenever Cancel makes an execute job

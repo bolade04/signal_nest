@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.audit.actions import AuditAction
 from app.audit.service import record_audit
 from app.auth.dependencies import TenantContext, get_tenant_context, require_role
 from app.brands import service
@@ -17,6 +18,7 @@ from app.brands.schemas import (
 )
 from app.core.enums import Role
 from app.core.errors import NotFoundError
+from app.db.request_tx import WriteDb
 from app.db.session import get_db
 
 router = APIRouter(tags=["brands"])
@@ -30,7 +32,7 @@ router = APIRouter(tags=["brands"])
 def onboard(
     workspace_id: str,
     body: OnboardingRequest,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     ctx: TenantContext = Depends(require_role(Role.OWNER, Role.ADMIN, Role.MARKETER)),
 ) -> OnboardingResult:
     brand, profile = service.run_onboarding(db, ctx, body)
@@ -39,7 +41,7 @@ def onboard(
         organization_id=ctx.organization.id,
         workspace_id=workspace_id,
         actor_user_id=ctx.user.id,
-        action="onboarding.completed",
+        action=AuditAction.ONBOARDING_COMPLETED,
         entity_type="brand",
         entity_id=brand.id,
     )
@@ -79,7 +81,7 @@ def get_business_profile(
 def update_business_profile(
     workspace_id: str,
     body: BusinessProfileBase,
-    db: Session = Depends(get_db),
+    db: Session = WriteDb,
     ctx: TenantContext = Depends(require_role(Role.OWNER, Role.ADMIN, Role.MARKETER)),
 ) -> BusinessProfile:
     profile = db.scalar(
@@ -96,7 +98,7 @@ def update_business_profile(
         organization_id=ctx.organization.id,
         workspace_id=workspace_id,
         actor_user_id=ctx.user.id,
-        action="business_profile.updated",
+        action=AuditAction.BUSINESS_PROFILE_UPDATED,
         entity_type="business_profile",
         entity_id=profile.id,
     )

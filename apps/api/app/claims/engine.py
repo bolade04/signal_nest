@@ -7,14 +7,28 @@ Two responsibilities used by Phase 2 reasoning:
 
 Core rule: use competitor complaints as market insight, not as proof the user's
 product is better.
+
+**The workspace claims library (Project Phase 5C).** :func:`review_against_library` is the
+output-side content review of a generated draft: ``check_claim_safety`` over the text with the
+workspace's **active** ``blocked`` entries as ``blocked_claims``, the ids of the entries the
+text hits, and the resolution of every required disclaimer (the library's active
+``required_disclaimer`` entries plus any the caller threads in, e.g. the offer calendar's).
+**A retired entry is ignored** (:func:`active_entries`): retiring a claim (``retired_at``,
+the CF-2 soft retirement) removes it from every review from then on, whichever caller loaded
+the library. The scouting pipeline's claim check (``app.jobs.pipeline``) runs on third-party
+discussion text and passes no library at all, so no library entry — active or retired — can
+reach it.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from app.core.enums import ClaimRisk
+from app.llm.untrusted import normalise
 
 # Industries requiring stricter controls.
 STRICT_INDUSTRIES = {
@@ -41,6 +55,12 @@ _FLAGS: list[tuple[str, str, ClaimRisk]] = [
 ]
 
 _RISK_ORDER = {ClaimRisk.LOW: 0, ClaimRisk.MEDIUM: 1, ClaimRisk.HIGH: 2, ClaimRisk.BLOCKED: 3}
+
+
+def contains_phrase(text: str, phrase: str | None) -> bool:
+    """Whether ``text`` contains the non-empty ``phrase`` (case-insensitive substring) — the
+    one matching rule for blocked claims and required disclaimers."""
+    return bool(phrase) and phrase.lower() in text.lower()
 
 
 @dataclass
@@ -81,7 +101,7 @@ def check_claim_safety(
             warnings.append(f"Detected {category.replace('_', ' ')}: '{m.group(0)}'")
 
     for claim in blocked_claims or []:
-        if claim and claim.lower() in text.lower():
+        if contains_phrase(text, claim):
             blocked_hit.append(claim)
             highest = ClaimRisk.BLOCKED
             warnings.append(f"Contains a blocked claim: '{claim}'")
@@ -98,6 +118,156 @@ def check_claim_safety(
         warnings=warnings,
         blocked_terms=blocked_hit,
     )
+
+
+# --------------------------------------------------------------------------- #
+# The workspace claims library (Project Phase 5C output-side content review)
+# --------------------------------------------------------------------------- #
+#: The library kinds the review reads (``ClaimsLibraryEntry.kind``), in canonical form: a
+#: stored kind is always compared through :func:`canonical_kind`, never exactly.
+BLOCKED_KIND = "blocked"
+APPROVED_KIND = "approved"
+DISCLAIMER_KIND = "required_disclaimer"
+#: The canonical kinds whose entries block a draft. ``prohibited`` is the campaign-context
+#: UI's name for a blocked claim (its kind select offers approved / restricted / prohibited).
+BLOCKING_KINDS: frozenset[str] = frozenset({BLOCKED_KIND, "prohibited"})
+
+_WHITESPACE = re.compile(r"\s+")
+#: Full stops that IDNA and browsers treat as "." (ideographic, fullwidth, halfwidth
+#: ideographic) — the same map the output screen applies (``app.llm.screening``).
+_FULL_STOPS = str.maketrans({"\u3002": ".", "\uff0e": ".", "\uff61": "."})
+
+
+def fold(text: str) -> str:
+    """The one canonical matching form of a text, applied to BOTH sides of every library
+    match — the draft text and every library entry and required disclaimer, in the review
+    (:func:`review_against_library`) and in the approval-time re-check
+    (``app.creative.service.draft_approval_refusal``) alike:
+
+    ``casefold(collapse_ws(normalise(text).translate(FULL_STOPS)))`` — NFKC, every ``Cf`` and
+    Default_Ignorable code point removed (soft hyphen, ZWJ/ZWNJ, variation selectors), NFKC
+    again (:func:`app.llm.untrusted.normalise`, the output screen's form), the ideographic,
+    fullwidth and halfwidth full stops mapped to ".", whitespace runs collapsed, trimmed,
+    case-folded. So an invisible character, a line break, a compatibility form ("ｃｕｒｅ") or a
+    different full stop can neither hide a blocked claim nor keep a carried disclaimer from
+    resolving, on either side."""
+    canonical = normalise(text).translate(_FULL_STOPS)
+    return _WHITESPACE.sub(" ", canonical).strip().casefold()
+
+
+def canonical_kind(kind: str | None) -> str:
+    """A library entry's ``kind`` in the one canonical form the 5C review reads
+    (DEFECT-5CW4-2): :func:`fold`, the claims matching form, so case, spacing, invisible
+    characters and compatibility forms never decide what an entry does.
+
+    ``ClaimIn.kind`` is free text in the CF-2 contract (a closed vocabulary is a later
+    contract decision, matrix O11), and the review used to compare it exactly: a steward's
+    "Blocked", "BLOCKED" or " blocked", and every "prohibited" entry the campaign-context UI
+    creates, were stored and never blocked. Read through this form, fail closed by name:
+
+    * ``blocked`` and ``prohibited`` block (:data:`BLOCKING_KINDS`; :func:`is_blocking_kind`);
+    * ``required_disclaimer`` must be carried (:func:`is_disclaimer_kind`);
+    * ``approved`` is an approved claim offered to the model (:func:`is_approved_kind`);
+    * any other kind — the UI's ``restricted``, a typo, an empty kind — is none of these: it
+      blocks nothing, requires nothing and is never offered to the model as approved.
+    """
+    return fold(kind or "")
+
+
+def is_blocking_kind(kind: str | None) -> bool:
+    """Whether an entry of ``kind`` blocks a draft that contains it."""
+    return canonical_kind(kind) in BLOCKING_KINDS
+
+
+def is_disclaimer_kind(kind: str | None) -> bool:
+    """Whether an entry of ``kind`` is a disclaimer the draft must carry."""
+    return canonical_kind(kind) == DISCLAIMER_KIND
+
+
+def is_approved_kind(kind: str | None) -> bool:
+    """Whether an entry of ``kind`` is an approved claim."""
+    return canonical_kind(kind) == APPROVED_KIND
+
+
+@dataclass(frozen=True)
+class LibraryEntry:
+    """One claims-library entry as the engine reads it (a plain projection of the row)."""
+
+    id: str
+    text: str
+    kind: str
+    retired_at: datetime | None = None
+
+
+def active_entries(entries: Iterable[LibraryEntry]) -> list[LibraryEntry]:
+    """The entries a review applies: every entry that is not retired (CF-2 soft retirement).
+
+    A retired entry blocks nothing, requires nothing and approves nothing."""
+    return [e for e in entries if e.retired_at is None]
+
+
+def _unique(texts: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    kept: list[str] = []
+    for text in texts:
+        key = fold(text or "")
+        if key and key not in seen:
+            seen.add(key)
+            kept.append(text.strip())
+    return kept
+
+
+@dataclass(frozen=True)
+class LibraryReview:
+    """The output-side review of one generated text against one workspace's library."""
+
+    safety: ClaimSafetyResult
+    #: Ids of the active ``blocked`` entries the text contains.
+    blocked_claim_ids: list[str]
+    #: Every disclaimer the text had to carry (library entries first, then the caller's).
+    required_disclaimers: list[str]
+    #: The required disclaimers the text does not carry.
+    missing_disclaimers: list[str]
+
+    @property
+    def is_blocked(self) -> bool:
+        return self.safety.is_blocked
+
+    @property
+    def disclaimers_resolved(self) -> bool:
+        return not self.missing_disclaimers
+
+    @property
+    def passed(self) -> bool:
+        """Nothing blocks and every required disclaimer is carried."""
+        return not self.is_blocked and self.disclaimers_resolved
+
+
+def review_against_library(
+    text: str,
+    industry: str | None,
+    entries: Iterable[LibraryEntry],
+    extra_disclaimers: Sequence[str] = (),
+) -> LibraryReview:
+    """Review generated ``text`` against the workspace's claims library (Phase 5C §2).
+
+    ``check_claim_safety`` runs over the folded text with every **active** blocking entry
+    (``blocked`` or ``prohibited`` in :func:`canonical_kind` form) as a blocked claim (one hit
+    makes the result ``blocked``); the hit entries' ids are returned. Required disclaimers
+    are the active ``required_disclaimer`` entries (canonical form) plus
+    ``extra_disclaimers`` (the offer calendar's), each resolved when the text contains it.
+    Retired entries are ignored (:func:`active_entries`).
+    """
+    active = active_entries(entries)
+    folded = fold(text)
+    blocked = [e for e in active if is_blocking_kind(e.kind) and fold(e.text)]
+    safety = check_claim_safety(folded, industry, blocked_claims=[fold(e.text) for e in blocked])
+    hit_ids = [e.id for e in blocked if contains_phrase(folded, fold(e.text))]
+    disclaimers = _unique(
+        [*(e.text for e in active if is_disclaimer_kind(e.kind)), *extra_disclaimers]
+    )
+    missing = [d for d in disclaimers if not contains_phrase(folded, fold(d))]
+    return LibraryReview(safety, hit_ids, disclaimers, missing)
 
 
 # Competitor pain point -> safe positioning translation table.

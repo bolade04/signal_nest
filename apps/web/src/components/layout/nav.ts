@@ -1,9 +1,11 @@
 import {
   Activity,
+  ClipboardCheck,
   Compass,
   LayoutDashboard,
   ListChecks,
   MapPin,
+  PenLine,
   Settings,
   Sparkles,
   Target,
@@ -21,6 +23,21 @@ export interface NavItem {
    * (derived at module scope) remain stable; the sidebar filters at render time.
    */
   operatorOnly?: boolean;
+  /**
+   * The approval queue (Phase 5B, mounted at I-5B): shown only while the member's role in
+   * the active organization is exactly `reviewer` AND recommendation briefs resolve enabled
+   * for the active workspace (`useApprovalQueueVisible`). Like `operatorOnly`, the entry
+   * stays in this array so the breadcrumb label is stable; the sidebar filters at render
+   * time. UX only — the route renders the not-found page while the workspace is dark, and
+   * every approval endpoint re-decides role and capability on the server.
+   */
+  approverOnly?: boolean;
+  /**
+   * Creative drafts (Phase 5C, mounted at I-5C): shown only while `creative_generation`
+   * resolves enabled for the active workspace (`useCreativeVisible`). Drafts are readable by
+   * every member, so no role is filtered. The entry stays in this array for the breadcrumb.
+   */
+  creativeOnly?: boolean;
 }
 
 export const navItems: NavItem[] = [
@@ -54,6 +71,20 @@ export const navItems: NavItem[] = [
     label: 'Opportunities',
     icon: Sparkles,
     description: 'Explainable, scored opportunities',
+  },
+  {
+    to: '/approvals',
+    label: 'Approvals',
+    icon: ClipboardCheck,
+    description: 'Recommendation briefs awaiting a reviewer decision',
+    approverOnly: true,
+  },
+  {
+    to: '/creative',
+    label: 'Creative Drafts',
+    icon: PenLine,
+    description: 'Generated marketing text, reviewed and approved',
+    creativeOnly: true,
   },
   {
     to: '/locations',

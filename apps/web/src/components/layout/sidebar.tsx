@@ -1,5 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '@/auth/AuthContext';
+import { useApprovalQueueVisible } from '@/pages/approvals/useApprovals';
+import { useCreativeVisible } from '@/pages/creative/useCreative';
 import { navItems } from './nav';
 import { cn } from '@/lib/utils';
 
@@ -28,11 +30,18 @@ function BrandMark() {
 
 export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
   const { user } = useAuth();
+  const approvalQueueVisible = useApprovalQueueVisible();
+  const creativeVisible = useCreativeVisible();
   // Operator entries are hidden from non-operators. This is UX only — the route
   // itself is guarded by RequireOperator and every operator endpoint is enforced
-  // server-side by require_operator.
+  // server-side by require_operator. The approval queue is shown only to a reviewer in a
+  // workspace where briefs resolve enabled (I-5B); creative drafts to every member where
+  // creative_generation resolves enabled (I-5C). Their endpoints are enforced the same way.
   const visibleItems = navItems.filter(
-    (item) => !item.operatorOnly || (user?.is_operator ?? false),
+    (item) =>
+      (!item.operatorOnly || (user?.is_operator ?? false)) &&
+      (!item.approverOnly || approvalQueueVisible) &&
+      (!item.creativeOnly || creativeVisible),
   );
   return (
     <nav className="flex h-full flex-col gap-1" aria-label="Primary">
