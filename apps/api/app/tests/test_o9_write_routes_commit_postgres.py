@@ -1,6 +1,7 @@
 """O9 (FU-267-F7) on PostgreSQL: the operator override routes (#1, #2) commit before they answer.
 
-``test_o9_write_routes_commit.py`` covers all 19 converted routes on SQLite. There, the
+``test_o9_write_routes_commit.py`` covers all 46 converted routes (Tier 0/1 #1–19 and the 27
+campaign-context routes #20–46) on SQLite. There, the
 override-set service's SAVEPOINT commits the override row on its own (O9-X1, matrix O14),
 so a failed request commit cannot be shown to leave *no row* for route #1. PostgreSQL nests
 the SAVEPOINT in the request's transaction, as production (``app_mode=full``) does. On a

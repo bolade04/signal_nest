@@ -79,6 +79,8 @@ from app.scouting_requests.models import ScoutRequest, ScoutSchedule
 from app.tests._auth2_support import active_rate_limiter, live_bearer, sqlite_file_engine
 from app.tests._seed_support import clear_seeded_runs
 from app.tests._write_commit_support import (
+    COMMIT,
+    RESPONSE_START,
     CommitSwitch,
     SendRecorder,
     commit_precedes_response,
@@ -832,6 +834,11 @@ def test_t3_t6_commit_precedes_the_response_and_a_read_at_the_final_body_sees_it
 
     assert reply.status_code == case.status, (case.id, reply.status_code, reply.text)
     assert commit_precedes_response(world.events), (case.id, world.events)
+    if case.no >= 20:
+        # Tier 2: one transaction. The write and, for the claims library, its audit row and
+        # soft retirement commit together; a route commit before the helper's would split them.
+        start = world.events.index(RESPONSE_START)
+        assert world.events[:start].count(COMMIT) == 1, (case.id, world.events)
     assert recorder.seen_at_final_body == [(case.after, 1 if action else None)], case.id
 
 
