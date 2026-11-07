@@ -71,6 +71,7 @@ from app.core.tracing import (
     start_span,
 )
 from app.db.session import SessionLocal
+from app.jobs.blocked_signal import read_timeouts_ms, record_blocked_scouts
 from app.jobs.context import ExecutionContext
 from app.jobs.models import Job
 from app.jobs.registry import (
@@ -879,10 +880,27 @@ class Worker:
         Distinct from the per-job lease heartbeat. It writes no audit rows and
         persists no error detail; a failed beat is logged as a warning and retried
         on the next tick (its retry cadence is independent of job retries).
+
+        Each beat then sets the blocked-Scout gauges (FU-267-A1,
+        :func:`app.jobs.blocked_signal.record_blocked_scouts`) in a read of its own,
+        after the heartbeat has committed, so the signal needs no customer traffic. A
+        read that FAILS is contained: it is logged by class name and the beat it
+        follows has already committed. A read that WAITS (a lock held by a
+        migration, a slow statement) does delay the next beat, because both share
+        this loop. On PostgreSQL that wait is bounded by the read's transaction-scoped
+        ``lock_timeout`` / ``statement_timeout`` (``read_timeouts_ms``: at most 2 s /
+        5 s, and at most a quarter of ``stale_after - interval`` for any such margin of
+        at least 0.4 s; below that a 100 ms floor applies). So a beat is late by at most
+        about that bound, which for a margin of at least 0.4 s is never long enough for
+        peers to flag this worker stale. Obtaining a pooled connection is shared with
+        the heartbeat's own and is not bounded by it.
         """
         stop = threading.Event()
         interval = self._settings.worker_heartbeat_seconds
         stale_after = self._settings.worker_stale_after_seconds
+        signal_timeouts = read_timeouts_ms(
+            heartbeat_seconds=interval, stale_after_seconds=stale_after
+        )
 
         def _beat() -> None:
             while not stop.wait(interval):
@@ -906,6 +924,17 @@ class Worker:
                     )
                 finally:
                     db.close()
+                try:
+                    record_blocked_scouts(self._session_factory, timeouts_ms=signal_timeouts)
+                except Exception as exc:  # noqa: BLE001 - observation is never fatal to the beat
+                    log_event(
+                        logger,
+                        "worker.blocked_scouts_signal_failed",
+                        level=WARNING,
+                        component="jobs",
+                        outcome="degraded",
+                        error_class=type(exc).__name__,
+                    )
 
         thread = threading.Thread(target=_beat, name="reg-hb", daemon=True)
         thread.start()

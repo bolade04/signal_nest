@@ -2642,6 +2642,26 @@ export interface components {
             /** Workspace Id */
             workspace_id: string | null;
         };
+        /**
+         * BlockedScoutsOverviewOut
+         * @description Scouts blocked in ``needs_attention`` across every tenant (FU-267-A1, PROPOSED).
+         *
+         *     The same Scouts ``python -m app.jobs.reconcile blocked`` lists (that command names
+         *     them and gives the ``resolve`` command); here only a count and an age, never an id,
+         *     tenancy or customer content. ``ledger_kept`` is false where the admission ledger is
+         *     not kept (SQLite): nothing is measured there, and the other fields are ``null``,
+         *     never a zero.
+         */
+        BlockedScoutsOverviewOut: {
+            /** Blocked Count */
+            blocked_count: number | null;
+            /** Ledger Kept */
+            ledger_kept: boolean;
+            /** Oldest Blocked Age Seconds */
+            oldest_blocked_age_seconds: number | null;
+            /** Oldest Blocked Since */
+            oldest_blocked_since: string | null;
+        };
         /** BrandOut */
         BrandOut: {
             /** Business Type */
@@ -4473,7 +4493,7 @@ export interface components {
         };
         /**
          * OperationalOverviewOut
-         * @description One coarse operator snapshot of queue, fleet and schedule health.
+         * @description One coarse operator snapshot of queue, fleet, schedule and blocked-Scout health.
          */
         OperationalOverviewOut: {
             /**
@@ -4483,6 +4503,7 @@ export interface components {
             as_of: string;
             jobs: components["schemas"]["JobsOverviewOut"];
             schedules: components["schemas"]["SchedulesOverviewOut"];
+            scouts: components["schemas"]["BlockedScoutsOverviewOut"];
             /** Stale After Seconds */
             stale_after_seconds: number;
             workers: components["schemas"]["WorkersOverviewOut"];

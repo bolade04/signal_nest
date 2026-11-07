@@ -25,6 +25,10 @@ most one on PostgreSQL; the ledger is never written on SQLite, so ``U`` is empty
 The reason and next action are closed codes; no id, worker, token, attempt number, admission
 id, payload, URL, setting or error text is exposed. ``since`` is set only where a stable
 timestamp exists. Every read is scoped by the Scout's own organization and workspace.
+
+The operator signal for blocked Scouts (FU-267-A1, :func:`blocked_scouts`) is the fleet-wide
+aggregate of rule 1 over :func:`eligible_admissions`, the rows the ``reconcile blocked`` view
+lists: the same predicate, never a second one.
 """
 
 from __future__ import annotations
@@ -108,14 +112,37 @@ def is_eligible(admission: Any, *, holds: bool, now: datetime) -> bool:
     return now > deadline
 
 
-def _job_row(db: Session, job_id: str | None):
-    if job_id is None:
+#: The admitting job's columns :func:`attempt_holds_authority` reads, outer-joined to the
+#: admission so a listing reads every row's job in the same statement (never one per row).
+_JOB_COLUMNS = (
+    Job.status.label("job_status"),
+    Job.attempt_count.label("job_attempt"),
+    Job.worker_id.label("job_worker"),
+    Job.lease_expires_at.label("job_lease"),
+)
+
+
+def _joined_job(row: Any) -> SimpleNamespace | None:
+    """The admitting job from a row selected with :data:`_JOB_COLUMNS` (``None``: no job)."""
+    if row.job_status is None:
         return None
-    return db.execute(
-        select(Job.status, Job.attempt_count, Job.worker_id, Job.lease_expires_at).where(
-            Job.id == job_id
-        )
-    ).first()
+    return SimpleNamespace(
+        status=row.job_status,
+        attempt_count=row.job_attempt,
+        worker_id=row.job_worker,
+        lease_expires_at=row.job_lease,
+    )
+
+
+def _attention(admission: Any) -> tuple[Reason, datetime | None]:
+    """Why an ELIGIBLE admission puts its Scout in ``needs_attention``, and since when: an
+    unknown end since it was recorded; a legacy row (no recorded deadline) since it was
+    admitted; otherwise overdue since its persisted deadline."""
+    if admission.end_kind == "unknown":
+        return Reason.OPERATION_OUTCOME_UNKNOWN, admission.ended_at
+    if admission.deadline_at is None:  # legacy: no recorded deadline
+        return Reason.OPERATION_OUTCOME_UNKNOWN, admission.admitted_at
+    return Reason.OPERATION_OVERDUE, admission.deadline_at
 
 
 @dataclass
@@ -146,13 +173,7 @@ def _unresolved_rows(
     valid authority: ONE statement (the admitting job joined, not read per row)."""
     out: dict[str, list[tuple[Any, bool]]] = {}
     rows = db.execute(
-        select(
-            ScoutAdmission,
-            Job.status.label("job_status"),
-            Job.attempt_count.label("job_attempt"),
-            Job.worker_id.label("job_worker"),
-            Job.lease_expires_at.label("job_lease"),
-        )
+        select(ScoutAdmission, *_JOB_COLUMNS)
         .outerjoin(Job, Job.id == ScoutAdmission.job_id)
         .where(
             ScoutAdmission.scout_request_id.in_(ids),
@@ -164,18 +185,8 @@ def _unresolved_rows(
     ).all()
     for row in rows:
         admission = row[0]
-        job = (
-            None
-            if row.job_status is None
-            else SimpleNamespace(
-                status=row.job_status,
-                attempt_count=row.job_attempt,
-                worker_id=row.job_worker,
-                lease_expires_at=row.job_lease,
-            )
-        )
         out.setdefault(admission.scout_request_id, []).append(
-            (admission, attempt_holds_authority(job, admission, now))
+            (admission, attempt_holds_authority(_joined_job(row), admission, now))
         )
     return out
 
@@ -234,12 +245,7 @@ def _classify(request: ScoutRequest, rows: _ScoutRows, now: datetime) -> ScoutEx
     unresolved, live, latest = rows.unresolved, rows.live, rows.latest
     for row, holds in unresolved:
         if is_eligible(row, holds=holds, now=now):
-            if row.end_kind == "unknown":
-                reason, since = Reason.OPERATION_OUTCOME_UNKNOWN, row.ended_at
-            elif row.deadline_at is None:  # legacy: no recorded deadline
-                reason, since = Reason.OPERATION_OUTCOME_UNKNOWN, row.admitted_at
-            else:
-                reason, since = Reason.OPERATION_OVERDUE, row.deadline_at
+            reason, since = _attention(row)
             return ScoutExecutionOut(
                 state=State.NEEDS_ATTENTION,
                 reason=reason,
@@ -352,36 +358,91 @@ def eligible_admissions(
 ) -> Iterator[tuple[Any, str, str | None, tuple[str, int] | None]]:
     """Every unresolved admission eligible for reconciliation, oldest first, with its Scout's
     status, its job's status and the Scout's current owner ``(job_id, attempt)``. Read-only
-    (the operator's ``reconcile blocked`` view)."""
+    (the operator's ``reconcile blocked`` view, and the blocked-Scout signal).
+
+    ONE statement, whatever the number of rows: the unresolved admissions (read through the
+    partial index ``uq_scout_admission_unresolved``, ``WHERE resolved_at IS NULL``) with their
+    Scout and their admitting job joined; eligibility is then decided per row by the shared
+    :func:`is_eligible` and :func:`attempt_holds_authority`. K = 1 bounds the rows by the
+    number of Scouts with an operation outstanding (in flight or blocked)."""
     stmt = (
         select(
             ScoutAdmission,
-            ScoutRequest.status,
+            ScoutRequest.status.label("request_status"),
             ScoutRequest.owner_job_id,
             ScoutRequest.owner_attempt,
+            *_JOB_COLUMNS,
         )
         .join(ScoutRequest, ScoutRequest.id == ScoutAdmission.scout_request_id)
+        .outerjoin(Job, Job.id == ScoutAdmission.job_id)
         .where(ScoutAdmission.resolved_at.is_(None))
-        .order_by(ScoutAdmission.admitted_at)
+        .order_by(ScoutAdmission.admitted_at, ScoutAdmission.id)
     )
     if organization_id is not None:
         stmt = stmt.where(ScoutAdmission.organization_id == organization_id)
     if workspace_id is not None:
         stmt = stmt.where(ScoutAdmission.workspace_id == workspace_id)
-    for row, request_status, owner_job, owner_attempt in db.execute(stmt).all():
-        job = _job_row(db, row.job_id)
+    for result in db.execute(stmt).all():
+        row, job = result[0], _joined_job(result)
         if is_eligible(row, holds=attempt_holds_authority(job, row, now), now=now):
-            owner = (owner_job, owner_attempt) if owner_job else None
-            yield row, request_status, (job.status if job is not None else None), owner
+            owner = (result.owner_job_id, result.owner_attempt) if result.owner_job_id else None
+            yield row, result.request_status, (job.status if job is not None else None), owner
+
+
+@dataclass(frozen=True)
+class BlockedScouts:
+    """The Scouts in ``needs_attention`` across every tenant, at database time ``as_of``: how
+    many, and since when the longest-blocked one has been. Counts and instants only - no id,
+    tenancy, name or customer content."""
+
+    count: int
+    oldest_since: datetime | None
+    as_of: datetime
+
+    @property
+    def oldest_age_seconds(self) -> float | None:
+        """How long the longest-blocked Scout has been blocked (``None`` when none is)."""
+        if self.oldest_since is None:
+            return None
+        return max(0.0, (self.as_of - self.oldest_since).total_seconds())
+
+
+def ledger_kept(db: Session) -> bool:
+    """The K = 1 admission ledger is kept on this database (PostgreSQL only: on SQLite a run
+    never writes it, so nothing bounds concurrent operations and nothing can be blocked)."""
+    return db.get_bind().dialect.name == "postgresql"
+
+
+def blocked_scouts(db: Session) -> BlockedScouts | None:
+    """The fleet-wide blocked-Scout signal (FU-267-A1, PROPOSED): the Scouts the ``reconcile
+    blocked`` view lists (rule 1, ``needs_attention``), aggregated. Read-only; one database
+    clock reading and the one statement of :func:`eligible_admissions`.
+
+    ``None`` - the signal is ABSENT, never zero - where the ledger is not kept (SQLite): a zero
+    there would claim a bound that does not exist. A Scout's ``since`` is that of its oldest
+    eligible admission, exactly as its own derived state reports it."""
+    if not ledger_kept(db):
+        return None
+    now = db_now(db)
+    since: dict[str, datetime] = {}
+    for row, _status, _job_status, _owner in eligible_admissions(db, now=now):
+        if row.scout_request_id not in since:
+            since[row.scout_request_id] = _aware(_attention(row)[1] or row.admitted_at)
+    return BlockedScouts(
+        count=len(since), oldest_since=min(since.values(), default=None), as_of=now
+    )
 
 
 __all__ = [
+    "BlockedScouts",
     "attempt_holds_authority",
+    "blocked_scouts",
     "db_now",
     "derive_execution",
     "derive_executions",
     "eligible_admissions",
     "is_eligible",
+    "ledger_kept",
     "live_run_exists",
     "needs_attention",
 ]

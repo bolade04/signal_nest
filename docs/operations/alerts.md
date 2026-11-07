@@ -230,6 +230,67 @@ Metric provenance is in [dashboards.md](./dashboards.md); response steps are in
   `deny` mode answered `503`) and the `rate_limit.shared_store_unavailable` warning
   (see [deployment.md](./deployment.md), runtime contract).
 
+## Scout execution
+
+### 21. Blocked Scouts (needs attention) (FU-267-A1, PROPOSED)
+- **Purpose:** a Scout is **blocked** (`needs_attention`): an external operation it
+  admitted (a model call or a feed fetch) has no known end and is eligible for
+  reconciliation. It admits nothing more — no Run now, no scheduled run — until an
+  operator reconciles it, and nothing in SignalNest clears it on its own. Customers see
+  "Needs attention" on the Scout; this alert is the **operator** signal and is separate
+  from any customer notification.
+- **Signal:** the gauge `scouts_blocked` (Scouts blocked now, across every tenant; no
+  labels), with `scouts_blocked_oldest_age_seconds` (how long the longest-blocked one has
+  been blocked; `0` when none is) for escalation. Every worker sets both from its registry
+  heartbeat (every `WORKER_HEARTBEAT_SECONDS`, no customer traffic needed) to the same
+  fleet-wide value, so read the **Maximum** across workers, never the sum. The count is
+  exactly the Scouts `python -m app.jobs.reconcile blocked` lists. Pollable fallback (and
+  the source while metrics are off): `GET /api/v1/internal/system/overview` →
+  `scouts.blocked_count`, `scouts.oldest_blocked_age_seconds`. **PostgreSQL only:** on
+  SQLite no admission ledger is kept, so the gauges are absent (never `0`) and the
+  overview reports `scouts.ledger_kept: false` with `null` values.
+- **Threshold / window:** `Maximum(scouts_blocked) >= 1` in 3 consecutive 5-minute
+  periods (15m). Escalate when `Maximum(scouts_blocked_oldest_age_seconds) > 86400` (a
+  Scout blocked for over a day) or `scouts_blocked >= 3` (several at once usually means a
+  provider or feed incident).
+- **Severity:** SEV3; SEV2 on either escalation.
+- **Missing data:** treat missing data as **missing** and **notify on
+  `INSUFFICIENT_DATA`** (or, where a backend cannot notify on that state, treat missing data
+  as **breaching**). Never treat it as not breaching: an absent gauge means nobody is
+  measuring — no worker is running, metrics are off on the workers, or every worker's read is
+  failing — which is indistinguishable from "no blocked Scouts" if it reads as OK. Nothing
+  else covers that gap today: alert 11's `worker_active` is defined but has no emit path,
+  and alert 13 is endpoint-based, so neither can back an alarm. A gauge that stops while
+  workers are healthy means metrics are off or the read is failing
+  (`worker.blocked_scouts_sweep_failed` warnings, class name only).
+- **Read bound:** on PostgreSQL each sweep's read sets a transaction-scoped `lock_timeout`
+  and `statement_timeout` (`set_config(…, true)`, the function form of `SET LOCAL`): 2 s and
+  5 s by default, and at most a quarter of
+  `WORKER_STALE_AFTER_SECONDS − WORKER_HEARTBEAT_SECONDS` for any such margin of at least
+  0.4 s (below that a 100 ms floor applies, because `0` would mean no timeout), because the
+  read shares the registry heartbeat's loop. A read that hits the bound (for example while a migration holds
+  a lock on `scout_admissions`, `scout_requests` or `jobs`) is logged as
+  `worker.blocked_scouts_sweep_failed` and sets no gauge for that interval; the next beat is
+  late by at most about the bound. Sustained, it shows as missing data.
+- **False positives:** none by state — a healthy in-flight operation (its attempt still
+  holds its lease, or its stored deadline has not passed by the database clock) is never
+  counted, and every counted Scout really cannot run. But a blocked Scout does **not**
+  mean the external call failed: its end is unknown, or it outlived its deadline. A burst
+  during a provider incident (timeouts, 5xx/529) is real and is handled as one incident.
+- **Action:** [scout-scheduling-runbook.md](./scout-scheduling-runbook.md) "Reconciliation
+  (procedure)" and [incident_response.md](./incident_response.md) §13: list the Scouts with
+  `python -m app.jobs.reconcile blocked`; for each admission, establish **outside
+  SignalNest** (the provider's console or request log, the feed server) that the
+  operation is over; then `python -m app.jobs.reconcile resolve --admission <id>
+  --operator <name> --reason <code>`. The stored deadline establishes eligibility under
+  the procedure, not proof that the external party stopped: reconciling is the
+  operator's declaration. Reconciliation changes no accounting.
+- **Backing metric/endpoint:** `scouts_blocked`, `scouts_blocked_oldest_age_seconds`
+  (`app/jobs/blocked_signal.py`, set by `Worker._start_registry_heartbeat`);
+  `/internal/system/overview` `scouts`. **Not wired in any environment yet:** the gauges
+  reach CloudWatch only with `METRICS_ENABLED=true` and `METRICS_EXPORTER=emf` on the
+  worker, and no alarm for them exists in IaC (the staging IaC is frozen).
+
 ## Enabling checklist
 
 1. Wire your monitoring backend to the emitted metrics (respect `ALLOWED_LABELS`).

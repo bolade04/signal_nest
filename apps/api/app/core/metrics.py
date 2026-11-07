@@ -80,6 +80,13 @@ LLM_COST_BOUND_VIOLATIONS_TOTAL = "llm_cost_bound_violations_total"
 #: A settlement arrived for a reservation whose workspace or organization was deleted
 LLM_SETTLEMENTS_ORPHANED_TOTAL = "llm_settlements_orphaned_total"
 
+# Scout execution (FU-267-A1): fleet-wide gauges of the Scouts in ``needs_attention`` (an
+# operation outstanding with no known end, eligible for reconciliation). Set by the worker's
+# registry heartbeat (``app.jobs.blocked_signal``), never by a request; no label (no tenant,
+# Scout or admission id can reach them). Absent where the admission ledger is not kept.
+SCOUTS_BLOCKED = "scouts_blocked"
+#: How long the longest-blocked Scout has been blocked (0 when none is).
+SCOUTS_BLOCKED_OLDEST_AGE_SECONDS = "scouts_blocked_oldest_age_seconds"
 # LLM calls (Project Phase 5A, W21 CF-1 amendment; the 5A seam lane emits them). Dedicated
 # names, NOT dependency_operation_total: an LLM provider failure must not silently join the
 # generic dependency-failure alert (alerts.md, dependency_operation_total{outcome="failure"}).
@@ -158,6 +165,8 @@ METRIC_NAMES: frozenset[str] = frozenset(
         LLM_SETTLEMENTS_AFTER_RELEASE_TOTAL,
         LLM_COST_BOUND_VIOLATIONS_TOTAL,
         LLM_SETTLEMENTS_ORPHANED_TOTAL,
+        SCOUTS_BLOCKED,
+        SCOUTS_BLOCKED_OLDEST_AGE_SECONDS,
         LLM_CALLS_TOTAL,
         LLM_CALL_DURATION_MS,
         LLM_INPUT_TOKENS_TOTAL,
@@ -423,6 +432,8 @@ __all__ = [
     "WORKER_POLL_TOTAL",
     "WORKER_LEASE_RECOVERED_TOTAL",
     "WORKER_ACTIVE",
+    "SCOUTS_BLOCKED",
+    "SCOUTS_BLOCKED_OLDEST_AGE_SECONDS",
     "REDIS_NOTIFY_TOTAL",
     "DEPENDENCY_OPERATION_TOTAL",
     "DEPENDENCY_OPERATION_DURATION_MS",
