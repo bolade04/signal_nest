@@ -3,9 +3,10 @@
 A campaign's ``location_ids`` and an offer's ``eligible_location_ids`` are JSON lists with
 no foreign key. Integrity is enforced where they are written: :func:`validate_location_ids`
 runs on every create and partial update of the two collections and admits only locations
-of the request's own workspace that exist and are active. A relational join table (Phase
-5D's decision O-8) is the later hardening; it is not built here, so no migration rewrites
-or drops a stored list.
+of the request's own workspace that exist and are active. Since Project Phase 5D (5D-W1) a
+campaign's membership is the ``campaign_locations`` join table (O-8,
+:mod:`app.campaign_context.campaigns`) and its JSON list is the join table's read-only
+mirror; an offer's list is unchanged (O-8 does not cover offers).
 
 Rows written before this check may already hold an id that fails it. They are left as they
 are and reported instead, read-only, by :func:`find_location_reference_findings` and by the

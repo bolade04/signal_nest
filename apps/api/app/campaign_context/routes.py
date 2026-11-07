@@ -4,9 +4,13 @@ A compact generic factory produces list/create/update/delete routes for each
 workspace-scoped context entity. All routes enforce tenant scoping via
 ``get_tenant_context`` and attach ``organization_id``/``workspace_id``/``brand_id``
 server-side; the update route (PATCH, P6-PLAT-9) changes only the fields the client sends
-and never those three or the row's ``id``. Campaign and offer location lists are checked
-against the workspace's own active locations on create and update (P6-PLAT-8,
+and never those three or the row's ``id``. An offer's location list is checked against the
+workspace's own active locations on create and update (P6-PLAT-8,
 :mod:`app.campaign_context.location_refs`).
+
+**Campaigns are not served by the factory** (Project Phase 5D, 5D-W1): they have a dedicated
+router (:mod:`app.campaign_context.campaigns`, included below at the same paths) with a
+read-one route, a projected answer and ``campaign_locations`` membership.
 
 **The claims library is a protected safety control** (Project Phase 5C plan §2, W21 CF-2):
 5C's output-side review blocks a generated draft on the workspace's ``blocked`` claims, so a
@@ -53,11 +57,11 @@ from app.auth.dependencies import (
     require_role,
 )
 from app.brands.service import get_primary_brand
+from app.campaign_context.campaigns import router as campaigns_router
 from app.campaign_context.location_refs import validate_location_ids
 from app.campaign_context.models import (
     AudienceProfile,
     BrandVoiceProfile,
-    Campaign,
     ChannelPreference,
     ClaimsLibraryEntry,
     CompetitorProfile,
@@ -70,8 +74,6 @@ from app.campaign_context.schemas import (
     AudiencePatch,
     BrandVoiceIn,
     BrandVoicePatch,
-    CampaignIn,
-    CampaignPatch,
     ChannelPrefIn,
     ChannelPrefPatch,
     ClaimIn,
@@ -312,7 +314,6 @@ _ENTITIES: list[tuple[str, type, type[BaseModel], type[BaseModel], str, str | No
     ("claims", ClaimsLibraryEntry, ClaimIn, ClaimPatch, "claims", None),
     ("source-preferences", SourcePreference, SourcePrefIn, SourcePrefPatch, "sources", None),
     ("channel-preferences", ChannelPreference, ChannelPrefIn, ChannelPrefPatch, "channels", None),
-    ("campaigns", Campaign, CampaignIn, CampaignPatch, "campaigns", "location_ids"),
 ]
 
 for _path, _model, _schema, _patch, _tag, _location_field in _ENTITIES:
@@ -325,3 +326,6 @@ for _path, _model, _schema, _patch, _tag, _location_field in _ENTITIES:
         location_field=_location_field,
         protection=_PROTECTED.get(_path),
     )
+
+# The ninth collection, campaigns, at the same paths (Project Phase 5D, 5D-W1).
+router.include_router(campaigns_router)

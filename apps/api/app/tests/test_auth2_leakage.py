@@ -773,7 +773,9 @@ class TestOpenApiContract:
         # creative-capability reflection -- customer operations, none an account-mail one.
         # 138 -> 140 (W21 P5C): POST and GET .../drafts/{draft_id}/approvals (customer,
         # reviewer-exact and history readers), none an account-mail operation.
-        assert count == 140
+        # 140 -> 141 (Project Phase 5D, 5D-W1): GET /workspaces/{workspace_id}/campaigns/{item_id},
+        # a customer (workspace member) read, not an account-mail operation.
+        assert count == 141
 
     def test_no_token_in_any_path_query_or_header_anywhere(self, doc: dict):
         for path, item in doc["paths"].items():

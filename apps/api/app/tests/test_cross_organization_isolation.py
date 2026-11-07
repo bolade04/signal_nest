@@ -729,6 +729,19 @@ def _rows(world: World, model) -> list[dict]:
 # --------------------------------------------------------------------------- #
 # 4. The nine context entities
 # --------------------------------------------------------------------------- #
+def _assert_own_row(world: World, tenant: Tenant, path: str, model, answered: dict) -> None:
+    """The answered row is ``tenant``'s, as stored. Campaigns answer a projection since Project
+    Phase 5D (5D-W1, live change 8(c)) that echoes neither tenant column, so the stored row
+    is what proves the scope; every other collection still echoes ``workspace_id``."""
+    stored = world.row(model, answered["id"])
+    assert stored is not None
+    assert (stored["organization_id"], stored["workspace_id"]) == (tenant.org_id, tenant.ws_id)
+    if path == "campaigns":
+        assert not {"organization_id", "workspace_id"} & set(answered), answered
+    else:
+        assert answered["workspace_id"] == tenant.ws_id
+
+
 @pytest.mark.parametrize("path,model,body", CONTEXT, ids=[c[0] for c in CONTEXT])
 class TestContextEntities:
     def test_list_returns_own_rows_only_and_foreign_ws_403(self, world, pov, path, model, body):
@@ -737,7 +750,8 @@ class TestContextEntities:
         assert own.status_code == 200
         ids = {x["id"] for x in own.json()}
         assert a.items[path] in ids and b.items[path] not in ids
-        assert all(x["workspace_id"] == a.ws_id for x in own.json())
+        for answered in own.json():
+            _assert_own_row(world, a, path, model, answered)
         _assert_membership_403(pov.send("GET", _ws_path(world, b, f"/{path}")))
 
     def test_create_in_foreign_ws_403_nothing_written_own_201(self, world, pov, path, model, body):
@@ -746,7 +760,8 @@ class TestContextEntities:
         _assert_membership_403(pov.send("POST", _ws_path(world, b, f"/{path}"), body))
         assert world.count(model, workspace_id=b.ws_id) == before
         own = pov.send("POST", _ws_path(world, a, f"/{path}"), body)
-        assert own.status_code == 201 and own.json()["workspace_id"] == a.ws_id
+        assert own.status_code == 201
+        _assert_own_row(world, a, path, model, own.json())
         assert own.json()["brand_id"] == a.brand_id  # resolved from the caller's own workspace
 
     def test_delete_with_foreign_item_id_404_and_row_survives(self, world, pov, path, model, body):
@@ -777,7 +792,29 @@ class TestContextEntities:
         # Positive: updating one of A's own items works and keeps its id and scope.
         own = pov.send("PATCH", _ws_path(world, a, f"/{path}/{a.items[path]}"), body)
         assert own.status_code == 200, own.text
-        assert (own.json()["id"], own.json()["workspace_id"]) == (a.items[path], a.ws_id)
+        assert own.json()["id"] == a.items[path]
+        _assert_own_row(world, a, path, model, own.json())
+
+
+class TestCampaignRead:
+    """``GET /workspaces/{workspace_id}/campaigns/{item_id}`` (Project Phase 5D, 5D-W1)."""
+
+    def test_get_campaign_own_200_foreign_id_404_foreign_ws_403(self, world: World, pov: Pov):
+        a, b = pov.a, pov.b
+        own = pov.send("GET", _ws_path(world, a, f"/campaigns/{a.items['campaigns']}"))
+        assert own.status_code == 200, own.text
+        assert (own.json()["id"], own.json()["brand_id"]) == (a.items["campaigns"], a.brand_id)
+        _assert_own_row(world, a, "campaigns", Campaign, own.json())
+        # B's campaign id under A's own workspace: the handler's not-found, B's row unchanged.
+        before = world.row(Campaign, b.items["campaigns"])
+        _assert_404(
+            pov.send("GET", _ws_path(world, a, f"/campaigns/{b.items['campaigns']}")),
+            "Item not found in this workspace.",
+        )
+        _assert_membership_403(
+            pov.send("GET", _ws_path(world, b, f"/campaigns/{b.items['campaigns']}"))
+        )
+        assert world.row(Campaign, b.items["campaigns"]) == before
 
 
 @pytest.mark.parametrize("path,model,body", [c for c in CONTEXT if c[0] in LOCATION_LISTS])
@@ -2042,6 +2079,9 @@ COVERAGE: dict[tuple[str, str], tuple[str, ...]] = {
     **{("GET", f"{W}/{p}"): _CTX_TESTS[:1] + _PAGED_TEST for p, _m, _b in CONTEXT},
     **{("POST", f"{W}/{p}"): _CTX_TESTS[1:2] + _location_list_tests(p) for p, _m, _b in CONTEXT},
     **{("DELETE", f"{W}/{p}/{{item_id}}"): _CTX_TESTS[2:3] for p, _m, _b in CONTEXT},
+    ("GET", f"{W}/campaigns/{{item_id}}"): (
+        "TestCampaignRead::test_get_campaign_own_200_foreign_id_404_foreign_ws_403",
+    ),
     **{
         ("PATCH", f"{W}/{p}/{{item_id}}"): _CTX_TESTS[3:] + _location_list_tests(p)
         for p, _m, _b in CONTEXT
@@ -2283,8 +2323,9 @@ class TestCoverageCompleteness:
         # its decision history, the approval queue); the equalities above prove no other
         # operation came or went. 93 -> 97 (W21 P5C): the creative-capability reflection,
         # list/generate a brief's drafts and fetch one draft (TestCreativeDrafts); 97 -> 99:
-        # decide on a draft and its decision history (TestCreativeDraftDecisions).
-        assert len(served) == 99
+        # decide on a draft and its decision history (TestCreativeDraftDecisions). 99 -> 100
+        # (Project Phase 5D, 5D-W1): read one campaign (TestCampaignRead).
+        assert len(served) == 100
 
     def test_every_named_proof_exists(self):
         here = _tests_defined_in(Path(__file__))

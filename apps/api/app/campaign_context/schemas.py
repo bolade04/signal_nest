@@ -116,6 +116,26 @@ class CampaignIn(BaseModel):
         return _unique_location_ids(v)
 
 
+class CampaignOut(BaseModel):
+    """A campaign as the dedicated campaigns router answers it (Project Phase 5D, 5D-W1).
+
+    Projected: the row's tenant columns ``organization_id`` and ``workspace_id`` are not
+    echoed (Phase 5D plan §2; exit criterion 2; live change 8(c)). ``location_ids`` is the
+    campaign's membership as the ``campaign_locations`` join table holds it, in location-id
+    order; the request's order is not kept (a membership is a set).
+    """
+
+    id: str
+    brand_id: str
+    name: str
+    goal: str | None
+    mode: CampaignMode
+    location_ids: list[str]
+    status: CampaignStatus
+    created_at: datetime
+    updated_at: datetime
+
+
 # --------------------------------------------------------------------------- #
 # Partial-update (PATCH) bodies -- P6-PLAT-9
 # --------------------------------------------------------------------------- #
