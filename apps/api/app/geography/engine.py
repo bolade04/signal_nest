@@ -16,7 +16,9 @@ the reading with jurisdiction forms ("US-TX", "Lagos State") and the word readin
 engine used before they were recognised. An exclusion removes a market when either
 reading may cover it, so no exclusion removes less than it did; a rule admits a market
 that either reading places inside it. Each reading compares like with like (observation
-and rule read the same way).
+and rule read the same way). An exclusion's text also has every reading a bare name in it
+may have (``markets.exclusion_readings``: "Lagos, NG" is also Lagos State), which no
+inclusion has.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ from dataclasses import dataclass, field
 
 from app.geography.markets import (
     MarketIdentity,
+    exclusion_readings,
     may_overlap,
     normalize_country,
     normalize_region,
@@ -155,15 +158,19 @@ def is_excluded(rule: CoverageRule, market: str | None) -> bool:
     exclusion removes every market that no known component separates from it (structured
     identity, ``may_overlap``; "York" does not remove "New York"), and a market that
     cannot be read at all is removed by any exclusion. Both readings apply (the module
-    docstring): "US-TX" removes Texas, and still removes whatever its word reading removed.
+    docstring): "US-TX" removes Texas, and still removes whatever its word reading removed;
+    an ambiguous name removes what either of its places covers ("Niger": the country and
+    Niger State).
     """
     country = _context_country(rule)
     for forms in _READINGS:
         observed = parse_observed(market, jurisdiction_forms=forms)
         for text in rule.excluded_markets:
-            excluded = parse_market(text, default_country=country, jurisdiction_forms=forms)
-            if excluded is not None and may_overlap(observed, excluded):
-                return True
+            for excluded in exclusion_readings(
+                text, default_country=country, jurisdiction_forms=forms
+            ):
+                if may_overlap(observed, excluded):
+                    return True
     return False
 
 

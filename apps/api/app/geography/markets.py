@@ -52,6 +52,15 @@ same way on both sides of a comparison:
   name, so every spelling of one state is one key.
 * an alpha-2 code followed by the same country ("KE, Kenya") is that country.
 
+A bare name that is also a Nigerian subdivision ("Lagos", "Lagos, NG", "Kano, Nigeria",
+"Niger", "Minna, Niger") keeps its reading as a city or country everywhere. Only an
+exclusion reads it both ways (:func:`exclusion_readings`; the item-35 ruling: an exclusion
+removes what the recorded geography cannot rule out); inclusions, connector clearance and
+observations do not, so the ambiguity admits nothing new. "Niger" stays the country NE and
+"Niger State" the region NG:niger; "Nigeria" is neither. An exclusion likewise reads every
+area a single ambiguous name may be ("CA": Canada and California; "NE": Niger and Nebraska),
+which :func:`parse_market` leaves unplaced.
+
 ``jurisdiction_forms=False`` reads text exactly as before those forms were recognised (the
 "word reading"). Coverage applies both readings (``app.geography.engine``), so the forms
 only ever add to what an exclusion removes; display and source-text helpers keep the word
@@ -950,6 +959,58 @@ def _form_reading(parts: list[tuple[str, str]], label: str) -> MarketIdentity | 
         if both is not None:
             return _identity(words[-3] if n >= 3 else None, both.region, both.country, label)
     return _unplaceable(label, form, city=words[-3] if n >= 3 else None)
+
+
+def _subdivision_homonyms(text: str, label: str) -> list[MarketIdentity]:
+    """The Nigerian subdivision that a bare name in ``text`` may also be: the name alone
+    ("Lagos", "Niger"), before its own country ("Lagos, NG", "Kano, Nigeria"), or as the last
+    qualifier ("Minna, Niger", "Ikeja, Lagos"). A name before another country is not one
+    ("Lagos, Portugal"). Names and aliases only, from ``app.jurisdiction.subdivisions``: a
+    two-letter state code is not read here ("KE" is Kenya, never Kebbi)."""
+    words = [folded for folded, _ in _clean_parts(text)]
+    out: list[MarketIdentity] = []
+    for country, names in _JURISDICTION_REGION_NAMES.items():
+        head = names.get(words[0]) if words else None
+        before_country = len(words) == 2 and (country, None) in _area_candidates(words[1])
+        if head and (len(words) == 1 or before_country):
+            out.append(_identity(None, f"{country}:{head}", country, label))
+        last = names.get(words[-1]) if len(words) >= 2 else None
+        if last:
+            out.append(_identity(words[-2], f"{country}:{last}", country, label))
+    return out
+
+
+def exclusion_readings(
+    text: str | None,
+    *,
+    default_country: str | None = None,
+    jurisdiction_forms: bool = True,
+) -> list[MarketIdentity]:
+    """Every place an exclusion's text may name (the item-35 ruling: an exclusion removes
+    whatever the recorded geography cannot rule out): :func:`parse_market`'s reading and,
+    with jurisdiction forms,
+
+    * every area a single ambiguous name may be ("CA": Canada and California; "NE": Niger and
+      Nebraska; "Georgia"; "WA"), which :func:`parse_market` leaves unplaced. A name the tables
+      read city-first ("New York") stays the city, as ``CITY_FIRST_NAMES`` decides;
+    * each Nigerian subdivision a bare name may also be ("Lagos, NG" is also Lagos State;
+      "Niger" is also Niger State).
+
+    Only exclusions read text this way: inclusions and connector clearance use
+    :func:`parse_market` alone, so the ambiguity widens nothing they admit."""
+    reading = parse_market(
+        text, default_country=default_country, jurisdiction_forms=jurisdiction_forms
+    )
+    readings = [] if reading is None else [reading]
+    if jurisdiction_forms and text is not None:
+        label = text.strip()
+        words = [folded for folded, _ in _clean_parts(text)]
+        if len(words) == 1:
+            areas = _area_candidates(words[0])
+            if len(areas) > 1:
+                readings += [_identity(None, region, country, label) for country, region in areas]
+        readings += _subdivision_homonyms(text, label)
+    return list(dict.fromkeys(readings))
 
 
 def parse_market(

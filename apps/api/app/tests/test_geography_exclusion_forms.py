@@ -19,6 +19,10 @@ This module pins:
   read as a city;
 * a Nigerian state (or the FCT) named with its suffix removes markets in that state, and both
   parsers read it the same way, from ``app.jurisdiction.subdivisions``;
+* same-name readings (W21-REV-5DW4 r1 C-1, decided from the item-35 ruling): an exclusion of a
+  bare name that is also a Nigerian state ("Lagos, NG", "Niger") removes what either place
+  covers; an inclusion or a clearance of it admits only what it did; "Niger" and "Niger State"
+  never collapse into one another, and "Nigeria" is never a Niger place;
 * monotonicity: the word reading (``jurisdiction_forms=False``, the parser as it was) still
   applies, so no exclusion removes less than it did;
 * the named inclusion and connector-clearance change ("US-TX" now admits Texas), and that it
@@ -42,6 +46,7 @@ from app.geography.engine import CoverageRule, is_excluded, market_in_coverage, 
 from app.geography.markets import (
     MarketIdentity,
     country_name,
+    exclusion_readings,
     market_from_parts,
     market_within,
     may_overlap,
@@ -418,6 +423,188 @@ def test_nigerian_subdivisions_are_read_from_the_jurisdiction_module_only():
     assert _ident(parse_market("Niger")) == (None, None, "NE")
     # A state's name before another country is a name in that country, as before.
     assert _ident(parse_market("Delta State, US")) == ("delta state", None, "US")
+
+
+# --------------------------------------------------------------------------- #
+# Same-name readings: a bare name that is also a Nigerian state (REV-5DW4 C-1, item 35)
+# --------------------------------------------------------------------------- #
+
+HOMONYM_EXCLUSIONS = [
+    # (exclusion, home, removed: the state cannot be ruled out, kept: ruled out)
+    (
+        "Lagos, NG",
+        None,
+        ["Ikeja, Lagos, NG", "Ikeja, Lagos State, Nigeria", "Lagos, Nigeria", "Lagos, Lagos, NG"],
+        ["Lagos, Portugal", "Kano, Kano, NG", "Abeokuta, Ogun State, Nigeria", "Dallas, TX"],
+    ),
+    ("Lagos", None, ["Ikeja, Lagos State, Nigeria", "Lagos, NG"], ["Kano, Kano, NG"]),
+    ("Lagos", LAGOS, ["Ikeja, Lagos, NG", "Lagos, NG"], ["Kano, Kano, NG"]),
+    ("Kano, Nigeria", None, ["Fagge, Kano State, Nigeria", "Kano, NG"], ["Ikeja, Lagos, NG"]),
+    (
+        "Abuja, Nigeria",
+        None,
+        ["Garki, FCT, Nigeria", "Garki, Federal Capital Territory, Nigeria"],
+        ["Ikeja, Lagos, NG"],
+    ),
+    # "Niger" is the country Niger and Niger State: both are removed, and so is every Nigerian
+    # market that states no state (as a "Texas" exclusion removes "Little Rock, US").
+    (
+        "Niger",
+        None,
+        ["Niamey, Niger", "Niger State, NG", "Minna, Niger State, Nigeria", "Nigeria", "Lagos, NG"],
+        ["Kano, Kano, NG", "Ikeja, Lagos State, Nigeria", "Accra, Ghana", "Dallas, TX"],
+    ),
+    (
+        "Minna, Niger",
+        None,
+        ["Minna, Niger State, Nigeria", "Minna, NE"],
+        ["Niamey, Niger", "Kano, Kano, NG"],
+    ),
+    # The last qualifier, read in a US location's country, is also the Nigerian state.
+    ("Ikeja, Lagos", DALLAS, ["Ikeja, Lagos, NG", "Ikeja, Lagos State, Nigeria"], ["Dallas, TX"]),
+]
+
+
+@pytest.mark.parametrize(
+    ("excluded", "home", "removed", "kept"),
+    HOMONYM_EXCLUSIONS,
+    ids=[f"{e}|{h.label if h else '-'}" for e, h, _, _ in HOMONYM_EXCLUSIONS],
+)
+def test_an_ambiguous_exclusion_removes_what_either_place_covers(excluded, home, removed, kept):
+    for market in removed:
+        _assert_removed(excluded, market, home)
+    for market in kept:
+        _assert_kept(excluded, market, home)
+
+
+def test_a_name_before_another_country_or_a_state_code_is_not_a_nigerian_state():
+    """ "Lagos, Portugal" names Portugal's Lagos; "KE" is Kenya, never Kebbi (codes are not read
+    as homonyms); a suffixed state is unambiguous and has one reading."""
+    _assert_kept("Lagos, Portugal", "Ikeja, Lagos State, Nigeria")
+    _assert_kept("Lagos, Portugal", "Lagos, NG")
+    _assert_kept("KE", "Birnin Kebbi, Kebbi State, Nigeria")
+    for text in ("Lagos, Portugal", "KE", "Nigeria", "Lagos State", "Lagos, Lagos, NG"):
+        assert exclusion_readings(text) == [parse_market(text)], text
+    for text in ("KE", "LA", "ON", "KE, Kenya"):
+        assert all(r.country != "NG" for r in exclusion_readings(text)), text
+
+
+def test_niger_and_niger_state_never_collapse_and_nigeria_is_never_a_niger_place():
+    for country in (None, "NG", "NE", "US"):
+        assert _ident(parse_market("Niger", default_country=country)) == (None, None, "NE")
+        assert _ident(parse_market("Niger State", default_country=country)) == (
+            None,
+            "NG:niger",
+            "NG",
+        )
+        assert _ident(parse_market("Nigeria", default_country=country)) == (None, None, "NG")
+        assert [_ident(r) for r in exclusion_readings("Nigeria", default_country=country)] == [
+            (None, None, "NG")
+        ]
+        assert [_ident(r) for r in exclusion_readings("Niger State", default_country=country)] == [
+            (None, "NG:niger", "NG")
+        ]
+    assert _ident(parse_observed("Niger")) == (None, None, "NE")
+    assert _ident(parse_observed("Niger State")) == (None, "NG:niger", "NG")
+    assert _ident(parse_observed("Nigeria")) == (None, None, "NG")
+    # The exclusion reading of "Niger" keeps the country and adds the state.
+    assert [_ident(r) for r in exclusion_readings("Niger")] == [
+        (None, None, "NE"),
+        (None, "NG:niger", "NG"),
+    ]
+    # Niger State never reaches the country Niger, and Nigeria never reaches either Niger.
+    for excluded in ("Niger State, NG", "NG-NI", "Nigeria", "NG"):
+        for market in ("Niamey, Niger", "Niger", "Zinder, NE"):
+            _assert_kept(excluded, market)
+    for market in ("Niamey, Niger", "Zinder, NE"):
+        _assert_kept("Niger State", market)
+    for rule in (
+        CoverageRule(coverage_type="online", excluded_markets=("Niger State",), home_market=LAGOS),
+        CoverageRule(
+            coverage_type="radius",
+            online_global=True,
+            excluded_markets=("Niger State",),
+            home_market=LAGOS,
+        ),
+    ):
+        assert market_in_coverage(rule, "Niger") is True
+    # Monotonic carry-over (requirement 3; an operator decision is requested): with no
+    # location country, e3571ac8 read "Niger State" as an unqualified city "niger state",
+    # which removed every market that names no city, the bare "Niger" among them. It still
+    # does; the jurisdiction-form reading alone keeps it.
+    rule = CoverageRule(coverage_type="online", excluded_markets=("Niger State",))
+    assert market_in_coverage(rule, "Niger") is False
+    assert may_overlap(parse_observed("Niger"), parse_market("Niger State")) is False
+    # "NE" (Niger or Nebraska) removes both, and no Niger State market that names its city.
+    _assert_removed("NE", "Niamey, Niger")
+    _assert_kept("NE", "Minna, Niger State, Nigeria")
+
+
+AMBIGUOUS_NAMES = [
+    # (exclusion, removed: every place the name may be, kept)
+    ("CA", ["Toronto, ON", "Los Angeles, CA", "Vancouver, BC"], ["Dallas, TX", "London, UK"]),
+    ("NE", ["Niamey, Niger", "Omaha, NE"], ["Dallas, TX", "Kano, Kano, NG"]),
+    ("GA", ["Libreville, GA", "Atlanta, GA"], ["Dallas, TX", "Tbilisi, Georgia"]),
+    ("Georgia", ["Tbilisi, Georgia", "Atlanta, Georgia"], ["Dallas, TX", "Libreville, GA"]),
+    ("WA", ["Perth, WA", "Seattle, WA"], ["Dallas, TX", "Darwin, NT"]),
+    ("IN", ["Mumbai, India", "Indianapolis, IN"], ["Dallas, TX"]),
+    ("NT", ["Darwin, NT", "Yellowknife, NT"], ["Perth, WA"]),
+]
+
+
+@pytest.mark.parametrize(("excluded", "removed", "kept"), AMBIGUOUS_NAMES)
+def test_an_ambiguous_alpha2_code_or_name_excludes_every_place_it_may_be(excluded, removed, kept):
+    """Requirement 1 for the alpha-2 codes a US, Canadian or Australian subdivision shares, and
+    item 35 for every name with several readings: "CA" was an unqualified city "ca" that
+    removed neither Canada nor California. Every reading is now removed."""
+    for market, home in itertools.product(removed, [None, DALLAS, LAGOS]):
+        _assert_removed(excluded, market, home)
+    for market in kept:
+        _assert_kept(excluded, market)
+
+
+def test_a_city_first_name_stays_the_city_in_an_exclusion():
+    """``CITY_FIRST_NAMES`` reads "New York", "Washington" and "Quebec" as the city (the
+    narrower scope; the state is "New York State" or "NY"). Not changed here: an operator
+    decision is requested on whether an exclusion should also read the subdivision."""
+    for name in ("New York", "Washington", "Quebec"):
+        assert exclusion_readings(name) == [parse_market(name)], name
+    _assert_kept("New York", "Buffalo, New York, USA")
+    _assert_kept("New York", "York")
+
+
+def test_an_ambiguous_inclusion_still_admits_only_what_it_did():
+    """No widening: "CA" alone is still read once (unplaced, or in the location's country)."""
+    bare = CoverageRule(coverage_type="radius", included_markets=("CA",))
+    for market in ("Toronto, ON", "Los Angeles, CA"):
+        assert market_in_coverage(bare, market) is False
+    us = CoverageRule(coverage_type="radius", included_markets=("CA",), home_market=DALLAS)
+    assert market_in_coverage(us, "Los Angeles, CA") is True
+    assert market_in_coverage(us, "Toronto, ON") is False
+    policy = ConnectorPolicy(source_type="rss_news", enabled=True, allowed_markets={"CA"})
+    assert not policy.permits(source_types=(), market="Toronto, ON")
+
+
+@pytest.mark.parametrize(
+    ("included", "admitted", "refused"),
+    [
+        ("Lagos, NG", ["Lagos, NG", "Lagos, Nigeria"], ["Ikeja, Lagos, NG", "Lagos State"]),
+        ("Niger", ["Niamey, Niger"], ["Nigeria", "Niger State, NG", "Minna, Niger State, NG"]),
+        ("Kano, Nigeria", ["Kano, NG"], ["Fagge, Kano State, Nigeria"]),
+        ("Niger State", ["Minna, Niger State, Nigeria"], ["Niamey, Niger", "Niger", "Nigeria"]),
+    ],
+)
+def test_an_ambiguous_inclusion_or_clearance_admits_only_what_it_did(included, admitted, refused):
+    """No widening from ambiguity: an inclusion and a connector clearance read a bare name once,
+    as before (the suffixed state is the named jurisdiction-form change)."""
+    rule = CoverageRule(coverage_type="radius", included_markets=(included,))
+    policy = ConnectorPolicy(source_type="rss_news", enabled=True, allowed_markets={included})
+    for market in admitted:
+        assert market_in_coverage(rule, market) is True, (included, market)
+        assert policy.permits(source_types=(), market=market), (included, market)
+    for market in refused:
+        assert market_in_coverage(rule, market) is False, (included, market)
+        assert not policy.permits(source_types=(), market=market), (included, market)
 
 
 # --------------------------------------------------------------------------- #
