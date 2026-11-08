@@ -342,6 +342,38 @@ describe('editing sends only what changed (PATCH)', () => {
     expect(screen.getByRole('button', { name: /save/i })).toBeDisabled();
     expect(writes).toHaveLength(0);
   });
+
+  it('a cleared goal is sent as null, which clears it', async () => {
+    // `CampaignPatch.goal` is nullable: null clears it (P6-PLAT-9); an empty string would be
+    // stored as a goal.
+    const screen = renderAt(`/campaigns/${CAMPAIGN_A}`);
+    await edit(screen);
+    await screen.user.clear(screen.getByRole('textbox', { name: /goal/i }));
+    await save(screen);
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]).toEqual({ method: 'PATCH', id: CAMPAIGN_A, body: { goal: null } });
+  });
+
+  it('a deactivated location that is already a member is offered, ticked and removable; a deactivated non-member is not offered', async () => {
+    // W1's rule (campaign_context/location_refs.py, validate_location_ids): a deactivated
+    // location may stay a member of a campaign, but cannot be newly added to one.
+    rows[1]!.location_ids = [LOC_DEPOT];
+    const screen = renderAt(`/campaigns/${CAMPAIGN_B}`);
+    await openDetail(screen, 'Autumn fair');
+    await screen.user.click(screen.getByRole('button', { name: /edit/i }));
+    const depot = await screen.findByRole('checkbox', { name: /old depot/i });
+    expect(depot).toBeChecked();
+    await screen.user.click(depot);
+    await save(screen);
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]).toEqual({ method: 'PATCH', id: CAMPAIGN_B, body: { location_ids: [] } });
+    screen.unmount();
+
+    const other = renderAt(`/campaigns/${CAMPAIGN_A}`);
+    await edit(other);
+    await other.findByRole('checkbox', { name: /uptown store/i });
+    expect(other.queryByRole('checkbox', { name: /old depot/i })).not.toBeInTheDocument();
+  });
 });
 
 describe('deleting', () => {
@@ -523,6 +555,52 @@ describe('saving a change', () => {
     await screen.user.click(within(dialog).getByRole('button', { name: /add campaign/i }));
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('A deactivated location cannot be added.');
     expect(rows).toHaveLength(2);
+  });
+
+  it('a create refused with 403 or 404 says something specific in the dialog, never a retry', async () => {
+    const messages = new Map<string, string>();
+    for (const [status, respond] of [
+      ['403', () => refusal(403, 'permission_denied', 'Insufficient role.')],
+      ['404', () => refusal(404, 'not_found', 'Location not found in this workspace.')],
+    ] as const) {
+      server.use(http.post(LIST, respond));
+      const screen = renderAt('/campaigns');
+      await screen.findByRole('list', { name: /campaigns/i });
+      await screen.user.click(screen.getByRole('button', { name: /new campaign/i }));
+      const dialog = await screen.findByRole('dialog');
+      await screen.user.type(within(dialog).getByRole('textbox', { name: /name/i }), 'Refused');
+      await screen.user.click(within(dialog).getByRole('button', { name: /add campaign/i }));
+      const text = (await within(dialog).findByRole('alert')).textContent ?? '';
+      expect(text, status).not.toMatch(/try again/i);
+      messages.set(status, text);
+      screen.unmount();
+    }
+    // A create names no campaign: its 404 is the workspace's or a location's, so the API's
+    // own reason is what tells the person which.
+    expect(messages.get('404')).toContain('Location not found in this workspace.');
+    expect(messages.get('403')).not.toBe(messages.get('404'));
+    expect(rows).toHaveLength(2);
+  });
+
+  it('a delete refused with 403 says so, not as a missing campaign and not as a retry', async () => {
+    server.use(http.delete(ITEM, () => refusal(403, 'permission_denied', 'Insufficient role.')));
+    const screen = renderAt(`/campaigns/${CAMPAIGN_A}`);
+    await openDetail(screen, 'Spring opening');
+    await screen.user.click(screen.getByRole('button', { name: /delete/i }));
+    await screen.user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: /delete/i }));
+    await waitFor(() => expect(screen.getAllByRole('alert').length).toBeGreaterThan(0));
+    const forbidden = alertText(screen);
+    expect(forbidden).not.toMatch(/try again/i);
+    screen.unmount();
+
+    server.use(http.delete(ITEM, () => notFound()));
+    const gone = renderAt(`/campaigns/${CAMPAIGN_A}`);
+    await openDetail(gone, 'Spring opening');
+    await gone.user.click(gone.getByRole('button', { name: /delete/i }));
+    await gone.user.click(within(await gone.findByRole('dialog')).getByRole('button', { name: /delete/i }));
+    await waitFor(() => expect(gone.getAllByRole('alert').length).toBeGreaterThan(0));
+    expect(alertText(gone)).not.toBe(forbidden);
+    expect(rows.map((r) => r.id)).toContain(CAMPAIGN_A);
   });
 
   it('a delete of a campaign already gone says so, not a generic failure', async () => {
