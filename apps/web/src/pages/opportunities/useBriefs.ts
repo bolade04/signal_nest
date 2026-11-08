@@ -104,11 +104,21 @@ export function useCreateBrief({
       });
       toast({ title: `Brief version ${brief.brief_version} saved`, intent: 'success' });
     },
-    onError: (err) =>
+    onError: (err) => {
+      // 5D-W3 (Q-1 phase): the brief panel answers jurisdiction_unresolved with its own inline
+      // message; that is the one message, so no toast. Every other failure keeps this toast.
+      if (isJurisdictionUnresolved(err)) return;
       toast({
         title: 'No brief was saved',
         description: err instanceof Error ? err.message : undefined,
         intent: 'error',
-      }),
+      });
+    },
   });
+}
+
+function isJurisdictionUnresolved(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return false;
+  const detail = error.detail as { error?: { code?: string } } | null;
+  return detail?.error?.code === 'jurisdiction_unresolved';
 }
