@@ -1038,10 +1038,15 @@ def _single_name_readings(
         areas += [area for area in _homonym_areas(word) if area not in areas]
     if len(areas) > 1:
         # X-1, X-2: a name with several areas ("CA", "NE", "Georgia", "Niger") is each of them,
-        # never an unqualified city; the location's country narrows them.
-        return [
+        # never an unqualified city; the location's country narrows them, but only to readings
+        # the text already had for that location (W21-REV-5DW2FIX r2 C-2: "Niger" for a Nigerian
+        # location stays the country Niger too, and is Niger State as well).
+        narrowed = [
             _identity(None, region, code, label) for code, region in _narrow(areas, None, country)
         ]
+        if not observed and primary is not None and primary.country and primary.city is None:
+            narrowed.append(primary)
+        return narrowed
     if areas:
         # X-4 and X-1: one area and a place: "New York" is the city and the state, "Lagos" the
         # city and the state, and a subdivision the location's country re-read as a local place
@@ -1113,6 +1118,14 @@ def _readings(text: str | None, country: str | None, *, observed: bool) -> list[
                 readings.append(_identity(form.city, None, stated.country, label))
         elif _may_be_a_place_name(form.region, form.country):
             readings.append(_parse(text, country, qualify=qualify, known=None, forms=False))
+        elif not observed and _unplaced(form.region):
+            # Not an explicit valid identifier, so its geography stays ambiguous (X-1,
+            # conservative): an unplaceable code ("GA-400", "AL-69" for a US location) keeps a
+            # word reading that names an area (Georgia, Alabama), never a city misreading
+            # ("US-ZZ" is no city "us zz"). W21-REV-5DW2FIX r2 C-1.
+            word = _parse(text, country, qualify=True, known=None, forms=False)
+            if word is not None and word.country is not None and word.city is None:
+                readings.append(word)
         return list(dict.fromkeys(r for r in readings if r is not None))
     primary = _parse(text, country, qualify=qualify, known=None, forms=True)
     words = [folded for folded, _ in cleaned]
@@ -1145,7 +1158,11 @@ def exclusion_readings(
       and the country the text names. An upper-case code of a country whose subdivisions are
       not listed ("AL-AIN") keeps its word reading too: it may be a place name.
     * X-1, X-2: a single name with several areas ("CA", "NE", "Georgia", "Niger") is each of
-      them, never an unqualified city; place knowledge and the location's country narrow them.
+      them, never an unqualified city; place knowledge and the location's country narrow them,
+      but never below the reading the text had for that location ("Niger" for a Nigerian
+      location is the country Niger and Niger State; "CA" for a US location is California).
+    * an unplaceable code ("US-ZZ", "GA-400") is its country, and also the area its words name
+      for the location ("GA-400" for a US location is Georgia too).
     * X-2: "<city>, Niger" is the country or Niger State, narrowed the same way.
     * X-4: "New York", "Washington", "Quebec" are the city and the state or province; "New York
       City", "New York, NY", "New York State" and "NY" are the one they name.

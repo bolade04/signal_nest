@@ -745,6 +745,28 @@ def test_x1_a_code_that_may_be_a_place_name_keeps_both_readings():
     assert _online_only("AL-AIN", "Dubai, AE", AL_AIN) is True
 
 
+def test_x1_an_unplaceable_code_keeps_a_word_reading_that_names_an_area():
+    """W21-REV-5DW2FIX r2 C-1: an unplaceable code is not an explicit valid identifier, so its
+    geography stays ambiguous (X-1, conservative). A US location's state-route text ("GA-400",
+    "CA-1", "AL-69") is also the state its words name there; never a city misreading."""
+    for excluded, market in (
+        ("GA-400", "Atlanta, GA"),
+        ("CA-1", "Los Angeles, CA"),
+        ("AL-69", "Birmingham, Alabama"),
+        ("AL-69", "Tuscaloosa, AL"),
+        ("PA-611", "Philadelphia, PA"),
+    ):
+        assert _online_only(excluded, market, DALLAS) is False, (excluded, market)
+    # The code's own country is still excluded, and nothing else.
+    assert _online_only("GA-400", "Libreville, GA", DALLAS) is False
+    assert _online_only("GA-400", "Seattle, WA", DALLAS) is True
+    # With no location the words name no area, so only the code's country applies.
+    assert _online_only("GA-400", "Atlanta, GA") is True
+    assert _online_only("GA-400", "Libreville, GA") is False
+    # "US-ZZ" names no area in words: still never a market identified as Kenya.
+    assert _online_only("US-ZZ", "Kenya", DALLAS) is True
+
+
 def test_x1_a_contradicted_code_is_its_country_and_the_country_its_text_names():
     for observed in ("Dallas, TX", "Houston, Texas", "Toronto, ON", "Canada"):
         assert _online_only("US-TX, Canada", observed) is False, observed
@@ -812,11 +834,25 @@ def test_x2_a_known_country_constrains_the_readings():
     # ... and with no known country it is both.
     assert _online_only("Minna, Niger", "Minna, NE") is False
     assert _online_only("Minna, Niger", "Minna, Niger State, Nigeria") is False
-    # A bare "Niger" in a location's own country context is that country's reading only.
+    # A bare "Niger" for a location in Niger is the country only. For a Nigerian location it
+    # is both (W21-REV-5DW2FIX r2 C-2: the location's country narrows a bare name only to
+    # readings it already had there, and the country Niger was one; X-2 "may cover both").
     assert _online_only("Niger", "Niamey, Niger", NIGER_HOME) is False
     assert _online_only("Niger", "Minna, Niger State, Nigeria", NIGER_HOME) is True
-    assert _online_only("Niger", "Minna, Niger State, Nigeria", LAGOS) is False
-    assert _online_only("Niger", "Niamey, Niger", LAGOS) is True
+    for market in ("Minna, Niger State, Nigeria", "Niamey, Niger", "Zinder, NE", "Maradi, Niger"):
+        assert _online_only("Niger", market, LAGOS) is False, market
+    assert {_ident(r) for r in exclusion_readings("Niger", default_country="NG")} == {
+        (None, None, "NE"),
+        (None, "NG:niger", "NG"),
+    }
+    # A narrowing that reproduces the location's own reading stays: "CA" for a US location
+    # is California, "Georgia" the US state.
+    assert [_ident(r) for r in exclusion_readings("CA", default_country="US")] == [
+        (None, "US-CA", "US")
+    ]
+    assert [_ident(r) for r in exclusion_readings("Georgia", default_country="US")] == [
+        (None, "US-GA", "US")
+    ]
     # "Nigeria" is never read as a Niger place.
     assert [_ident(r) for r in exclusion_readings("Nigeria")] == [(None, None, "NG")]
     assert [_ident(r) for r in observed_readings("Nigeria")] == [(None, None, "NG")]
