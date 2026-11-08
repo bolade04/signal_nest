@@ -258,26 +258,25 @@ def test_an_unreadable_market_is_removed_by_any_exclusion_even_online(limb):
 # --------------------------------------------------------------------------- #
 # 3. "York" is not "New York", in both directions, on every gating path
 # --------------------------------------------------------------------------- #
-#: (short, long, whether a ``long`` exclusion must still admit ``short``). X-4 (operator,
-#: 2026-11-08): an unqualified "New York" exclusion covers the city and the state, and a bare
-#: "York" names no country (ambiguous geography), so that one direction is not asserted for the
-#: unqualified "New York" spellings. "York" never removes "New York", in every spelling.
+#: (short, long): neither excludes the other, in either direction. Case and width variants are
+#: qualified, so their geography is unambiguous. The unqualified pair ("York" against "New York",
+#: in any spelling) is asserted at this battery's rebase onto a main containing lane 5DW2FIX, in
+#: whichever direction its implementation of X-1, X-3 and X-4 decides (operator, 2026-11-08: an
+#: unqualified "New York" is a city/state ambiguity, and a bare "York" names no country).
 YORK_PAIRS = [
-    ("York", "New York", False),
-    ("YORK", "NEW YORK", False),
-    ("ｙｏｒｋ", "New York", False),  # full-width york
-    ("York, UK", "New York, NY", True),
-    ("York, England, UK", "New York, New York, USA", True),
-    ("York", "New York, NY", True),
+    ("York, UK", "New York, NY"),
+    ("YORK, UK", "NEW YORK, NY"),
+    ("ｙｏｒｋ, UK", "New York, NY"),  # full-width york
+    ("York, England, UK", "New York, New York, USA"),
+    ("York", "New York, NY"),
 ]
 
 
-@pytest.mark.parametrize(("short", "long", "reverse"), YORK_PAIRS)
+@pytest.mark.parametrize(("short", "long"), YORK_PAIRS)
 @pytest.mark.parametrize("limb", range(3), ids=_LIMBS)
-def test_york_does_not_exclude_new_york_nor_the_reverse(limb, short, long, reverse):
+def test_york_does_not_exclude_new_york_nor_the_reverse(limb, short, long):
     assert market_in_coverage(_online([short])[limb], long) is True
-    if reverse:
-        assert market_in_coverage(_online([long])[limb], short) is True
+    assert market_in_coverage(_online([long])[limb], short) is True
 
 
 @pytest.mark.parametrize("excluded", ["New York", "NEW YORK", "ＮＥＷ ＹＯＲＫ", "New York, NY"])

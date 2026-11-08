@@ -631,7 +631,7 @@ def test_q2_the_report_command_runs_read_only_against_a_database(env) -> None:
 # * **Q-1, ruled 2026-11-08 (immutable jurisdiction):** "A draft inherits its brief's captured
 #   jurisdiction. Editing the location does not alter existing brief, draft or review snapshots.
 #   A new brief version is needed to use the changed location's jurisdiction."
-#   (``test_q1_default_*`` below);
+#   (``test_q1_ruled_*`` below);
 # * the claims engine is given the draft's code at the three sites (B-3 rows), and a legacy
 #   draft with no code gets B-2's fail-closed reading at the approval re-check.
 #
@@ -745,7 +745,7 @@ def test_each_matrix_city_is_snapshotted_on_the_brief_the_draft_and_the_review(
     assert _review(world, draft["id"])["jurisdiction_code"] == code
 
 
-def test_q1_default_a_draft_keeps_its_briefs_code_after_the_location_moves(
+def test_q1_ruled_a_draft_keeps_its_briefs_code_after_the_location_moves(
     snapshot_world, generation_on
 ) -> None:
     """Q-1, ruled 2026-11-08 (immutable jurisdiction): a draft inherits its brief's captured
