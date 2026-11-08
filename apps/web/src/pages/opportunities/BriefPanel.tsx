@@ -1,5 +1,6 @@
 import { FileText, Sparkles } from 'lucide-react';
 import { useState } from 'react';
+import { ApiError } from '@/api/client';
 import type { RecommendationBriefOut } from '@/api/types';
 import { ErrorState } from '@/components/common/states';
 import { Badge } from '@/components/ui/badge';
@@ -32,6 +33,34 @@ export function briefAuthorName(snapshot: string): string {
   const withoutId = snapshot.replace(/^\S+\s+/, '');
   const name = withoutId.replace(/\s*<[^<>]*>$/, '').trim();
   return name || 'Unknown author';
+}
+
+/**
+ * Operator ruling Q-1 (2026-11-08): a draft inherits its brief's captured jurisdiction;
+ * editing the location changes no existing brief, draft or review; a new brief version is
+ * needed to use a changed location. Said where a version's drafts are opened. No jurisdiction
+ * code is shown: briefs do not expose one.
+ */
+const DRAFT_JURISDICTION_NOTE =
+  'Drafts from this version use the jurisdiction recorded when this version was created. ' +
+  'Editing the location does not change existing briefs, drafts or reviews. To use a changed ' +
+  'location, generate a new version first.';
+
+/**
+ * The brief capture's `jurisdiction_unresolved` refusal (5D-W3; S1-5D capture rule): one
+ * wording that is true whether the location lacks a country or a state or province, or its
+ * address names another place. Static copy, never the server's text.
+ */
+const JURISDICTION_UNRESOLVED_MESSAGE =
+  'No brief was generated because the jurisdiction of this opportunity’s location could not ' +
+  'be determined. Complete or correct the location’s details so that its country, its state ' +
+  'or province (where the country has them) and its address all name the same place, then ' +
+  'generate the brief again.';
+
+function isJurisdictionUnresolved(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return false;
+  const detail = error.detail as { error?: { code?: string } } | null;
+  return detail?.error?.code === 'jurisdiction_unresolved';
 }
 
 function ListSection({ title, items }: { title: string; items: string[] }) {
@@ -176,11 +205,14 @@ function BriefPanelBody({
               }}
             />
             {creative.isEnabled ? (
-              <Button size="sm" variant="outline" asChild>
-                <Link to={`/creative/${shown.id}?opportunity=${encodeURIComponent(opportunityId)}`}>
-                  Open drafts
-                </Link>
-              </Button>
+              <div className="space-y-1.5">
+                <Button size="sm" variant="outline" asChild>
+                  <Link to={`/creative/${shown.id}?opportunity=${encodeURIComponent(opportunityId)}`}>
+                    Open drafts
+                  </Link>
+                </Button>
+                <p className="text-xs text-muted-foreground">{DRAFT_JURISDICTION_NOTE}</p>
+              </div>
             ) : null}
           </>
         ) : (
@@ -231,6 +263,11 @@ function BriefPanelBody({
               <p className="text-xs text-muted-foreground">
                 A brief needs this opportunity&apos;s signal intelligence, which is not available
                 yet.
+              </p>
+            ) : null}
+            {create.isError && isJurisdictionUnresolved(create.error) ? (
+              <p role="alert" className="text-sm text-destructive">
+                {JURISDICTION_UNRESOLVED_MESSAGE}
               </p>
             ) : null}
           </div>

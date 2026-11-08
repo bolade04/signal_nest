@@ -61,10 +61,28 @@ function errorCode(error: unknown): string | null {
   return detail?.error?.code ?? null;
 }
 
+/**
+ * Operator ruling Q-1 (2026-11-08), said on the generate path: a draft inherits its brief's
+ * captured jurisdiction; editing the location changes no existing brief, draft or review; a
+ * new brief version is needed to use a changed location. No jurisdiction code is shown.
+ */
+const DRAFT_JURISDICTION_NOTE =
+  'Drafts use the jurisdiction recorded when this brief version was created. Editing the ' +
+  'location does not change existing briefs, drafts or reviews. To use a changed location, ' +
+  'generate a new brief version from the opportunity first.';
+
 function requestFailureMessage(error: unknown): string {
   switch (errorCode(error)) {
     case 'brief_not_approved':
       return 'Approve this brief before generating drafts from it.';
+    // S1-5D item 31 (5D-W3, review r1 F-2): a brief written before jurisdictions were
+    // recorded. Repeating the request cannot succeed; a new brief version can.
+    case 'brief_jurisdiction_missing':
+      return (
+        'This brief version was created before jurisdictions were recorded, so no draft can ' +
+        'be generated from it. Generate a new brief version from the opportunity, then generate ' +
+        'drafts from that version.'
+      );
     case 'creative_generation_unconfigured':
     case 'capability_unavailable':
       return 'Draft generation is not available right now.';
@@ -171,6 +189,7 @@ function DraftsInner({
 
       {canGenerate && (
         <div className="space-y-2">
+          <p className="text-xs text-muted-foreground">{DRAFT_JURISDICTION_NOTE}</p>
           <DraftEditor selected={selected} busy={generating} onGenerate={onGenerate} />
           {generating && (
             <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
