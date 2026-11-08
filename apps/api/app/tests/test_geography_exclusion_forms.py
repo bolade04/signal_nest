@@ -921,6 +921,14 @@ def test_x4_an_unqualified_york_cannot_be_ruled_out_of_new_york_state():
     assert _online_only("New York State", "York") is False
     assert _online_only("New York City", "York") is True
     assert _online_only("New York, NY", "York") is True
+    # The same rule the other way (X-3): an observed bare "New York" may be the state, and an
+    # excluded York that names no country cannot be ruled out of it. A York that states its
+    # country, or a location outside the US, rules it out.
+    assert _online_only("York", "New York") is False
+    assert _online_only("York", "New York", LONDON) is True
+    for york in ("York, UK", "York, GB", "York, England, UK"):
+        assert _online_only(york, "New York") is True, york
+    assert _online_only("York", "New York, NY") is True
 
 
 def test_x5_no_state_is_invented_for_a_market_that_names_none():
