@@ -852,3 +852,66 @@ describe('claims library controls are steward-only (W21 CF-2)', () => {
     for (const add of within(panel).getAllByRole('button', { name: /^add claim$/i })) expect(add).toBeEnabled();
   });
 });
+
+// =====================================================================================
+// Project Phase 5D-W4 (phase 3), appended: the Campaigns tab under 5D's campaign contract.
+// CampaignContext.tsx is unchanged by 5D-W3. This pins only what 5d §2 requires of it now
+// that the dedicated campaigns router answers its list: a campaign's location mode comes from
+// the closed CampaignMode (read from the generated contract), and no tenant field, nor a
+// jurisdiction the campaign does not have, is shown even when an answer carries one.
+// =====================================================================================
+describe('the campaigns tab under the 5D campaign contract (5D-W4)', () => {
+  beforeEach(() => {
+    orgModel.reset();
+    contextModel.reset();
+  });
+
+  it('offers exactly the contract location modes, sends one of them, and shows no echoed tenant field', async () => {
+    const echoed = { organization_id: 'org-echo-31c8d0', workspace_id: 'ws-echo-8e2b47', jurisdiction_code: 'ZZ-QQ' };
+    const posted: Record<string, unknown>[] = [];
+    server.use(
+      http.get(`${API_PREFIX}/workspaces/:ws/campaigns`, () =>
+        HttpResponse.json(
+          [
+            {
+              id: 'cmp-ctx-e1',
+              brand_id: 'brand-1',
+              name: 'Echoed campaign',
+              goal: null,
+              mode: 'grouped',
+              status: 'active',
+              location_ids: [],
+              created_at: '2026-11-01T00:00:00Z',
+              updated_at: '2026-11-01T00:00:00Z',
+              ...echoed,
+            },
+          ],
+          { headers: { 'X-Total-Count': '1' } },
+        ),
+      ),
+      http.post(`${API_PREFIX}/workspaces/:ws/campaigns`, async ({ request }) => {
+        const body = (await request.json()) as Record<string, unknown>;
+        posted.push(body);
+        return HttpResponse.json({ id: 'cmp-ctx-new', brand_id: 'brand-1', ...body }, { status: 201 });
+      }),
+    );
+    const screen = renderApp(<App />, { route: '/context' });
+    const panel = await openTab(screen, 'Campaigns');
+    await within(panel).findByText('Echoed campaign');
+    for (const value of Object.values(echoed)) expect(panel.textContent, value).not.toContain(value);
+
+    const modes = OPENAPI.components.schemas.CampaignMode?.enum ?? [];
+    expect(modes.length).toBeGreaterThan(1);
+    await screen.user.click(within(panel).getAllByRole('button', { name: /^add campaign$/i })[0]!);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).queryByRole('textbox', { name: /location mode/i })).not.toBeInTheDocument();
+    await screen.user.click(within(dialog).getByRole('combobox', { name: /location mode/i }));
+    const options = within(await screen.findByRole('listbox')).getAllByRole('option');
+    expect(options).toHaveLength(modes.length);
+    await screen.user.click(options[options.length - 1]!);
+    await screen.user.type(within(dialog).getByRole('textbox', { name: /^name/i }), 'Mode check');
+    await screen.user.click(within(dialog).getByRole('button', { name: /^(save|add)/i }));
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(modes).toContain(posted[0]!.mode);
+  });
+});
