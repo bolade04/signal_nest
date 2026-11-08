@@ -869,3 +869,31 @@ def test_the_approval_recheck_reads_the_library_in_the_drafts_jurisdiction(
     assert _refusal(world, legacy["id"]) == "disclaimer_missing"  # B-2
     _restricted(world, disclaimers, "weekend parking", "blocked", ["US"])
     assert _refusal(world, texan["id"]) == "blocked_claim"  # B-3: US applies to US-TX
+
+
+def test_b2_at_the_service_a_legacy_draft_gets_every_restricted_entry(
+    snapshot_world, generation_on
+) -> None:
+    """B-2 at the approval re-check, at the service (``draft_approval_refusal``, which the 5B
+    approval service calls): a draft whose ``jurisdiction_code`` is NULL (written before 5D-W3)
+    is refused by a jurisdiction-restricted blocked entry and by a jurisdiction-restricted
+    disclaimer it does not carry, whatever jurisdiction they are restricted to; a restricted
+    approved entry changes nothing for it."""
+    world = snapshot_world
+    table = CreativeDraft.__table__
+    for kind, text, codes, expected in (
+        ("blocked", "weekend parking", ["NG-LA"], "blocked_claim"),
+        ("prohibited", "weekend parking", ["KE"], "blocked_claim"),
+        ("required_disclaimer", "Licensed in Lagos State.", ["NG-LA"], "disclaimer_missing"),
+        ("approved", "Family run since 1998", ["GB"], None),
+    ):
+        ws = world.workspace(f"b2 service {kind}")
+        legacy = _generate(world, ws, world.seed_brief(ws, jurisdiction_code="US-TX"))
+        with world.witness.begin() as conn:
+            conn.execute(
+                update(table).where(table.c.id == legacy["id"]).values(jurisdiction_code=None)
+            )
+        assert world.row(CreativeDraft, legacy["id"])["jurisdiction_code"] is None
+        assert _refusal(world, legacy["id"]) is None  # the library is empty so far
+        _restricted(world, ws, text, kind, codes)
+        assert _refusal(world, legacy["id"]) == expected, kind

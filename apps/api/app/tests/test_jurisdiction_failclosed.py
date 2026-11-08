@@ -686,6 +686,7 @@ def evidence(
     location: dict | None,
     addresses: tuple[str, ...] = (),
     location_ws: str | None = None,
+    location_org: str | None = None,
 ) -> tuple[str, str, str | None]:
     """One opportunity and its intelligence record in ``ws``, bound to a new location (in
     ``location_ws``, default ``ws``) with a coverage rule per address; ``location=None`` binds
@@ -697,7 +698,10 @@ def evidence(
         location_id = None
         if location is not None:
             home = location_ws or ws
-            home_scoped = {"organization_id": world.org_of(home), "workspace_id": home}
+            home_scoped = {
+                "organization_id": location_org or world.org_of(home),
+                "workspace_id": home,
+            }
             location_id = f"lo{tag}"
             s.add(
                 BusinessLocation(
@@ -832,8 +836,23 @@ UNRESOLVED_CAPTURES = [
         (),
         "ws_b",
     ),
+    # Every coverage rule is read: the first agrees, the second states another state.
+    (
+        "a second coverage rule that conflicts",
+        {"city": "Quillbrook", "state_province": "TX", "country": "US"},
+        ("Austin, TX", "Tulsa, OK"),
+        None,
+    ),
+    # A location row in this workspace that names another organization: not the
+    # opportunity's location, so treated as no location.
+    (
+        "a location row of this workspace naming another organization",
+        {"city": "Quillbrook", "state_province": "TX", "country": "US"},
+        (),
+        "row_of_org_b",
+    ),
 ]
-_LOCATION_TEXT = ("Quillbrook", "Quillshire", "Quillandia", "Tulsa")
+_LOCATION_TEXT = ("Quillbrook", "Quillshire", "Quillandia", "Tulsa", "Austin")
 
 
 @pytest.mark.parametrize(
@@ -846,16 +865,23 @@ def test_an_unresolved_location_refuses_the_brief_before_any_model_or_budget_use
 ):
     world = capture_world
     ws = world.workspace(f"refuse {case[:30]}")
-    location_ws = getattr(world, where) if where else None
+    location_ws = getattr(world, where) if where in ("ws2", "ws_b") else None
+    location_org = world.org_b if where == "row_of_org_b" else None
     opp, record, _location_id = evidence(
-        world, ws, location=location, addresses=addresses, location_ws=location_ws
+        world,
+        ws,
+        location=location,
+        addresses=addresses,
+        location_ws=location_ws,
+        location_org=location_org,
     )
     with caplog.at_level(logging.INFO):
         r = capture(world, ws, opp, record)
     assert r.status_code == 422, (case, r.text)
     error = r.json()["error"]
     assert error["code"] == "jurisdiction_unresolved"
-    assert error["message"] == brief_service.JURISDICTION_UNRESOLVED_MESSAGE  # one fixed answer
+    # The wording is not pinned (it may be reworded); that it is one fixed answer is, below.
+    assert isinstance(error["message"], str) and error["message"].strip()
     # Nothing was guessed, called, budgeted or stored.
     assert model.requests == [] and budget_checks == []
     assert world.count(RecommendationBrief, opportunity_id=opp) == 0
@@ -869,6 +895,41 @@ def test_an_unresolved_location_refuses_the_brief_before_any_model_or_budget_use
         rec for rec in caplog.records if rec.getMessage() == "recommendation_brief_not_generated"
     ]
     assert refusals and refusals[-1].extra_fields["outcome"] == "refused"
+
+
+def test_every_unresolved_capture_gets_one_fixed_answer(capture_world, phase5_on) -> None:
+    """Whatever made the location unresolvable, the answer is the same: it cannot reveal which
+    fact was missing or wrong (no resolver evidence)."""
+    world = capture_world
+    ws = world.workspace("refuse fixed answer")
+    answers = set()
+    for _case, location, addresses, _where in UNRESOLVED_CAPTURES[:6]:
+        opp, record, _ = evidence(world, ws, location=location, addresses=addresses)
+        r = capture(world, ws, opp, record)
+        assert r.status_code == 422, r.text
+        error = r.json()["error"]
+        answers.add((error["code"], error["message"]))
+    assert len(answers) == 1
+
+
+def test_a_deleted_location_refuses_the_brief_as_no_location(
+    capture_world, phase5_on, model, budget_checks
+) -> None:
+    """A record whose location was deleted after it was written (``location_id`` is SET NULL
+    by the foreign key): no location, so no jurisdiction, so no brief."""
+    world = capture_world
+    ws = world.workspace("refuse deleted location")
+    fields, address, _code = MATRIX_LOCATIONS["dallas"]
+    opp, record, location_id = evidence(world, ws, location=fields, addresses=(address,))
+    with world.session() as s:
+        s.delete(s.get(BusinessLocation, location_id))
+    assert world.row(SignalIntelligenceRecord, record)["location_id"] is None
+    r = capture(world, ws, opp, record)
+    assert r.status_code == 422, r.text
+    assert r.json()["error"]["code"] == "jurisdiction_unresolved"
+    assert model.requests == [] and budget_checks == []
+    assert world.count(RecommendationBrief, opportunity_id=opp) == 0
+    assert _ledger(world, ws) == (0, 0, 0)
 
 
 def test_a_resolved_location_is_captured_and_only_then_budgeted_and_called(
@@ -992,6 +1053,24 @@ def test_item_31_the_generate_route_refuses_and_enqueues_nothing(
     assert world.count(CreativeDraft, brief_id=control) == 1
 
 
+def test_item_31_is_checked_before_approval_at_the_generate_route(
+    capture_world, phase5_on, model
+) -> None:
+    """An unapproved legacy brief is refused for its missing jurisdiction, not for approval:
+    approving it cannot cure it (a new version can)."""
+    world = capture_world
+    ws = world.workspace("item 31 gate order")
+    legacy = world.seed_brief(ws, approved=False, jurisdiction_code=None)
+    r = world.generate(legacy, ws=ws)
+    assert r.status_code == 422, r.text
+    assert r.json()["error"]["code"] == "brief_jurisdiction_missing"
+    # The control: an unapproved brief that has a code meets the approval gate instead.
+    pending = world.generate(world.seed_brief(ws, approved=False), ws=ws)
+    assert pending.status_code == 422, pending.text
+    assert pending.json()["error"]["code"] == "brief_not_approved"
+    assert _jobs_for(world, ws) == 0 and model.requests == []
+
+
 @pytest.mark.parametrize("stored", NOT_CAPTURED, ids=repr)
 def test_item_31_the_job_refuses_a_brief_nulled_between_enqueue_and_run(
     capture_world, phase5_on, model, stored
@@ -1024,3 +1103,34 @@ def test_item_31_the_job_refuses_a_brief_nulled_between_enqueue_and_run(
             ).scalar_one()
             == 0
         )
+
+
+def test_item_31_the_job_refusal_is_terminal_and_releases_the_generation_locks(
+    capture_world, phase5_on, model
+) -> None:
+    """The refused job fails once and for all (VALIDATION, never retried), and the generation
+    locks it took (organization, global, workspace on PostgreSQL) end with its transaction: a
+    second job in the same workspace runs right after it."""
+    world = capture_world
+    ws = world.workspace("item 31 terminal")
+    legacy = world.seed_brief(ws, jurisdiction_code="US-TX")
+    refused = world.generate(legacy, ws=ws).json()["job_id"]
+    table = RecommendationBrief.__table__
+    with world.witness.begin() as conn:
+        conn.execute(update(table).where(table.c.id == legacy).values(jurisdiction_code=None))
+    world.drain()
+    job = world.job(refused)
+    assert (job["status"], job["last_error_code"], job["attempt_count"]) == (
+        "failed",
+        "validation",
+        1,
+    )
+    other = world.seed_brief(ws, jurisdiction_code="US-TX")
+    ran = world.generate(other, ws=ws).json()["job_id"]
+    world.drain()
+    assert world.job(ran)["status"] == "succeeded"
+    assert world.count(CreativeDraft, brief_id=other) == 1
+    assert len(model.requests) == 1  # the second job's call only
+    again = world.job(refused)  # still terminal: no retry was scheduled or run
+    assert (again["status"], again["attempt_count"]) == ("failed", 1)
+    assert world.count(CreativeDraft, brief_id=legacy) == 0
