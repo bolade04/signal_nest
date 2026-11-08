@@ -628,9 +628,10 @@ def test_q2_the_report_command_runs_read_only_against_a_database(env) -> None:
 #
 # * a brief captured through the 5A route stores its location's code, for each matrix city;
 #   its draft and that draft's review carry the same code;
-# * **Q-1 (the recorded default, not a ruling):** "A creative draft's jurisdiction_code is its
-#   brief's captured jurisdiction_code; the location is not resolved again at generation." If
-#   the operator rules Q-1's alternative, ``test_q1_default_*`` below is the test to change;
+# * **Q-1, ruled 2026-11-08 (immutable jurisdiction):** "A draft inherits its brief's captured
+#   jurisdiction. Editing the location does not alter existing brief, draft or review snapshots.
+#   A new brief version is needed to use the changed location's jurisdiction."
+#   (``test_q1_default_*`` below);
 # * the claims engine is given the draft's code at the three sites (B-3 rows), and a legacy
 #   draft with no code gets B-2's fail-closed reading at the approval re-check.
 #
@@ -747,10 +748,10 @@ def test_each_matrix_city_is_snapshotted_on_the_brief_the_draft_and_the_review(
 def test_q1_default_a_draft_keeps_its_briefs_code_after_the_location_moves(
     snapshot_world, generation_on
 ) -> None:
-    """Q-1, the recorded default (rulings record, "Remaining policy choice"): the draft carries
-    its brief's captured code and the location is not resolved again at generation, so a
-    location edited after capture changes neither the brief nor any later draft. A ruling for
-    Q-1's alternative (re-resolve, refuse on UNRESOLVED or a different code) flips this test."""
+    """Q-1, ruled 2026-11-08 (immutable jurisdiction): a draft inherits its brief's captured
+    jurisdiction; editing the location alters no existing brief, draft or review snapshot; a new
+    brief version is needed to use the changed location's jurisdiction. So a location moved after
+    capture changes neither the brief nor any later draft or review of it."""
     world = snapshot_world
     fields, address, code = MATRIX_LOCATIONS["dallas"]
     ws = world.workspace("q1 default")

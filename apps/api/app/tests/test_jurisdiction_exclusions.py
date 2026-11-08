@@ -258,21 +258,36 @@ def test_an_unreadable_market_is_removed_by_any_exclusion_even_online(limb):
 # --------------------------------------------------------------------------- #
 # 3. "York" is not "New York", in both directions, on every gating path
 # --------------------------------------------------------------------------- #
+#: (short, long, whether a ``long`` exclusion must still admit ``short``). X-4 (operator,
+#: 2026-11-08): an unqualified "New York" exclusion covers the city and the state, and a bare
+#: "York" names no country (ambiguous geography), so that one direction is not asserted for the
+#: unqualified "New York" spellings. "York" never removes "New York", in every spelling.
 YORK_PAIRS = [
-    ("York", "New York"),
-    ("YORK", "NEW YORK"),
-    ("ｙｏｒｋ", "New York"),  # full-width york
-    ("York, UK", "New York, NY"),
-    ("York, England, UK", "New York, New York, USA"),
-    ("York", "New York, NY"),
+    ("York", "New York", False),
+    ("YORK", "NEW YORK", False),
+    ("ｙｏｒｋ", "New York", False),  # full-width york
+    ("York, UK", "New York, NY", True),
+    ("York, England, UK", "New York, New York, USA", True),
+    ("York", "New York, NY", True),
 ]
 
 
-@pytest.mark.parametrize(("short", "long"), YORK_PAIRS)
+@pytest.mark.parametrize(("short", "long", "reverse"), YORK_PAIRS)
 @pytest.mark.parametrize("limb", range(3), ids=_LIMBS)
-def test_york_does_not_exclude_new_york_nor_the_reverse(limb, short, long):
+def test_york_does_not_exclude_new_york_nor_the_reverse(limb, short, long, reverse):
     assert market_in_coverage(_online([short])[limb], long) is True
-    assert market_in_coverage(_online([long])[limb], short) is True
+    if reverse:
+        assert market_in_coverage(_online([long])[limb], short) is True
+
+
+@pytest.mark.parametrize("excluded", ["New York", "NEW YORK", "ＮＥＷ ＹＯＲＫ", "New York, NY"])
+@pytest.mark.parametrize("limb", range(3), ids=_LIMBS)
+def test_a_new_york_exclusion_never_removes_york_in_great_britain(limb, excluded):
+    """X-4: an exclusion's readings stay inside its own geography; "distinguish unrelated places
+    such as York, GB". A York that states its country is never removed by any New York."""
+    rule = _online([excluded])[limb]
+    for market in ("York, GB", "York, UK", "York, England, UK"):
+        assert market_in_coverage(rule, market) is True, market
 
 
 def test_york_is_not_new_york_on_inclusion_and_connector_clearance():
@@ -358,8 +373,9 @@ SUBSTRING_TRAPS = [
 ]
 
 
-#: Pairs whose exclusion limb is not asserted: how an exclusion reads a bare name that is also
-#: a Nigerian state is unruled; it is decided with the D-5DW4-02 fix.
+#: Pairs whose exclusion limb is not asserted yet. The reading is ruled (X-2, operator
+#: 2026-11-08: an ambiguous bare "Niger" may cover both the country Niger and Niger State) and is
+#: asserted at this battery's rebase onto a main that contains lane 5DW2FIX.
 _UNRULED_EXCLUSION_READING = {("Niger", "Nigeria"), ("Niger", "Niger State, NG")}
 
 

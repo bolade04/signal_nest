@@ -1065,7 +1065,7 @@ def test_item_31_is_checked_before_approval_at_the_generate_route(
     assert r.status_code == 422, r.text
     assert r.json()["error"]["code"] == "brief_jurisdiction_missing"
     # The control: an unapproved brief that has a code meets the approval gate instead.
-    pending = world.generate(world.seed_brief(ws, approved=False), ws=ws)
+    pending = world.generate(world.seed_brief(ws, approved=False, jurisdiction_code="US-TX"), ws=ws)
     assert pending.status_code == 422, pending.text
     assert pending.json()["error"]["code"] == "brief_not_approved"
     assert _jobs_for(world, ws) == 0 and model.requests == []
