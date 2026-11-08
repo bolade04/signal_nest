@@ -1026,7 +1026,9 @@ def _single_name_readings(
     *,
     observed: bool,
 ) -> list[MarketIdentity | None]:
-    if word in _CITY_QUALIFIED:  # X-4: "New York City" is the city only.
+    if word in _CITY_QUALIFIED and not observed:
+        # X-4: an excluded "New York City" is the city only. An observed one names no country
+        # and stays a place anywhere (X-1: missing geography is matched conservatively).
         code, region, names = _CITY_QUALIFIED[word]
         return [_identity(name, region, code, label) for name in names]
     areas = list(_area_candidates(word))

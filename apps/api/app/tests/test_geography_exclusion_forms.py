@@ -899,6 +899,9 @@ def test_x4_explicit_qualifiers_narrow_the_interpretation():
         assert _online_only(state, "Newark, NJ") is True
     assert _online_only("Quebec City", "Quebec City, QC") is False
     assert _online_only("Quebec City", "Montreal, QC") is True
+    # As an observation, a city name with no country stays a place anywhere (item 35).
+    for observed in ("New York City", "Quebec City"):
+        assert _online_only("Kenya", observed) is False, observed
 
 
 @pytest.mark.parametrize("excluded", ["New York", "New York City", "New York, NY", "NY"])
