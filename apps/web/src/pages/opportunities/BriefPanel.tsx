@@ -1,6 +1,9 @@
+import { useQuery } from '@tanstack/react-query';
 import { FileText, Sparkles } from 'lucide-react';
 import { useState } from 'react';
 import { ApiError } from '@/api/client';
+import * as api from '@/api/endpoints';
+import { queryKeys } from '@/api/queryKeys';
 import type { RecommendationBriefOut } from '@/api/types';
 import { ErrorState } from '@/components/common/states';
 import { Badge } from '@/components/ui/badge';
@@ -41,6 +44,7 @@ export function briefAuthorName(snapshot: string): string {
  * needed to use a changed location. Said where a version's drafts are opened, to every member
  * who sees "Open drafts"; the remedy (`NEW_VERSION_REMEDY`) only to members who can create a
  * brief version (review r3 copy C-a). No jurisdiction code is shown: briefs do not expose one.
+ * For an opportunity known to have no location, `NO_LOCATION_NOTE` is said instead (Q-4).
  */
 const DRAFT_JURISDICTION_NOTE =
   'Drafts from this version use the jurisdiction recorded when this version was created. ' +
@@ -48,20 +52,29 @@ const DRAFT_JURISDICTION_NOTE =
 const NEW_VERSION_REMEDY = 'To use a changed location, generate a new version first.';
 
 /**
- * The brief capture's `jurisdiction_unresolved` refusal (5D-W3; S1-5D capture rule). The API
- * sends only the code, so one static wording must be true for every cause: an opportunity
- * with no location (for example from a workspace-wide scout, which no edit can cure, review r3
- * C-1), a missing or unknown country, a missing state or province where one is required (the
- * item-33 list: US, CA, AU, NG), and an address that names another place. Never the server's
- * text.
+ * Operator ruling Q-4 (2026-11-08): an opportunity with no location gets a recommendation
+ * brief with no jurisdiction, and item 31 refuses drafts from it. Said where the brief is
+ * created and viewed, only when the page's opportunity is known to have no location, and only
+ * while creative drafts are offered at all (as "Open drafts" is). It replaces the Q-1 note,
+ * which is about a recorded jurisdiction that such a brief does not have.
+ */
+const NO_LOCATION_NOTE =
+  'This opportunity has no location (for example, it came from a workspace-wide scout), so its ' +
+  'brief gives recommendations only. Creative drafts can’t be generated from it, because a ' +
+  'draft needs the jurisdiction of a location.';
+
+/**
+ * The brief capture's `jurisdiction_unresolved` refusal (5D-W3; S1-5D capture rule). Since
+ * Q-4 an opportunity with no location is not refused, so the cause is always an existing
+ * location: a missing or unknown country, a missing state or province where one is required
+ * (the item-33 list: US, CA, AU, NG), or an address that names another place. The API sends
+ * only the code, so one static wording covers them all. Never the server's text.
  */
 const JURISDICTION_UNRESOLVED_MESSAGE =
-  'No brief was generated because this opportunity’s jurisdiction could not be determined from ' +
-  'its location. If the opportunity has no location, for example because it came from a ' +
-  'workspace-wide scout, no brief can be generated for it. Otherwise, complete or correct the ' +
-  'location’s details so that its country, its state or province (required in the United ' +
-  'States, Canada, Australia and Nigeria) and its address all name the same place, then ' +
-  'generate the brief again.';
+  'No brief was generated because the jurisdiction of this opportunity’s location could not be ' +
+  'determined. Complete or correct the location’s details so that its country, its state or ' +
+  'province (required in the United States, Canada, Australia and Nigeria) and its address all ' +
+  'name the same place, then generate the brief again.';
 
 function isJurisdictionUnresolved(error: unknown): boolean {
   if (!(error instanceof ApiError)) return false;
@@ -167,6 +180,16 @@ function BriefPanelBody({
   const create = useCreateBrief({ workspaceId, opportunityId });
   // I-5C: the shown version's drafts are one link away while creative generation is enabled.
   const creative = useCreativeCapability(workspaceId);
+  // The opportunity the detail page has already loaded: its cache entry, read without a
+  // request of its own. Not loaded (unknown) is not "no location": the Q-4 note stays hidden.
+  const opportunity = useQuery({
+    queryKey: queryKeys.opportunity(workspaceId, opportunityId),
+    queryFn: ({ signal }) => api.getOpportunity(workspaceId, opportunityId, signal),
+    enabled: false,
+  });
+  // Q-4: the record a new brief is captured from carries the opportunity's location (both are
+  // the scout's), so no location here means the brief's jurisdiction is NULL.
+  const noLocationNote = creative.isEnabled && opportunity.data?.location_id === null;
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   // Enabled globally but resolved disabled for this workspace: hide, as when dark.
@@ -217,15 +240,28 @@ function BriefPanelBody({
                     Open drafts
                   </Link>
                 </Button>
-                <p className="text-xs text-muted-foreground">
-                  {DRAFT_JURISDICTION_NOTE}
-                  {canCreate ? ` ${NEW_VERSION_REMEDY}` : null}
-                </p>
+                {noLocationNote ? (
+                  <p role="note" className="text-xs text-muted-foreground">
+                    {NO_LOCATION_NOTE}
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    {DRAFT_JURISDICTION_NOTE}
+                    {canCreate ? ` ${NEW_VERSION_REMEDY}` : null}
+                  </p>
+                )}
               </div>
             ) : null}
           </>
         ) : (
-          <p className="text-sm text-muted-foreground">No brief has been generated yet.</p>
+          <>
+            <p className="text-sm text-muted-foreground">No brief has been generated yet.</p>
+            {noLocationNote ? (
+              <p role="note" className="text-xs text-muted-foreground">
+                {NO_LOCATION_NOTE}
+              </p>
+            ) : null}
+          </>
         )}
 
         {items.length > 1 ? (

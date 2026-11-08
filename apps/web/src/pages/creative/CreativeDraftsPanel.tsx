@@ -75,13 +75,16 @@ function requestFailureMessage(error: unknown): string {
   switch (errorCode(error)) {
     case 'brief_not_approved':
       return 'Approve this brief before generating drafts from it.';
-    // S1-5D item 31 (5D-W3, review r1 F-2): a brief written before jurisdictions were
-    // recorded. Repeating the request cannot succeed; a new brief version can.
+    // S1-5D item 31 (5D-W3, review r1 F-2): a brief with no recorded jurisdiction, either
+    // written before jurisdictions were recorded or created for an opportunity with no
+    // location (Q-4). The page cannot tell which, so one wording true for both. Repeating the
+    // request cannot succeed; for an opportunity with a location, a new brief version can.
     case 'brief_jurisdiction_missing':
       return (
-        'This brief version was created before jurisdictions were recorded, so no draft can ' +
-        'be generated from it. Generate a new brief version from the opportunity, then generate ' +
-        'drafts from that version.'
+        'No jurisdiction was recorded for this brief version, so drafts can’t be generated ' +
+        'from it. If the opportunity has a location, generate a new brief version from the ' +
+        'opportunity, then generate drafts from that version. An opportunity without a ' +
+        'location (for example, from a workspace-wide scout) supports recommendations only.'
       );
     case 'creative_generation_unconfigured':
     case 'capability_unavailable':

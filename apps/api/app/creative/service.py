@@ -15,10 +15,13 @@ it stands when the job's turn comes; app.llm.quota):
 * the capability ``creative_generation`` resolves enabled for the workspace (the
   deny-biased resolver; dark by default);
 * the brief carries a captured jurisdiction (S1-5D item 31): a brief whose
-  ``jurisdiction_code`` is NULL — written before 5D-W3 captured one — or is not a
-  jurisdiction code is refused (422 ``brief_jurisdiction_missing`` at the route; the job fails
-  terminally with that reason). Nothing is inferred or defaulted; the remedy is a new brief
-  version, which captures one (:func:`app.briefs.service.create_brief`);
+  ``jurisdiction_code`` is NULL — written before 5D-W3 captured one, or captured for an
+  opportunity with no location (operator ruling Q-4) — or is not a jurisdiction code is
+  refused (422 ``brief_jurisdiction_missing`` at the route; the job fails terminally with that
+  reason). Nothing is inferred or defaulted, and the location is not resolved here. Where the
+  opportunity has a location, the remedy is a new brief version, which captures one
+  (:func:`app.briefs.service.create_brief`); an opportunity with no location supports
+  recommendation briefs only;
 * the brief is the workspace's, and its controlling approval decision (5B: the
   highest ``decision_seq`` for its exact version) is ``approved`` — drafts are generated
   "from an approved recommendation brief" (Phase 5C plan §1);
@@ -53,8 +56,8 @@ the draft unapprovable (:func:`draft_approval_refusal`).
 
 **Jurisdiction propagation** (Project Phase 5D §2: location → brief → creative → review). A
 draft's ``jurisdiction_code`` is its brief's captured code (:func:`draft_jurisdiction`); the
-location is not resolved again at generation (the default recorded while the operator's Q-1
-is open). The review row records the draft's code, the jurisdiction it was evaluated under.
+location is not resolved again at generation (operator ruling Q-1, 2026-11-08). The review
+row records the draft's code, the jurisdiction it was evaluated under.
 The claims engine is given that code everywhere it selects the library entries that apply
 (:func:`app.claims.engine.active_entries`, S1-5D B-3): the generation inputs, the
 generation-time review and the approval re-check. A legacy draft with no code reaches the
@@ -187,15 +190,20 @@ class BriefNotApprovedError(ValidationDomainError):
 
 
 class BriefJurisdictionMissingError(ValidationDomainError):
-    """The brief has no captured jurisdiction (S1-5D item 31): no draft is generated from it."""
+    """The brief has no captured jurisdiction (S1-5D item 31): no draft is generated from it.
+
+    One code for both kinds of such brief: one written before 5D-W3, and one captured for an
+    opportunity with no location (Q-4)."""
 
     code = "brief_jurisdiction_missing"
 
 
-#: The one answer to an item-31 refusal (fixed).
+#: The one answer to an item-31 refusal (fixed). True for both kinds of brief without a
+#: jurisdiction: a legacy brief, and a brief whose opportunity has no location (Q-4).
 BRIEF_JURISDICTION_MISSING_MESSAGE = (
-    "This brief was created before jurisdictions were recorded, so no draft can be generated "
-    "from it. Create a new version of the brief."
+    "No jurisdiction was recorded for this brief, so drafts can't be generated from it. If the "
+    "opportunity has a location, create a new version of the brief. An opportunity without a "
+    "location (for example from a workspace-wide scout) supports recommendations only."
 )
 #: The job's and the log's reason for an item-31 refusal.
 BRIEF_JURISDICTION_MISSING = "brief_jurisdiction_missing"
@@ -266,9 +274,10 @@ def brief_is_approved(db: Session, brief: RecommendationBrief) -> bool:
 
 
 def brief_has_jurisdiction(brief: RecommendationBrief) -> bool:
-    """Whether ``brief`` carries a captured jurisdiction code (S1-5D item 31). A NULL — no
-    resolution was ever captured — or any value that is not a jurisdiction code is refused;
-    nothing is inferred or defaulted."""
+    """Whether ``brief`` carries a captured jurisdiction code (S1-5D item 31). A NULL — a
+    legacy brief, or one whose opportunity had no location at capture (Q-4) — or any value
+    that is not a jurisdiction code is refused; nothing is inferred or defaulted, and the
+    brief's location is not read."""
     return is_jurisdiction_code(brief.jurisdiction_code)
 
 
@@ -276,9 +285,9 @@ def draft_jurisdiction(brief: RecommendationBrief) -> str | None:
     """The jurisdiction a draft of ``brief`` is generated, reviewed and stored under.
 
     The brief's captured code (Phase 5D §2 propagation): the location is **not** resolved
-    again at generation. This is the default recorded while the operator's Q-1 is open (S1-5D
-    rulings record, "Remaining policy choice"); this function is the one place that choice is
-    made. Called only after :func:`brief_has_jurisdiction` has passed.
+    again at generation (operator ruling Q-1, 2026-11-08, which confirmed this default); this
+    function is the one place that choice is made. Called only after
+    :func:`brief_has_jurisdiction` has passed.
     """
     return brief.jurisdiction_code
 
@@ -420,7 +429,8 @@ def request_generation(
     """
     now = now or datetime.now(UTC)
     if not brief_has_jurisdiction(brief):
-        # Item 31 first: approving a legacy brief cannot cure it; a new version can.
+        # Item 31 first: approving a brief without a jurisdiction (legacy, or no location,
+        # Q-4) cannot cure it.
         _log_not_generated(brief.workspace_id, brief.id, "refused", BRIEF_JURISDICTION_MISSING)
         raise BriefJurisdictionMissingError(BRIEF_JURISDICTION_MISSING_MESSAGE)
     if not brief_is_approved(db, brief):
@@ -697,7 +707,7 @@ def execute_generation(
         raise _fail(JobErrorCode.CANCELLED, "cancelled before generation")
 
     now = ctx.now if ctx.now.tzinfo is not None else ctx.now.replace(tzinfo=UTC)
-    # The draft's jurisdiction (Q-1 default: its brief's captured code; the location is not
+    # The draft's jurisdiction (Q-1, ruled: its brief's captured code; the location is not
     # resolved again). The generation inputs, the review and the draft row all use it.
     jurisdiction = draft_jurisdiction(brief)
     context = generation_context(db, brief, payload.channel.value, now)
