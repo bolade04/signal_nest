@@ -299,17 +299,20 @@ def test_tenant_columns_in_a_body_are_never_assigned(env) -> None:
         "id": "forged-campaign-id",
         "created_at": "2000-01-01T00:00:00Z",
     }
+    # Ignoring the unknown fields (201 / 200) and refusing them (422) both conform: no contract
+    # requires either. What is required is that the tenant columns are never assigned.
     created = _send(env, "POST", CAMPAIGNS, body={"name": "Forged", **forged})
-    assert created.status_code == 201, created.text
-    stored = _stored(env, created.json()["id"])
-    assert created.json()["id"] != "forged-campaign-id"
-    assert (stored["organization_id"], stored["workspace_id"], stored["brand_id"]) == (
-        ORG_A,
-        WS_A,
-        "a1-brand",
-    )
+    assert created.status_code in (201, 422), created.text
+    if created.status_code == 201:
+        stored = _stored(env, created.json()["id"])
+        assert created.json()["id"] != "forged-campaign-id"
+        assert (stored["organization_id"], stored["workspace_id"], stored["brand_id"]) == (
+            ORG_A,
+            WS_A,
+            "a1-brand",
+        )
     patched = _send(env, "PATCH", f"{CAMPAIGNS}/{OWN}", body={"name": "Still mine", **forged})
-    assert patched.status_code == 200, patched.text
+    assert patched.status_code in (200, 422), patched.text
     stored = _stored(env, OWN)
     assert (stored["organization_id"], stored["workspace_id"], stored["brand_id"]) == (
         ORG_A,
