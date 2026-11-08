@@ -858,6 +858,17 @@ def test_x2_a_known_country_constrains_the_readings():
     assert [_ident(r) for r in observed_readings("Nigeria")] == [(None, None, "NG")]
 
 
+def test_x2_the_location_adds_only_an_area_reading_never_a_local_city():
+    """W21-REV-5DW2FIX r2 C-3: the location's own reading is kept only when it names an area
+    (C-2's guard). "WA" for a Canadian location, or "NT" for a US one, is read there as a
+    local place name, which is a city reading: it must not join the exclusion's readings."""
+    canada = market_from_parts(city="Toronto", region="Ontario", country="Canada")
+    assert all(r.city is None for r in exclusion_readings("WA", default_country="CA"))
+    for observed in ("BC", "Canada"):
+        assert _online_only("WA", observed, canada) is True, observed
+    assert _online_only("NT", "Texas", DALLAS) is True
+
+
 def test_x2_ne_is_niger_and_nebraska_narrowed_by_the_location():
     """ "NE" is the country Niger and the US state Nebraska (never the old city "ne")."""
     assert {_ident(r) for r in exclusion_readings("NE")} == {
