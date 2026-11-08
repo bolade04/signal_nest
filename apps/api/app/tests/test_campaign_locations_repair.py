@@ -13,13 +13,19 @@ machine), on a disposable database of its own, through the real ``alembic`` CLI 
   ``setattr(obj, "location_ids", ...)``, a write of the JSON alone). Without the repair the
   5D-W1 API answers the back-filled membership and the next membership PATCH loses the edit;
   after it, the API answers the intended membership and a PATCH keeps it.
-* **Every state S0-S7** of the revision's docstring has its own case, with the report's counts.
+* **Every state S0-S8** of the revision's docstring has its own case, with the report's counts.
 * **Tenant isolation**: ids of another workspace (same organization, another organization) and
   a location of the campaign's workspace that belongs to another organization are dropped and
   reported; no membership crosses a tenant afterwards. The composite key
   ``fk_campaign_locations_location_workspace`` refuses a cross-workspace row by itself; nothing
   in the schema refuses the organization mismatch inside one workspace (CF-3's back-fill
   inserted it), so the repair's own check is what removes it.
+* **Cross-tenant rows (S8, D-5DW4-03)**: a membership row whose own ``organization_id`` names
+  another organization than its campaign's, written straight to the database (no API path
+  writes one), is deleted and reported even when its (campaign, location) pair is valid, and a
+  correct row of a new id takes its place where the membership is kept, on a readable campaign
+  and on an unreadable (S6) one. A row whose own or whose location's *workspace* is not the
+  campaign's is the same state; only SQLite with foreign keys off can hold it.
 * **Preservation**: every membership the repair keeps is the same physical row afterwards
   (PostgreSQL ``ctid`` and ``xmin``; SQLite ``rowid``; and ``id`` / ``created_at`` on both).
 * **Transactional failure**: a failure injected after the deletes and inserts have run (a
@@ -148,7 +154,10 @@ CAMPAIGN_SEED = {
     "s6-object": ("ws-a1", ["la1"]),
     "s6-string": ("ws-a1", ["la1"]),
     "s6-unparseable": ("ws-a1", ["la1"]),  # SQLite only (PostgreSQL's json refuses the text)
+    "s6-cross-tenant": ("ws-a1", ["la1", "la1b", "lx"]),  # the back-fill keeps lx (S3's case)
     "s7-deactivated": ("ws-a1", ["la1", "la1-off"]),
+    "s8-row-organization": ("ws-a1", ["la1", "la1b"]),
+    "s8-row-outside": ("ws-a1", ["la1"]),
     "unsorted": ("ws-a1", ["la1b", "la1"]),
     "zb-other-tenant": ("ws-b1", ["lb1"]),
 }
@@ -161,7 +170,20 @@ S6_VALUES = {
     "s6-object": ("json", {"location_ids": ["la1"]}),
     "s6-string": ("json", "la1"),
     "s6-unparseable": ("text", "la1, la1b"),
+    "s6-cross-tenant": ("json", {"ids": ["la1", "la1b", "lx"]}),
 }
+#: After the back-fill: membership rows naming another organization than their campaign's
+#: (D-5DW4-03), written straight to the database; no API path writes one. (campaign, location)
+#: -> the row's organization; an existing row is relabelled, a missing one inserted.
+CROSS_TENANT_ROWS = {
+    ("s8-row-organization", "la1"): "org-b",  # in the JSON: replaced by a correct row
+    # Not in the JSON: deleted, not replaced. This campaign has no other fault, so only the
+    # cross-tenant row keeps it out of S0 (the defect reported it as consistent).
+    ("s8-row-outside", "la1c"): "org-b",
+    ("s6-cross-tenant", "la1b"): "org-b",  # S6: replaced, as its memberships stay
+}
+#: The pairs whose cross-tenant row is replaced by a correct row of a new id.
+REPLACED = {("s8-row-organization", "la1"), ("s6-cross-tenant", "la1b")}
 
 #: The documented outcome: campaign -> (memberships after, JSON after as a list or "unchanged").
 EXPECTED = {
@@ -178,7 +200,10 @@ EXPECTED = {
     "s6-object": ({"la1"}, "unchanged"),
     "s6-string": ({"la1"}, "unchanged"),
     "s6-unparseable": ({"la1"}, "unchanged"),
+    "s6-cross-tenant": ({"la1", "la1b"}, "unchanged"),
     "s7-deactivated": ({"la1", "la1-off"}, ["la1", "la1-off"]),
+    "s8-row-organization": ({"la1", "la1b"}, ["la1", "la1b"]),
+    "s8-row-outside": ({"la1"}, ["la1"]),
     "unsorted": ({"la1", "la1b"}, ["la1", "la1b"]),
     "zb-other-tenant": ({"lb1"}, ["lb1"]),
 }
@@ -245,12 +270,14 @@ class Db:
         return out
 
     def identity(self) -> dict[tuple[str, str], tuple]:
-        """(campaign, location) -> the row's physical and logical identity."""
+        """(campaign, location) -> the row's physical and logical identity, ending with
+        ``(id, created_at, organization_id, workspace_id)`` on both engines."""
         statement = (
-            "SELECT campaign_id, location_id, ctid::text, xmin::text, id, created_at"
-            " FROM campaign_locations"
+            "SELECT campaign_id, location_id, ctid::text, xmin::text, id, created_at,"
+            " organization_id, workspace_id FROM campaign_locations"
             if self.pg
-            else "SELECT campaign_id, location_id, rowid, id, created_at FROM campaign_locations"
+            else "SELECT campaign_id, location_id, rowid, id, created_at, organization_id,"
+            " workspace_id FROM campaign_locations"
         )
         with self.engine.connect() as conn:
             return {(r[0], r[1]): tuple(r[2:]) for r in conn.execute(sa.text(statement))}
@@ -380,8 +407,52 @@ def _set_s6(db: Db, campaign_id: str, kind: str, value) -> None:
         )
 
 
+def _cross_tenant_rows(db: Db) -> None:
+    """The direct database writes of ``CROSS_TENANT_ROWS`` (D-5DW4-03)."""
+    present = db.memberships()
+    for (campaign_id, location_id), organization_id in CROSS_TENANT_ROWS.items():
+        if location_id in present.get(campaign_id, set()):
+            db.execute(
+                MEMBERSHIP.update()
+                .where(
+                    MEMBERSHIP.c.campaign_id == campaign_id,
+                    MEMBERSHIP.c.location_id == location_id,
+                )
+                .values(organization_id=organization_id)
+            )
+        else:
+            db.execute(
+                MEMBERSHIP.insert().values(
+                    id=f"x-{campaign_id}-{location_id}",
+                    organization_id=organization_id,
+                    workspace_id=CAMPAIGN_SEED[campaign_id][0],
+                    campaign_id=campaign_id,
+                    location_id=location_id,
+                )
+            )
+
+
+def _crossing(db: Db) -> list[tuple[str, str]]:
+    """Every membership that crosses its campaign's tenant (W1's isolation predicate)."""
+    with db.engine.connect() as conn:
+        return sorted(
+            tuple(row)
+            for row in conn.execute(
+                sa.text(
+                    "SELECT m.campaign_id, m.location_id FROM campaign_locations m"
+                    " JOIN campaigns c ON c.id = m.campaign_id"
+                    " JOIN business_locations l ON l.id = m.location_id"
+                    " WHERE m.workspace_id <> c.workspace_id"
+                    " OR m.organization_id <> c.organization_id"
+                    " OR l.workspace_id <> c.workspace_id OR l.organization_id <> c.organization_id"
+                )
+            )
+        )
+
+
 def _state_world(db: Db) -> list[str]:
-    """Every state S0-S7 at CF-3, as the pre-5D-W1 API could have left it. Returns the ids."""
+    """Every state S0-S8 at CF-3, as the pre-5D-W1 API (and, for S8, a direct database write)
+    could have left it. Returns the ids."""
     db.ok("upgrade", CF2)
     _tenants(db)
     seed = dict(CAMPAIGN_SEED)
@@ -394,6 +465,7 @@ def _state_world(db: Db) -> list[str]:
     for campaign_id, (kind, value) in S6_VALUES.items():
         if campaign_id in seed:
             _set_s6(db, campaign_id, kind, value)
+    _cross_tenant_rows(db)
     return sorted(seed)
 
 
@@ -404,13 +476,14 @@ class Repaired:
     before: tuple
     after: tuple
     output: str
+    crossing_before: list[tuple[str, str]]
 
 
 def _repair(db: Db) -> Repaired:
     campaigns = _state_world(db)
-    before = db.snapshot()
+    before, crossing = db.snapshot(), _crossing(db)
     output = db.ok("upgrade", "head")
-    return Repaired(db, campaigns, before, db.snapshot(), output)
+    return Repaired(db, campaigns, before, db.snapshot(), output, crossing)
 
 
 @pytest.fixture(scope="module", params=["sqlite", "postgresql"])
@@ -549,7 +622,7 @@ def test_with_the_repair_5dw1_answers_the_intended_membership_and_a_patch_keeps_
 
 
 # --------------------------------------------------------------------------- #
-# Every state, S0-S7
+# Every state, S0-S8
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("campaign_id", sorted(EXPECTED))
 def test_each_state_is_repaired_as_documented(shared: Repaired, campaign_id: str) -> None:
@@ -591,25 +664,29 @@ def test_the_schema_refuses_sql_null_so_the_s6_null_case_is_a_json_null(db: Db) 
 
 def test_the_report_counts_every_state(shared: Repaired) -> None:
     out = shared.output
-    unreadable = 3 if shared.db.pg else 4
+    unreadable = 4 if shared.db.pg else 5
     for line in (
         f"{PREFIX}: S0 consistent: 4 campaigns=[s0-consistent,s0-empty,s7-deactivated,"
         "zb-other-tenant]",
-        f"{PREFIX}: S1 inserted: 2 campaigns=[s1-added,s4-invalid]",
-        f"{PREFIX}: S2 deleted: 3 campaigns=[s2-removed,s2-removed-all,s3-foreign]",
+        f"{PREFIX}: S1 inserted: 4 campaigns=[s1-added,s4-invalid,s6-cross-tenant,"
+        "s8-row-organization]",
+        f"{PREFIX}: S2 deleted: 2 campaigns=[s2-removed,s2-removed-all]",
         f"{PREFIX}: S3 foreign: 3 campaigns=[s3-foreign]",
         f"{PREFIX}: S4 missing or invalid: 4 campaigns=[s4-invalid,s4-missing]",
         f"{PREFIX}: S5 duplicate: 1 campaigns=[s5-duplicate]",
         f"{PREFIX}: S7 deactivated kept: 1 campaigns=[s7-deactivated]",
+        f"{PREFIX}: S8 cross-tenant row deleted: 5 campaigns=[s3-foreign,s6-cross-tenant,"
+        "s8-row-organization,s8-row-outside]",
         f"{PREFIX}: mirror rewritten: 5 campaigns=[s3-foreign,s4-invalid,s4-missing,"
         "s5-duplicate,unsorted]",
-        f"{PREFIX}: {len(shared.campaigns)} campaign(s) read, 2 membership(s) inserted, "
-        f"3 deleted, 5 mirror(s) rewritten, 8 reference(s) dropped, {unreadable} unreadable",
+        f"{PREFIX}: {len(shared.campaigns)} campaign(s) read, 4 membership(s) inserted, "
+        f"7 deleted, 5 mirror(s) rewritten, 8 reference(s) dropped, {unreadable} unreadable",
     ):
         assert line in out, (line, out)
     s6 = [c for c in shared.campaigns if c.startswith("s6-")]
     assert f"{PREFIX}: S6 unreadable: {unreadable} campaigns=[{','.join(s6)}]" in out
     reasons = {
+        "s6-cross-tenant": "not_a_list",
         "s6-json-null": "null",
         "s6-object": "not_a_list",
         "s6-string": "not_a_list",
@@ -635,23 +712,34 @@ def test_the_report_counts_every_state(shared: Repaired) -> None:
     assert len(_lines(out, "campaign=s4-invalid workspace=ws-a1 location=None reason=invalid")) == 3
     assert "dropped campaign=s5-duplicate workspace=ws-a1 location=None reason=duplicate" in out
     assert "gone" not in out
+    # Cross-tenant rows (S8): one line each, ids only.
+    for campaign_id, location, reason in (
+        ("s3-foreign", "lx", "location_foreign_organization"),
+        ("s6-cross-tenant", "la1b", "row_foreign_organization"),
+        ("s6-cross-tenant", "lx", "location_foreign_organization"),
+        ("s8-row-organization", "la1", "row_foreign_organization"),
+        ("s8-row-outside", "la1c", "row_foreign_organization"),
+    ):
+        line = (
+            f"{PREFIX}: cross-tenant row deleted campaign={campaign_id} workspace=ws-a1 "
+            f"location={location} reason={reason}"
+        )
+        assert line in out, line
+    assert len(_lines(out, "cross-tenant row deleted campaign=")) == 5
 
 
 def test_tenant_isolation_no_membership_crosses_a_tenant(shared: Repaired) -> None:
     db = shared.db
-    # Before: CF-3's back-fill had kept lx (right workspace, wrong organization).
-    assert ("s3-foreign", "lx") in shared.before[0]
-    with db.engine.connect() as conn:
-        crossing = conn.execute(
-            sa.text(
-                "SELECT m.campaign_id, m.location_id FROM campaign_locations m"
-                " JOIN campaigns c ON c.id = m.campaign_id"
-                " JOIN business_locations l ON l.id = m.location_id"
-                " WHERE m.workspace_id <> c.workspace_id OR m.organization_id <> c.organization_id"
-                " OR l.workspace_id <> c.workspace_id OR l.organization_id <> c.organization_id"
-            )
-        ).all()
-    assert crossing == []
+    # Before: CF-3's back-fill had kept lx (right workspace, wrong organization), and the direct
+    # writes had left rows naming organization B on three campaigns of organization A.
+    assert shared.crossing_before == [
+        ("s3-foreign", "lx"),
+        ("s6-cross-tenant", "la1b"),
+        ("s6-cross-tenant", "lx"),
+        ("s8-row-organization", "la1"),
+        ("s8-row-outside", "la1c"),
+    ]
+    assert _crossing(db) == []
     assert db.memberships()["zb-other-tenant"] == {"lb1"}  # the other tenant is untouched
     assert (
         shared.after[0][("zb-other-tenant", "lb1")] == shared.before[0][("zb-other-tenant", "lb1")]
@@ -676,25 +764,116 @@ def test_the_schema_refuses_a_cross_workspace_membership_but_not_an_organization
 
 
 def test_every_kept_membership_is_the_same_physical_row(shared: Repaired) -> None:
+    """Every correct row the repair keeps is the same physical row. The one exception is a
+    replaced cross-tenant row (``REPLACED``), whose pair is kept with a new, correct row: the
+    next test."""
     before, after = shared.before[0], shared.after[0]
-    kept = set(before) & set(after)
+    kept = (set(before) & set(after)) - REPLACED
     expected_kept = {
         (cid, loc)
         for cid, (members, _mirror) in EXPECTED.items()
         if cid in shared.campaigns
         for loc in members
-        if (cid, loc) in before
+        if (cid, loc) in before and (cid, loc) not in REPLACED
     }
     assert kept == expected_kept
     assert len(kept) >= 14
     for pair in kept:
-        assert after[pair] == before[pair], pair  # ctid/xmin (PostgreSQL) or rowid, id, created_at
+        # ctid/xmin (PostgreSQL) or rowid; id, created_at and the tenant columns
+        assert after[pair] == before[pair], pair
     assert set(before) - set(after) == {
         ("s2-removed", "la1b"),
         ("s2-removed-all", "la1"),
         ("s3-foreign", "lx"),
+        ("s6-cross-tenant", "lx"),
+        ("s8-row-outside", "la1c"),
     }
     assert set(after) - set(before) == {("s1-added", "la1b"), ("s4-invalid", "la1")}
+
+
+def test_a_cross_tenant_row_is_deleted_and_a_kept_membership_gets_a_correct_row(
+    shared: Repaired,
+) -> None:
+    """S8 (D-5DW4-03): a row naming organization B on a campaign of organization A goes, even
+    though its (campaign, location) pair is valid; where the membership is kept (in the JSON,
+    or on an S6 campaign) a new row with the campaign's tenant takes its place. The campaign's
+    correct rows stay the same physical rows, and its JSON is not rewritten."""
+    before, after = shared.before[0], shared.after[0]
+    for pair in sorted(REPLACED):
+        assert before[pair][-2:] == ("org-b", "ws-a1"), pair  # (organization, workspace)
+        assert after[pair][-2:] == ("org-a", "ws-a1"), pair
+        assert after[pair][-4] != before[pair][-4], pair  # a new row id: deleted, then inserted
+    for pair in (
+        ("s8-row-organization", "la1b"),
+        ("s8-row-outside", "la1"),
+        ("s6-cross-tenant", "la1"),
+    ):
+        assert after[pair] == before[pair], pair  # the campaign's correct row, untouched
+    for pair in (("s8-row-outside", "la1c"), ("s6-cross-tenant", "lx")):
+        assert pair in before and pair not in after, pair  # not a kept membership: gone
+    for campaign_id in ("s8-row-organization", "s8-row-outside", "s6-cross-tenant"):
+        assert shared.after[1][campaign_id] == shared.before[1][campaign_id]  # JSON as it was
+        # Not S0: s8-row-outside's only fault is its cross-tenant row, which the defect missed.
+        assert campaign_id not in _lines(shared.output, "S0 consistent")[0]
+
+
+def test_a_row_of_another_workspace_is_replaced_where_only_sqlite_can_hold_it(db: Db) -> None:
+    """S8's workspace reasons. The composite keys refuse a row whose own workspace, or whose
+    location's workspace, is not its campaign's: always on PostgreSQL, and on SQLite with
+    foreign keys on, as the application runs it. A SQLite database written with them off
+    (SQLite's default, and the migration connection's) can hold one; the repair removes it,
+    on a readable campaign and on an S6 one, and replaces it where the membership is kept."""
+    db.ok("upgrade", CF2)
+    _tenants(db)
+    _campaigns(db, {"r": ("ws-a1", ["la1"]), "u": ("ws-a1", ["la1", "la1b"])})
+    db.ok("upgrade", CF3)
+    _set_s6(db, "u", "json", {"ids": ["la1", "la1b"]})
+    writes = (
+        MEMBERSHIP.update().where(MEMBERSHIP.c.campaign_id == "r").values(workspace_id="ws-a2"),
+        MEMBERSHIP.update()
+        .where(MEMBERSHIP.c.campaign_id == "u", MEMBERSHIP.c.location_id == "la1")
+        .values(workspace_id="ws-a2"),
+        MEMBERSHIP.insert().values(
+            id="x-u-la2",
+            organization_id="org-a",
+            workspace_id="ws-a1",
+            campaign_id="u",
+            location_id="la2",
+        ),
+    )
+    if db.pg:
+        for write in writes:  # pragma: no cover - gated on PostgreSQL
+            with pytest.raises(IntegrityError):
+                db.execute(write)
+        return
+    loose = create_engine(db.url)  # no foreign-key pragma: SQLite's default
+    try:
+        with loose.begin() as conn:
+            for write in writes:
+                conn.execute(write)
+    finally:
+        loose.dispose()
+    assert _crossing(db) == [("r", "la1"), ("u", "la1"), ("u", "la2")]
+    before = db.identity()
+    out = db.ok("upgrade", "head")
+    after = db.identity()
+    assert db.memberships() == {"r": {"la1"}, "u": {"la1", "la1b"}}
+    assert _crossing(db) == []
+    for pair in (("r", "la1"), ("u", "la1")):
+        assert before[pair][-2:] == ("org-a", "ws-a2"), pair
+        assert after[pair][-2:] == ("org-a", "ws-a1"), pair
+        assert after[pair][-4] != before[pair][-4], pair
+    assert after[("u", "la1b")] == before[("u", "la1b")]
+    for campaign_id, location, reason in (
+        ("r", "la1", "row_foreign_workspace"),
+        ("u", "la1", "row_foreign_workspace"),
+        ("u", "la2", "location_foreign_workspace"),
+    ):
+        line = (
+            f"cross-tenant row deleted campaign={campaign_id} workspace=ws-a1 "
+            f"location={location} reason={reason}"
+        )
+        assert line in out, (line, out)
 
 
 # --------------------------------------------------------------------------- #
@@ -730,8 +909,8 @@ def test_a_failure_after_deletes_and_inserts_leaves_everything_as_it_was(db: Db)
     assert failed.returncode != 0
     assert "injected mid-run failure" in out, out
     if db.pg:
-        # 2 inserted and 3 deleted before the refusal: one row fewer than before.
-        assert f"memberships now {len(before[0]) - 1}" in out, out
+        # 4 inserted and 7 deleted (2 S2, 5 S8) before the refusal: three rows fewer than before.
+        assert f"memberships now {len(before[0]) - 3}" in out, out
     assert db.snapshot() == before  # memberships (row identity), JSON, version
     assert db.version() == [CF3]
     for statement in _PG_CURE if db.pg else _SQLITE_CURE:
@@ -758,9 +937,15 @@ def test_a_second_run_changes_nothing(repaired: Repaired) -> None:
     with db.engine.begin() as conn:
         report = _module().reconcile_campaign_locations(conn)
     assert report.changes() == 0
-    assert (report.inserted, report.deleted, report.mirrored, report.dropped) == ([], [], [], [])
+    assert (
+        report.inserted,
+        report.deleted,
+        report.cross_tenant,
+        report.mirrored,
+        report.dropped,
+    ) == ([], [], [], [], [])
     # Only what the repair leaves as it is by design is reported again.
-    assert len(report.unreadable) == (3 if db.pg else 4)
+    assert len(report.unreadable) == (4 if db.pg else 5)
     assert report.deactivated_kept == [("s7-deactivated", "la1-off")]
     assert sorted(report.consistent) == sorted(
         c for c in repaired.campaigns if not c.startswith("s6-")
