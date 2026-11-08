@@ -22,10 +22,19 @@ invalid codes.
 
 from __future__ import annotations
 
+import json
+import logging
+import uuid
+from collections.abc import Iterator
 from types import SimpleNamespace
 
+import httpx
 import pytest
+from sqlalchemy import func, select, update
 
+from app.brands.service import get_primary_brand
+from app.briefs import service as brief_service
+from app.briefs.models import RecommendationBrief
 from app.claims.engine import (
     LibraryEntry,
     active_entries,
@@ -35,7 +44,11 @@ from app.claims.engine import (
     review_against_library,
 )
 from app.connectors.policy import ConnectorPolicy
+from app.core.config import get_settings
+from app.creative.models import CreativeDraft
 from app.geography.places_data import COUNTRIES
+from app.intelligence.records import SignalIntelligenceRecord
+from app.jobs.models import Job
 from app.jurisdiction.codes import UNRESOLVED, is_jurisdiction_code
 from app.jurisdiction.resolver import (
     JurisdictionResolution,
@@ -45,6 +58,22 @@ from app.jurisdiction.resolver import (
     resolve_jurisdiction,
 )
 from app.jurisdiction.subdivisions import SUBDIVISION_JURISDICTIONS
+from app.llm import service as service_module
+from app.llm.models import LLMBudgetPeriod, LLMBudgetReservation, LLMUsageEvent
+from app.llm.providers_real import AnthropicProvider
+from app.llm.service import LLMService
+from app.locations.models import BusinessLocation, GeoCoverageRule
+from app.opportunities.models import Opportunity
+from app.organizations.models import User
+from app.scouting_requests.models import ScoutRequest
+from app.signals.models import NormalizedSignal, RawSignal, SignalCluster
+from app.tests._creative_support import (
+    CEILINGS,
+    CreativeWorld,
+    creative_world,
+    postgres_creative_world,
+)
+from app.tests._llm_offline import offline_settings
 
 
 def _loc(city=None, state=None, country=None, **extra) -> SimpleNamespace:
@@ -552,3 +581,446 @@ def test_a_jurisdiction_match_is_necessary_never_sufficient():
     for draft in ("US", "US-TX"):
         assert active_entries([retired], jurisdiction=draft) == []
         assert _offered([typo], draft) == []
+
+
+# =========================================================================== #
+# Phase 2 (lane 5D-W4): the capture refusal and the item-31 refusal, against lane 5D-W3's
+# ``briefs/service.py`` and ``creative/service.py``.
+#
+# * The S1-5D capture rule: "For new snapshot capture, an unresolved location must produce an
+#   explicit refusal rather than a guessed jurisdiction or permissive fallback." The rulings
+#   record's interaction note 2: the refusal "comes before the model call, so no AI budget is
+#   spent and no brief is stored", and an absent location is refused too.
+# * Item 31: "Generation and export are refused for any brief or draft whose jurisdiction_code
+#   is NULL. Nothing is inferred or defaulted." Enforced at the generate request and in the job
+#   (rulings record, "Where it is enforced"). Export is 5E-W1's and is not built.
+#
+# A real HTTP world (``app.tests._creative_support``) on SQLite and, when
+# ``TEST_POSTGRES_URL`` is set, on PostgreSQL migrated to head: the 5A brief route and the 5C
+# generate route and worker run for real; only the model is the offline mock, counted here.
+# =========================================================================== #
+#: The four-market matrix as location records, each with a coverage rule whose business
+#: address agrees, and the code each captures (item 33).
+MATRIX_LOCATIONS = {
+    "dallas": ({"city": "Dallas", "state_province": "TX", "country": "US"}, "Dallas, TX", "US-TX"),
+    "london": (
+        {"city": "London", "state_province": None, "country": "United Kingdom"},
+        "London, UK",
+        "GB",
+    ),
+    "lagos": (
+        {"city": "Lagos", "state_province": "Lagos State", "country": "Nigeria"},
+        "Ikeja, Lagos, NG",
+        "NG-LA",
+    ),
+    "nairobi": (
+        {"city": "Nairobi", "state_province": None, "country": "Kenya"},
+        "Nairobi, KE",
+        "KE",
+    ),
+}
+
+
+@pytest.fixture(scope="module", params=["sqlite", "postgresql"])
+def capture_world(request, tmp_path_factory) -> Iterator[CreativeWorld]:
+    if request.param == "sqlite":
+        db_file = tmp_path_factory.mktemp("w4-capture") / "api.db"
+        with creative_world(db_file, "w4cap") as world:
+            yield world
+        return
+    with postgres_creative_world("w4cap") as world:  # pragma: no cover - gated on PostgreSQL
+        yield world
+
+
+@pytest.fixture
+def phase5_on(monkeypatch) -> None:
+    """The brief route's global flag and every generation ceiling, for this test only (the
+    creative capability is a per-workspace override, :meth:`CreativeWorld.workspace`)."""
+    monkeypatch.setattr(get_settings(), "recommendation_briefs_enabled", True)
+    for name, value in {**CEILINGS, "llm_max_calls_per_workspace_per_day": 1000}.items():
+        monkeypatch.setattr(get_settings(), name, value)
+
+
+class _CountingProvider:
+    """Wraps the process's offline provider: records every request the model is sent."""
+
+    def __init__(self, real) -> None:
+        self.real, self.requests = real, []
+        self.name, self.model = real.name, real.model
+
+    def generate(self, request, prompt_name, prompt_version):
+        self.requests.append(request)
+        return self.real.generate(request, prompt_name, prompt_version)
+
+
+@pytest.fixture
+def model(monkeypatch) -> _CountingProvider:
+    spy = _CountingProvider(service_module.llm_service._provider)
+    monkeypatch.setattr(service_module.llm_service, "_provider", spy)
+    return spy
+
+
+@pytest.fixture
+def budget_checks(monkeypatch) -> list[str]:
+    """Every budget check and meter the brief service starts (the first budget use)."""
+    calls: list[str] = []
+    real_check, real_meter = brief_service.ensure_run_allowed, brief_service._meter
+
+    def check(*args, **kwargs):
+        calls.append("ensure_run_allowed")
+        return real_check(*args, **kwargs)
+
+    def meter(*args, **kwargs):
+        calls.append("meter")
+        return real_meter(*args, **kwargs)
+
+    monkeypatch.setattr(brief_service, "ensure_run_allowed", check)
+    monkeypatch.setattr(brief_service, "_meter", meter)
+    return calls
+
+
+def evidence(
+    world: CreativeWorld,
+    ws: str,
+    *,
+    location: dict | None,
+    addresses: tuple[str, ...] = (),
+    location_ws: str | None = None,
+) -> tuple[str, str, str | None]:
+    """One opportunity and its intelligence record in ``ws``, bound to a new location (in
+    ``location_ws``, default ``ws``) with a coverage rule per address; ``location=None`` binds
+    none. Returns ``(opportunity id, record id, location id)``."""
+    tag = uuid.uuid4().hex[:12]
+    with world.session() as s:
+        brand = get_primary_brand(s, ws)
+        scoped = {"organization_id": world.org_of(ws), "workspace_id": ws}
+        location_id = None
+        if location is not None:
+            home = location_ws or ws
+            home_scoped = {"organization_id": world.org_of(home), "workspace_id": home}
+            location_id = f"lo{tag}"
+            s.add(
+                BusinessLocation(
+                    id=location_id,
+                    brand_id=get_primary_brand(s, home).id,
+                    name="Shop",
+                    **location,
+                    **home_scoped,
+                )
+            )
+            s.flush()
+            for address in addresses:
+                s.add(
+                    GeoCoverageRule(
+                        location_id=location_id, business_address=address, **home_scoped
+                    )
+                )
+            s.flush()
+        s.add(ScoutRequest(id=f"sr{tag}", name="Scout", brand_id=brand.id, **scoped))
+        s.flush()
+        req = {**scoped, "scout_request_id": f"sr{tag}"}
+        s.add(RawSignal(id=f"rs{tag}", source_type="rss", content="parking", **req))
+        s.add(
+            SignalCluster(
+                id=f"cl{tag}", label="parking", workspace_id=ws, scout_request_id=f"sr{tag}"
+            )
+        )
+        s.flush()
+        s.add(
+            NormalizedSignal(
+                id=f"ns{tag}",
+                raw_signal_id=f"rs{tag}",
+                cluster_id=f"cl{tag}",
+                source_type="rss",
+                excerpt="parking",
+                content_hash="0" * 64,
+                **req,
+            )
+        )
+        s.flush()
+        s.add(
+            Opportunity(
+                id=f"op{tag}",
+                brand_id=brand.id,
+                title="Parking",
+                scout_request_id=f"sr{tag}",
+                cluster_id=f"cl{tag}",
+                classification="x",
+                decision="act_now",
+                **scoped,
+            )
+        )
+        s.flush()
+        s.add(
+            SignalIntelligenceRecord(
+                id=f"in{tag}",
+                normalized_signal_id=f"ns{tag}",
+                opportunity_id=f"op{tag}",
+                analysis_version="1",
+                scoring_version="1",
+                fingerprint="f" * 64,
+                enricher="test",
+                accepted=True,
+                classification="x",
+                location_id=location_id,
+                **req,
+            )
+        )
+    return f"op{tag}", f"in{tag}", location_id
+
+
+def capture(world: CreativeWorld, ws: str, opportunity_id: str, record_id: str):
+    """``POST .../opportunities/{id}/briefs`` as the marketer (the 5A route)."""
+    return world.send(
+        "POST",
+        f"/workspaces/{ws}/opportunities/{opportunity_id}/briefs",
+        "marketer",
+        {"intelligence_record_id": record_id},
+    )
+
+
+def _ledger(world: CreativeWorld, ws: str) -> tuple[int, int, int]:
+    return (
+        world.count(LLMUsageEvent, workspace_id=ws),
+        world.count(LLMBudgetReservation, workspace_id=ws),
+        world.count(LLMBudgetPeriod, workspace_id=ws),
+    )
+
+
+def _logged(caplog) -> str:
+    return "\n".join(json.dumps(r.__dict__, default=str) for r in caplog.records)
+
+
+#: (case, location fields or None, coverage addresses, where the location lives). Every
+#: location text is distinctive, so its absence from the answer and the logs is checkable.
+UNRESOLVED_CAPTURES = [
+    ("no location", None, (), None),
+    (
+        "a US location without a state",
+        {"city": "Quillbrook", "state_province": None, "country": "US"},
+        (),
+        None,
+    ),
+    (
+        "a US location with an unknown state",
+        {"city": "Quillbrook", "state_province": "Quillshire", "country": "US"},
+        (),
+        None,
+    ),
+    ("a city only", {"city": "Quillbrook", "state_province": None, "country": None}, (), None),
+    (
+        "an unknown country",
+        {"city": "Quillbrook", "state_province": None, "country": "Quillandia"},
+        (),
+        None,
+    ),
+    (
+        "a conflicting coverage address",
+        {"city": "Quillbrook", "state_province": "TX", "country": "US"},
+        ("Tulsa, OK",),
+        None,
+    ),
+    (
+        "a location of another workspace of the organization",
+        {"city": "Quillbrook", "state_province": "TX", "country": "US"},
+        (),
+        "ws2",
+    ),
+    (
+        "a location of another organization",
+        {"city": "Quillbrook", "state_province": "TX", "country": "US"},
+        (),
+        "ws_b",
+    ),
+]
+_LOCATION_TEXT = ("Quillbrook", "Quillshire", "Quillandia", "Tulsa")
+
+
+@pytest.mark.parametrize(
+    ("case", "location", "addresses", "where"),
+    UNRESOLVED_CAPTURES,
+    ids=[c[0] for c in UNRESOLVED_CAPTURES],
+)
+def test_an_unresolved_location_refuses_the_brief_before_any_model_or_budget_use(
+    capture_world, phase5_on, model, budget_checks, caplog, case, location, addresses, where
+):
+    world = capture_world
+    ws = world.workspace(f"refuse {case[:30]}")
+    location_ws = getattr(world, where) if where else None
+    opp, record, _location_id = evidence(
+        world, ws, location=location, addresses=addresses, location_ws=location_ws
+    )
+    with caplog.at_level(logging.INFO):
+        r = capture(world, ws, opp, record)
+    assert r.status_code == 422, (case, r.text)
+    error = r.json()["error"]
+    assert error["code"] == "jurisdiction_unresolved"
+    assert error["message"] == brief_service.JURISDICTION_UNRESOLVED_MESSAGE  # one fixed answer
+    # Nothing was guessed, called, budgeted or stored.
+    assert model.requests == [] and budget_checks == []
+    assert world.count(RecommendationBrief, opportunity_id=opp) == 0
+    assert _ledger(world, ws) == (0, 0, 0)
+    # No location text, and no resolver evidence, in the answer or the logs.
+    logged = _logged(caplog)
+    for text in _LOCATION_TEXT:
+        assert text not in r.text and text not in logged, text
+    assert "unresolved:" not in r.text and "unresolved:" not in logged
+    refusals = [
+        rec for rec in caplog.records if rec.getMessage() == "recommendation_brief_not_generated"
+    ]
+    assert refusals and refusals[-1].extra_fields["outcome"] == "refused"
+
+
+def test_a_resolved_location_is_captured_and_only_then_budgeted_and_called(
+    capture_world, phase5_on, model, budget_checks
+):
+    """The control for the refusals above: the same world, a location that resolves."""
+    world = capture_world
+    ws = world.workspace("capture control")
+    fields, address, code = MATRIX_LOCATIONS["dallas"]
+    opp, record, _ = evidence(world, ws, location=fields, addresses=(address,))
+    r = capture(world, ws, opp, record)
+    assert r.status_code == 201, r.text
+    assert world.row(RecommendationBrief, r.json()["id"])["jurisdiction_code"] == code
+    assert len(model.requests) == 1 and "ensure_run_allowed" in budget_checks
+    assert _ledger(world, ws)[0] == 1  # one usage row: the call was made and recorded
+
+
+#: The real Anthropic adapter over a mock transport, priced: the path that reserves budget.
+_KEY, _MODEL = "fixture-key", "claude-sonnet-4-6"
+_EXPLAINED = {
+    "why_it_matters": "Commuters report long morning waits.",
+    "who_cares": "commuters",
+    "ai_inference": "Inference: speed decides.",
+    "recommended_action": "Publish a brand-safe post about faster service.",
+    "risk_note": "",
+    "suggested_angles": ["Speed you can count on"],
+}
+
+
+def _priced_llm() -> tuple[LLMService, object, list]:
+    settings = offline_settings(llm_provider="anthropic", llm_api_key=_KEY, llm_model=_MODEL)
+    sent: list = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request.url.path)
+        return httpx.Response(
+            200,
+            json={
+                "content": [{"type": "text", "text": json.dumps(_EXPLAINED)}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1000, "output_tokens": 500},
+            },
+        )
+
+    provider = AnthropicProvider(
+        _KEY, _MODEL, 5, client=httpx.Client(transport=httpx.MockTransport(handler))
+    )
+    return LLMService(provider, sleep=lambda _s: None, settings=settings), settings, sent
+
+
+def test_a_refused_capture_reserves_no_budget_where_a_resolved_one_does(capture_world):
+    """On the priced path the resolved capture reserves (and settles) before its call on
+    PostgreSQL, where the shared ledger lives; the refused one reserves nothing on either
+    engine, sends nothing and stores nothing."""
+    world = capture_world
+    ws = world.workspace("priced capture")
+    llm, settings, sent = _priced_llm()
+    refused_opp, refused_record, _ = evidence(world, ws, location=None)
+    fields, address, code = MATRIX_LOCATIONS["dallas"]
+    opp, record, _ = evidence(world, ws, location=fields, addresses=(address,))
+
+    def run(opportunity_id: str, record_id: str):
+        with world.session() as s:
+            return brief_service.create_brief(
+                s,
+                opportunity=s.get(Opportunity, opportunity_id),
+                intelligence_record=s.get(SignalIntelligenceRecord, record_id),
+                campaign_id=None,
+                author=s.get(User, world.users["marketer"]),
+                llm=llm,
+                settings=settings,
+            ).id
+
+    with pytest.raises(brief_service.BriefJurisdictionUnresolvedError):
+        run(refused_opp, refused_record)
+    assert sent == [] and _ledger(world, ws) == (0, 0, 0)
+    assert world.count(RecommendationBrief, opportunity_id=refused_opp) == 0
+    brief_id = run(opp, record)
+    assert len(sent) == 1
+    assert world.row(RecommendationBrief, brief_id)["jurisdiction_code"] == code
+    usage, reservations, _periods = _ledger(world, ws)
+    assert usage == 1
+    if world.engine.dialect.name == "postgresql":
+        assert reservations == 1  # the reservation path is live, so the refusal's 0 counts
+
+
+# --------------------------------------------------------------------------- #
+# Item 31: a brief with no captured jurisdiction generates nothing
+# --------------------------------------------------------------------------- #
+def _jobs_for(world: CreativeWorld, ws: str) -> int:
+    return world.count(Job, workspace_id=ws)
+
+
+#: A brief written before capture (NULL), and stored values the column's shape CHECK admits
+#: but that are not jurisdiction codes (a full-width ``US``, ``U1``): none is inferred from.
+NOT_CAPTURED = [None, "\uff35\uff33", "U1"]
+
+
+@pytest.mark.parametrize("stored", NOT_CAPTURED, ids=repr)
+def test_item_31_the_generate_route_refuses_and_enqueues_nothing(
+    capture_world, phase5_on, model, stored
+):
+    world = capture_world
+    ws = world.workspace("item 31 route")
+    brief_id = world.seed_brief(ws, jurisdiction_code=stored)
+    assert world.row(RecommendationBrief, brief_id)["jurisdiction_code"] == stored
+    r = world.generate(brief_id, ws=ws)
+    assert r.status_code == 422, r.text
+    assert r.json()["error"]["code"] == "brief_jurisdiction_missing"
+    assert _jobs_for(world, ws) == 0
+    world.drain()
+    assert model.requests == []
+    assert world.count(CreativeDraft, brief_id=brief_id) == 0
+    # The control: the same workspace, a brief that carries a code, is accepted and run here
+    # (so no job of this test is left for a later one's worker).
+    control = world.seed_brief(ws, jurisdiction_code="US-TX")
+    ok = world.generate(control, ws=ws)
+    assert ok.status_code == 202, ok.text
+    world.drain()
+    assert world.job(ok.json()["job_id"])["status"] == "succeeded"
+    assert world.count(CreativeDraft, brief_id=control) == 1
+
+
+@pytest.mark.parametrize("stored", NOT_CAPTURED, ids=repr)
+def test_item_31_the_job_refuses_a_brief_nulled_between_enqueue_and_run(
+    capture_world, phase5_on, model, stored
+):
+    world = capture_world
+    ws = world.workspace("item 31 job")
+    brief_id = world.seed_brief(ws, jurisdiction_code="US-TX")
+    r = world.generate(brief_id, ws=ws)
+    assert r.status_code == 202, r.text
+    job_id = r.json()["job_id"]
+    table = RecommendationBrief.__table__
+    with world.witness.begin() as conn:
+        conn.execute(update(table).where(table.c.id == brief_id).values(jurisdiction_code=stored))
+    world.drain()
+    job = world.job(job_id)
+    assert (job["status"], job["last_error_code"], job["last_error_summary"]) == (
+        "failed",
+        "validation",
+        "brief_jurisdiction_missing",
+    )
+    assert model.requests == []
+    assert world.count(CreativeDraft, brief_id=brief_id) == 0
+    assert world.count(LLMUsageEvent, job_id=job_id) == 0
+    with world.witness.connect() as conn:
+        assert (
+            conn.execute(
+                select(func.count())
+                .select_from(CreativeDraft.__table__)
+                .where(CreativeDraft.__table__.c.workspace_id == ws)
+            ).scalar_one()
+            == 0
+        )
