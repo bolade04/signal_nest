@@ -637,13 +637,16 @@ def test_q2_the_report_command_runs_read_only_against_a_database(env) -> None:
 # A real HTTP world on SQLite and, when ``TEST_POSTGRES_URL`` is set, on PostgreSQL migrated to
 # head (``app.tests._creative_support``); offline mock model only.
 # =========================================================================== #
+from sqlalchemy import select  # noqa: E402
+
 from app.brands.service import get_primary_brand  # noqa: E402
 from app.briefs.models import RecommendationBrief  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 from app.creative.models import ContentReview, CreativeDraft  # noqa: E402
 from app.creative.service import draft_approval_refusal  # noqa: E402
+from app.jurisdiction.resolver import resolve_jurisdiction  # noqa: E402
 from app.llm import service as llm_service_module  # noqa: E402
-from app.locations.models import BusinessLocation  # noqa: E402
+from app.locations.models import BusinessLocation, GeoCoverageRule  # noqa: E402
 from app.tests._creative_support import (  # noqa: E402
     CEILINGS,
     CreativeWorld,
@@ -754,10 +757,31 @@ def test_q1_default_a_draft_keeps_its_briefs_code_after_the_location_moves(
     opp, record, location_id = evidence(world, ws, location=fields, addresses=(address,))
     brief_id = capture(world, ws, opp, record).json()["id"]
     world.decide(brief_id, "approved")
-    table = BusinessLocation.__table__
-    for moved in ({"state_province": "OK"}, {"state_province": None}, {"country": "GB"}):
+    locations, rules = BusinessLocation.__table__, GeoCoverageRule.__table__
+    # Each move is consistent (the location and its coverage address move together), so a
+    # fresh resolution would give another code (US-OK, GB) or none at all; the draft keeps US-TX.
+    for moved, address, fresh in (
+        ({"city": "Tulsa", "state_province": "OK", "country": "US"}, "Tulsa, OK", "US-OK"),
+        (
+            {"city": "London", "state_province": None, "country": "United Kingdom"},
+            "London, UK",
+            "GB",
+        ),
+        ({"city": "Dallas", "state_province": None, "country": "US"}, "Dallas, US", UNRESOLVED),
+    ):
         with world.witness.begin() as conn:
-            conn.execute(update(table).where(table.c.id == location_id).values(**moved))
+            conn.execute(update(locations).where(locations.c.id == location_id).values(**moved))
+            conn.execute(
+                update(rules)
+                .where(rules.c.location_id == location_id)
+                .values(business_address=address)
+            )
+        with world.session() as s:  # the move is real: the location now resolves elsewhere
+            location = s.get(BusinessLocation, location_id)
+            moved_rules = s.scalars(
+                select(GeoCoverageRule).where(GeoCoverageRule.location_id == location_id)
+            ).all()
+            assert resolve_jurisdiction(location, moved_rules).code == fresh
         draft = _generate(world, ws, brief_id)
         assert draft["jurisdiction_code"] == code, moved
         assert _review(world, draft["id"])["jurisdiction_code"] == code, moved
