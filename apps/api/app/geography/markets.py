@@ -28,6 +28,34 @@ that location's country when place knowledge does not decide, and a bare name th
 is qualified by it ("Ikeja" for a Nigerian location); an observed market
 (:func:`parse_observed`) never is, because a bare "London" in evidence says nothing
 about which London.
+
+**Jurisdiction forms** (Project Phase 5D; W21 lane 5DW2FIX, defects D-5DW4-01/02). Both
+parsers also read a part written as a jurisdiction code or as a Nigerian subdivision, the
+same way on both sides of a comparison:
+
+* a code: ISO 3166-1 alpha-2, a hyphen and an ISO 3166-2 subdivision part ("US-TX",
+  "us - tx", "NG-LA", "GB-ENG"), or the two words without the hyphen when they name a listed
+  subdivision ("US TX"), alone or followed by its country ("US-TX, USA"). It is the
+  subdivision, never a city. A code of a country whose subdivisions are listed (here or in
+  ``app.jurisdiction.subdivisions``) is always a code; an upper-case code of any other
+  country is read as one too, unless the text names another country ("Al-Ain, UAE" stays
+  a place name). A code the tables cannot place ("US-ZZ", "DE-BY") keeps its own key: it
+  rules nothing out within its country (:func:`may_overlap`) and contains nothing
+  (:func:`market_within`). A listed code contradicted by the rest of the text ("US-TX,
+  Canada") is placed no better: it is read as its own country with the region "US-TX?",
+  which no location has.
+* a Nigerian state or the FCT named with its suffix ("Lagos State", "Ogun State, Nigeria",
+  "Federal Capital Territory"), read from ``app.jurisdiction.subdivisions`` (Nigeria is
+  deliberately not in ``places_data.SUBDIVISIONS``, so a bare "Lagos" stays the city).
+  It is the region ``"NG:<name>"``, the key a Nigerian region already had; a Nigerian
+  region named by an alias or code ("FCT", "Abuja", "LA") takes its subdivision's first
+  name, so every spelling of one state is one key.
+* an alpha-2 code followed by the same country ("KE, Kenya") is that country.
+
+``jurisdiction_forms=False`` reads text exactly as before those forms were recognised (the
+"word reading"). Coverage applies both readings (``app.geography.engine``), so the forms
+only ever add to what an exclusion removes; display and source-text helpers keep the word
+reading.
 """
 
 from __future__ import annotations
@@ -46,13 +74,19 @@ from app.geography.places_data import (
     REGION_QUALIFIES_CITY,
     SUBDIVISIONS,
 )
+from app.jurisdiction.subdivisions import SUBDIVISION_JURISDICTIONS
 
 _TOKEN_SYNONYMS: Final = {"saint": "st", "sainte": "ste", "mount": "mt", "fort": "ft"}
 #: Placeholders an f-string over a missing field leaves behind ("London, None").
 _EMPTY_PARTS: Final = frozenset({"none", "null", "undefined", "n a"})
 #: Suffixes dropped from a free-text region name ("Lagos State" == "Lagos").
 _REGION_SUFFIXES: Final = (" state", " province", " region")
+#: Suffixes that mark a name as a subdivision ("Lagos State", "Federal Capital Territory"):
+#: the jurisdiction resolver's list (``app.jurisdiction.resolver``).
+_SUBDIVISION_SUFFIXES: Final = (" state", " province", " territory", " region")
 _HAS_DIGIT = re.compile(r"\d")
+#: A part written as a jurisdiction code: ISO 3166-1 alpha-2, "-", ISO 3166-2 part.
+_CODE_FORM: Final = re.compile(r"([A-Za-z]{2})\s*-\s*([A-Za-z0-9]{1,3})")
 
 
 def fold(text: str | None) -> str:
@@ -101,6 +135,37 @@ _KNOWN_CITIES: dict[str, frozenset[str]] = {
     _key: frozenset(fold(_name) for _name in _names) for _key, _names in KNOWN_CITIES.items()
 }
 
+#: Region keys of the subdivisions in ``SUBDIVISIONS`` ("US-TX"). Any other key with a
+#: hyphen is a code the tables cannot place ("US-ZZ"); a key with ":" is a region by name.
+_CODED_REGIONS: Final = frozenset(
+    f"{_country}-{_code}" for _country, _divisions in SUBDIVISIONS.items() for _code in _divisions
+)
+#: Countries whose first-level subdivision codes are listed, here or in the jurisdiction
+#: module: a code of one of these is checked against the list ("strict").
+_CODED_COUNTRIES: Final = frozenset(SUBDIVISIONS) | frozenset(SUBDIVISION_JURISDICTIONS)
+
+
+def _subdivision_tokens(*, codes: bool) -> dict[str, dict[str, str]]:
+    """country -> {folded name, alias (and code) -> the subdivision's first name}, for the
+    jurisdiction module's countries that ``SUBDIVISIONS`` deliberately leaves out (Nigeria).
+    A token naming two subdivisions of one country is left out (it names neither)."""
+    index: dict[str, dict[str, str]] = {}
+    for country, divisions in SUBDIVISION_JURISDICTIONS.items():
+        if country in SUBDIVISIONS:
+            continue
+        seen: dict[str, set[str]] = {}
+        for code, names in divisions.items():
+            for token in ((code.lower(),) if codes else ()) + tuple(names):
+                seen.setdefault(fold(token), set()).add(fold(names[0]))
+        index[country] = {token: next(iter(n)) for token, n in seen.items() if len(n) == 1}
+    return index
+
+
+#: Nigeria's subdivisions by name, alias or code ("lagos", "fct", "la") -> first name.
+_JURISDICTION_REGION_TOKENS: Final = _subdivision_tokens(codes=True)
+#: The same by name or alias only: what may precede a suffix ("Lagos State").
+_JURISDICTION_REGION_NAMES: Final = _subdivision_tokens(codes=False)
+
 
 def country_name(code: str | None) -> str | None:
     """English display name for an ISO alpha-2 code."""
@@ -135,20 +200,32 @@ def _region_entries(folded: str) -> list[tuple[str, str]]:
     return []
 
 
-def _free_region(folded: str, country: str) -> str:
+def _free_region(folded: str, country: str, *, forms: bool = True) -> str:
     for suffix in _REGION_SUFFIXES:
         if folded.endswith(suffix) and len(folded) > len(suffix):
             folded = folded[: -len(suffix)]
             break
+    if forms:
+        # One key per Nigerian subdivision, whatever its spelling ("FCT", "Abuja" and
+        # "Federal Capital Territory"; "LA" and "Lagos"). A function of the name above, so
+        # names that shared a key before still share one.
+        tokens = _JURISDICTION_REGION_TOKENS.get(country, {})
+        name = tokens.get(folded)
+        if name is None and folded.endswith(" territory"):
+            name = tokens.get(folded[: -len(" territory")])
+        folded = name or folded
     return f"{country}:{folded}"
 
 
-def normalize_region(text: str | None, country: str | None) -> tuple[str | None, str | None]:
+def normalize_region(
+    text: str | None, country: str | None, *, jurisdiction_forms: bool = True
+) -> tuple[str | None, str | None]:
     """``(region key, country)`` for a region named within ``country``.
 
     A known subdivision of ``country`` (by name or abbreviation) gives its code;
     with no country, a subdivision name that exists in exactly one country gives that
-    country too. Any other region of a known country is kept by its folded name.
+    country too. Any other region of a known country is kept by its folded name, a
+    Nigerian subdivision by its first name (``jurisdiction_forms=False``: as written).
     """
     folded = _strip_postcode(fold(text))
     if not folded or folded in _EMPTY_PARTS:
@@ -158,7 +235,7 @@ def normalize_region(text: str | None, country: str | None) -> tuple[str | None,
         for entry_country, key in entries:
             if entry_country == country:
                 return key, country
-        return _free_region(folded, country), country
+        return _free_region(folded, country, forms=jurisdiction_forms), country
     if len(entries) == 1:
         return entries[0][1], entries[0][0]
     return None, None
@@ -431,7 +508,7 @@ def _alternatives(text: str) -> tuple[MarketIdentity, ...]:
     if spaced is not None:
         # "St NE" alone may be a street type and a direction: its part's group is ambiguous.
         return () if _street_and_direction(spaced) else _spaced_group(spaced, text)
-    parts = _clean_parts(text)
+    parts = [folded for folded, _ in _clean_parts(text)]  # 816fc941: (folded, as written)
     last = whole = parts[-1]
     if len(parts) == 1 and last not in CITY_FIRST_NAMES and not _area_candidates(last):
         split = _split_trailing_code(last)
@@ -495,7 +572,7 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
         # first part, so an ambiguous street line stays ambiguous.
         text, raw_parts = raw_parts[0], raw_parts[:1]
     if len(raw_parts) < 2:
-        stated = _parse(text, None, qualify=False, known=None, street_address=True)
+        stated = _parse(text, None, qualify=False, known=None, forms=True, street_address=True)
         kind = street_line_kind(text)
         ambiguous = parse_observed(text) if kind == STREET_LINE_AMBIGUOUS else None
         if stated is not None and stated.country is not None and _street_name_and_direction(text):
@@ -525,7 +602,9 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
         ambiguous += maybe
         groups += explicit_here
         ambiguous_groups += ambiguous_here
-    stated = _parse(", ".join(kept), None, qualify=False, known=None, street_address=True)
+    stated = _parse(
+        ", ".join(kept), None, qualify=False, known=None, forms=True, street_address=True
+    )
     # C-6 and FU-R1 (ambiguous readings only): a first part whose last word may be a street type or
     # a code ("1500 Broadway Hartford CT, USA", "123 MAIN ST, DALLAS") is ambiguous, never nothing,
     # whatever the later parts state. Explicit geography in the address settles that reading or
@@ -724,12 +803,13 @@ def _placed(identity: MarketIdentity | None) -> list[MarketIdentity]:
     return [identity] if identity is not None and identity.country is not None else []
 
 
-def _clean_parts(text: str) -> list[str]:
+def _clean_parts(text: str) -> list[tuple[str, str]]:
+    """``(folded, as written)`` for each comma-separated part that names something."""
     parts = []
     for raw in text.split(","):
         folded = _strip_postcode(fold(raw))
         if folded and folded not in _EMPTY_PARTS:
-            parts.append(folded)
+            parts.append((folded, raw))
     return parts
 
 
@@ -739,29 +819,173 @@ def _identity(
     return MarketIdentity(city=city or None, region=region, country=country, label=label)
 
 
-def parse_market(text: str | None, *, default_country: str | None = None) -> MarketIdentity | None:
+# --- jurisdiction forms (Project Phase 5D; W21 5DW2FIX) -----------------------------
+
+
+@dataclass(frozen=True)
+class _Form:
+    """A part that names its own jurisdiction: a code, or a suffixed Nigerian subdivision."""
+
+    country: str
+    #: Region key, or ``None`` for a country code ("KE, Kenya").
+    region: str | None
+    #: A code of a country whose subdivisions are listed: never a place name, so text that
+    #: contradicts it is unplaceable rather than read as words.
+    strict: bool
+    #: The code as written, normalised ("US-TX"); ``None`` for a form that is not a code.
+    code: str | None = None
+
+
+def _subdivision_key(country: str, part: str) -> str | None:
+    """The region key of a listed subdivision code ("US", "TX" -> "US-TX"; "NG", "LA" ->
+    "NG:lagos"); ``None`` when ``country`` lists no such code."""
+    if part in SUBDIVISIONS.get(country, {}):
+        return f"{country}-{part}"
+    names = SUBDIVISION_JURISDICTIONS.get(country, {}).get(part)
+    return f"{country}:{fold(names[0])}" if names else None
+
+
+def _code_form(folded: str, raw: str) -> _Form | None:
+    """A part written as a jurisdiction code: "US-TX", "us - tx", "NG-LA", "US TX"."""
+    match = _CODE_FORM.fullmatch(raw.strip())
+    if match:
+        country, part = match[1].upper(), match[2].upper()
+        if country not in COUNTRIES:
+            return None
+        strict = country in _CODED_COUNTRIES
+        # Another country's subdivisions are not listed, so its code cannot be checked and
+        # a hyphenated place name looks the same ("Al-Ain"): only upper case reads as a code.
+        if not strict and match[0] != match[0].upper():
+            return None
+    else:
+        words = folded.split()
+        if len(words) != 2:
+            return None
+        country, part = words[0].upper(), words[1].upper()
+        if _subdivision_key(country, part) is None:
+            return None
+        strict = True
+    code = f"{country}-{part}"
+    return _Form(country, _subdivision_key(country, part) or code, strict, code)
+
+
+def _named_subdivision(folded: str) -> _Form | None:
+    """A Nigerian subdivision named with its suffix ("lagos state", "federal capital
+    territory"), from ``app.jurisdiction.subdivisions``. A bare name is not one."""
+    found: set[tuple[str, str]] = set()
+    for suffix in _SUBDIVISION_SUFFIXES:
+        if folded.endswith(suffix) and len(folded) > len(suffix):
+            for country, names in _JURISDICTION_REGION_NAMES.items():
+                name = names.get(folded) or names.get(folded[: -len(suffix)])
+                if name:
+                    found.add((country, f"{country}:{name}"))
+    if len(found) != 1:
+        return None
+    country, key = found.pop()
+    return _Form(country, key, strict=False)
+
+
+def _form(folded: str, raw: str, *, head_of_two: bool) -> _Form | None:
+    form = _code_form(folded, raw) or _named_subdivision(folded)
+    if form is None and head_of_two and len(folded) == 2 and folded.upper() in COUNTRIES:
+        # "KE, Kenya": a country code before its country. Soft: "Bo, Sierra Leone" is a city.
+        form = _Form(folded.upper(), None, strict=False)
+    return form
+
+
+def _agree(first: _Form, second: _Form) -> _Form | None:
+    if first.country != second.country:
+        return None
+    if first.region is not None and second.region is not None and first.region != second.region:
+        return None
+    return _Form(
+        first.country,
+        first.region or second.region,
+        first.strict or second.strict,
+        first.code or second.code,
+    )
+
+
+def _unplaceable(label: str, *forms: _Form, city: str | None = None) -> MarketIdentity | None:
+    """A listed code that the rest of the text contradicts ("US-TX, Canada") is read as its
+    own country with a region that cannot be placed ("US-TX?"): it may cover any market of
+    that country, contains none, and is no location's subdivision. Any other contradicted
+    form is read as words (``None``)."""
+    strict = next((f for f in forms if f.strict), None)
+    if strict is None:
+        return None
+    return _identity(city, f"{strict.code}?", strict.country, label)
+
+
+def _form_reading(parts: list[tuple[str, str]], label: str) -> MarketIdentity | None:
+    """The reading of a text with a jurisdiction form where a qualifier goes, or ``None``
+    to read the text as words (no form there, or one that place names could explain)."""
+    words = [folded for folded, _ in parts]
+    n = len(parts)
+    forms = [
+        _form(folded, raw, head_of_two=n == 2 and index == 0)
+        for index, (folded, raw) in enumerate(parts)
+    ]
+    last = forms[-1]
+    if last is not None:
+        # The qualifier names the jurisdiction: "US-TX", "Ikeja, Lagos State", "Dallas, US-TX".
+        before = forms[-2] if n > 1 else None
+        if before is not None:
+            both = _agree(before, last)
+            if both is not None:
+                return _identity(None, both.region, both.country, label)
+            if before.strict:
+                return _unplaceable(label, before)
+            # A soft form that disagrees is the city's name ("Bo, US-TX").
+        return _identity(words[-2] if n > 1 else None, last.region, last.country, label)
+    form = forms[-2] if n >= 2 else None
+    if form is None:
+        return _unplaceable(label, forms[-3]) if n >= 3 and forms[-3] is not None else None
+    # The head of "X, country" or the region of "city, X, country": the qualifier after it
+    # must name the same country ("US-TX, USA", "Lagos State, Nigeria", "KE, Kenya").
+    if n >= 3 and forms[-3] is not None:
+        return _unplaceable(label, form, forms[-3])
+    for country, region in _area_candidates(words[-1]):
+        both = _agree(form, _Form(country, region, strict=False))
+        if both is not None:
+            return _identity(words[-3] if n >= 3 else None, both.region, both.country, label)
+    return _unplaceable(label, form, city=words[-3] if n >= 3 else None)
+
+
+def parse_market(
+    text: str | None,
+    *,
+    default_country: str | None = None,
+    jurisdiction_forms: bool = True,
+) -> MarketIdentity | None:
     """Parse a market a customer configured ("Dallas, TX", "London, Ontario, Canada",
-    "Texas", "Ikeja") into an identity; ``None`` when nothing usable remains.
+    "Texas", "Ikeja", "US-TX", "Lagos State") into an identity; ``None`` when nothing
+    usable remains.
 
     ``default_country`` is the country of the location the text belongs to. It
     qualifies a bare place name ("Ikeja" for a Nigerian location is Ikeja, NG) and
     chooses between the readings of an ambiguous qualifier that place knowledge
     does not decide. An explicit, unambiguous qualifier always wins over it.
+    ``jurisdiction_forms=False`` gives the word reading (see the module docstring).
     """
-    return _parse(text, default_country, qualify=True, known=None)
+    return _parse(text, default_country, qualify=True, known=None, forms=jurisdiction_forms)
 
 
 def parse_observed(
-    text: str | None, *, known: MarketIdentity | None = None
+    text: str | None,
+    *,
+    known: MarketIdentity | None = None,
+    jurisdiction_forms: bool = True,
 ) -> MarketIdentity | None:
     """Parse a market observed in evidence or carried by a request.
 
     An ambiguous qualifier is resolved only by place knowledge (``KNOWN_CITIES``,
     plus ``known``, a place the caller knows exists - typically the scope it is
     about to compare with). No country is ever supplied that the text does not
-    state: a bare "London" stays unqualified and lies within no scope.
+    state: a bare "London" stays unqualified and lies within no scope. Jurisdiction
+    forms read exactly as in :func:`parse_market`.
     """
-    return _parse(text, None, qualify=False, known=known)
+    return _parse(text, None, qualify=False, known=known, forms=jurisdiction_forms)
 
 
 def parse_business_address(text: str | None) -> MarketIdentity | None:
@@ -785,14 +1009,20 @@ def _parse(
     *,
     qualify: bool,
     known: MarketIdentity | None,
+    forms: bool,
     street_address: bool = False,
 ) -> MarketIdentity | None:
     if text is None:
         return None
     label = text.strip()
-    parts = _clean_parts(text)
-    if not parts:
+    cleaned = _clean_parts(text)
+    if not cleaned:
         return None
+    if forms:
+        reading = _form_reading(cleaned, label)
+        if reading is not None:
+            return reading
+    parts = [folded for folded, _ in cleaned]
     if len(parts) == 1:
         token = parts[0]
         split = None
@@ -817,7 +1047,7 @@ def _parse(
     if area is None:
         if not candidates and qualify and country:
             # An unlisted region of the location's own country ("Ikeja, Lagos").
-            return _identity(parts[-2], _free_region(last, country), country, label)
+            return _identity(parts[-2], _free_region(last, country, forms=forms), country, label)
         # Unknown or still-ambiguous qualifier: the market stays unqualified.
         return _identity(parts[-2], None, None, label)
 
@@ -825,7 +1055,7 @@ def _parse(
     if region is not None:
         return _identity(parts[-2], region, found_country, label)
     if len(parts) >= 3:
-        region, _ = normalize_region(parts[-2], found_country)
+        region, _ = normalize_region(parts[-2], found_country, jurisdiction_forms=forms)
         return _identity(parts[-3], region, found_country, label)
     head = parts[0]
     if head not in CITY_FIRST_NAMES:
@@ -856,14 +1086,20 @@ def _parse_single(token: str, country: str | None, label: str, *, qualify: bool)
 
 
 def market_from_parts(
-    *, city: str | None, region: str | None, country: str | None
+    *,
+    city: str | None,
+    region: str | None,
+    country: str | None,
+    jurisdiction_forms: bool = True,
 ) -> MarketIdentity | None:
     """Identity from separate fields (a location record, a geocoder result)."""
     country_code = normalize_country(country)
     if country_code is None and country:
         # A region typed into the country field ("England", "Ontario").
         _, country_code = normalize_region(country, None)
-    region_key, country_code = normalize_region(region, country_code)
+    region_key, country_code = normalize_region(
+        region, country_code, jurisdiction_forms=jurisdiction_forms
+    )
     city_folded = _strip_postcode(fold(city))
     if city_folded in _EMPTY_PARTS:
         city_folded = ""
@@ -885,16 +1121,19 @@ def qualify_for_location(text: str | None, *, country: str | None) -> str | None
     already names a country (an explicit market wins), one that cannot be read, and every text
     when ``country`` is unknown. Nothing is broadened: the appended code only qualifies what the
     text already names.
+
+    The text is read as words (``jurisdiction_forms=False``): this is the source text, not a
+    coverage decision, and it stays what it was before jurisdiction forms were read (5DW2FIX).
     """
     if not text or not text.strip():
         return text
     code = normalize_country(country)
     if code is None:
         return text
-    observed = parse_observed(text)
+    observed = parse_observed(text, jurisdiction_forms=False)
     if observed is not None and observed.country is not None:
         return text
-    located = parse_market(text, default_country=code)
+    located = parse_market(text, default_country=code, jurisdiction_forms=False)
     if located is None or located.country != code:
         return text
     return f"{text.strip()}, {code}"
@@ -906,9 +1145,12 @@ def market_within(candidate: MarketIdentity | None, scope: MarketIdentity | None
     The scope must name a country, which the candidate must share. A scope's city
     must be the candidate's. A scope's region must be the candidate's region, except
     that a city outside ``REGION_QUALIFIES_CITY`` countries is identified by city and
-    country, so there the region only has to agree when the candidate states one.
+    country, so there the region only has to agree when the candidate states one. A scope
+    whose region is a code the tables cannot place ("US-ZZ") contains nothing.
     """
     if candidate is None or scope is None or not scope.is_qualified:
+        return False
+    if _unplaced(scope.region):
         return False
     if candidate.country != scope.country:
         return False
@@ -921,23 +1163,37 @@ def market_within(candidate: MarketIdentity | None, scope: MarketIdentity | None
     return True
 
 
+def _unplaced(region: str | None) -> bool:
+    """A region key written as a code the tables cannot place ("US-ZZ", "DE-BY")."""
+    return region is not None and ":" not in region and region not in _CODED_REGIONS
+
+
 def may_overlap(candidate: MarketIdentity | None, scope: MarketIdentity | None) -> bool:
-    """False only when a component known on both sides differs (for exclusions)."""
+    """False only when a component known on both sides differs (for exclusions). A region
+    the tables cannot place is not known: it rules out no region of its country."""
     if candidate is None or scope is None:
         return True
-    for mine, theirs in (
-        (candidate.country, scope.country),
-        (candidate.region, scope.region),
-        (candidate.city, scope.city),
-    ):
-        if mine is not None and theirs is not None and mine != theirs:
+    if candidate.country is not None and scope.country is not None:
+        if candidate.country != scope.country:
+            return False
+    if candidate.region is not None and scope.region is not None:
+        if candidate.region != scope.region and not (
+            _unplaced(candidate.region) or _unplaced(scope.region)
+        ):
+            return False
+    if candidate.city is not None and scope.city is not None:
+        if candidate.city != scope.city:
             return False
     return True
 
 
-def text_within(text: str | None, scope: MarketIdentity | None) -> bool:
+def text_within(
+    text: str | None, scope: MarketIdentity | None, *, jurisdiction_forms: bool = True
+) -> bool:
     """Is the observed market ``text`` within ``scope``? The scope's own city counts
     as place knowledge when reading an ambiguous qualifier, its country does not."""
     if scope is None:
         return False
-    return market_within(parse_observed(text, known=scope), scope)
+    return market_within(
+        parse_observed(text, known=scope, jurisdiction_forms=jurisdiction_forms), scope
+    )

@@ -10,6 +10,13 @@ substring, and coverage fails closed (P6-DATA-6): a market that cannot be placed
 or a rule that names no place it could be compared with, is outside the scout area.
 Exclusions are evaluated first and bind every rule (Project Phase 5D): an ``online`` /
 ``online_global`` rule admits every market its exclusions do not remove.
+
+Coverage applies two readings of every market text (W21 5DW2FIX, defects D-5DW4-01/02):
+the reading with jurisdiction forms ("US-TX", "Lagos State") and the word reading the
+engine used before they were recognised. An exclusion removes a market when either
+reading may cover it, so no exclusion removes less than it did; a rule admits a market
+that either reading places inside it. Each reading compares like with like (observation
+and rule read the same way).
 """
 
 from __future__ import annotations
@@ -78,6 +85,10 @@ def is_within_radius(
     return distance <= rule.radius_miles
 
 
+#: The readings coverage applies (``jurisdiction_forms``): with jurisdiction forms, and the
+#: word reading of before they were recognised (see the module docstring).
+_READINGS = (True, False)
+
 #: Coverage types whose scope is a whole country / a whole state or province.
 _COUNTRY_TYPES = frozenset({"country"})
 _STATE_TYPES = frozenset({"state", "multi_state"})
@@ -90,7 +101,7 @@ def _context_country(rule: CoverageRule) -> str | None:
     )
 
 
-def coverage_scopes(rule: CoverageRule) -> list[MarketIdentity]:
+def coverage_scopes(rule: CoverageRule, *, jurisdiction_forms: bool = True) -> list[MarketIdentity]:
     """The places a non-online rule covers, as structured identities.
 
     A rule names its places with listed markets, plus its state for a
@@ -98,6 +109,7 @@ def coverage_scopes(rule: CoverageRule) -> list[MarketIdentity]:
     that names no place covers its own location's market at the rule's granularity
     (country, state, or the city itself). A named place that cannot be read, or
     names no country, contributes no scope - it never falls back to the location.
+    ``jurisdiction_forms=False`` reads the rule's texts as words (the module docstring).
     """
     country = _context_country(rule)
     names_state = rule.coverage_type in _STATE_TYPES and bool(rule.state)
@@ -105,11 +117,15 @@ def coverage_scopes(rule: CoverageRule) -> list[MarketIdentity]:
     scopes: list[MarketIdentity] = []
     if rule.included_markets or names_state or names_country:
         for text in rule.included_markets:
-            scope = parse_market(text, default_country=country)
+            scope = parse_market(
+                text, default_country=country, jurisdiction_forms=jurisdiction_forms
+            )
             if scope is not None:
                 scopes.append(scope)
         if names_state:
-            region, region_country = normalize_region(rule.state, country)
+            region, region_country = normalize_region(
+                rule.state, country, jurisdiction_forms=jurisdiction_forms
+            )
             if region and region_country:
                 scopes.append(
                     MarketIdentity(region=region, country=region_country, label=rule.state)
@@ -138,14 +154,16 @@ def is_excluded(rule: CoverageRule, market: str | None) -> bool:
     Explicit exclusions always win, including over a market they cannot rule out: an
     exclusion removes every market that no known component separates from it (structured
     identity, ``may_overlap``; "York" does not remove "New York"), and a market that
-    cannot be read at all is removed by any exclusion.
+    cannot be read at all is removed by any exclusion. Both readings apply (the module
+    docstring): "US-TX" removes Texas, and still removes whatever its word reading removed.
     """
     country = _context_country(rule)
-    observed = parse_observed(market)
-    for text in rule.excluded_markets:
-        excluded = parse_market(text, default_country=country)
-        if excluded is not None and may_overlap(observed, excluded):
-            return True
+    for forms in _READINGS:
+        observed = parse_observed(market, jurisdiction_forms=forms)
+        for text in rule.excluded_markets:
+            excluded = parse_market(text, default_country=country, jurisdiction_forms=forms)
+            if excluded is not None and may_overlap(observed, excluded):
+                return True
     return False
 
 
@@ -155,7 +173,8 @@ def market_in_coverage(rule: CoverageRule, market: str | None) -> bool:
     Exclusions are evaluated **before** any short-circuit (Project Phase 5D §2, exit
     criterion 5): an ``online_global`` rule and an ``online`` rule admit every market
     except the ones their exclusions remove. A rule without exclusions decides exactly as
-    before.
+    before. A market is inside a rule's places when either reading puts it there (the
+    module docstring): a jurisdiction form adds what it names ("US-TX" admits Texas).
     """
     if is_excluded(rule, market):
         return False
@@ -165,7 +184,11 @@ def market_in_coverage(rule: CoverageRule, market: str | None) -> bool:
         return False
     # Radius distance is not evaluated here: an observed market carries no
     # coordinates (see ``is_within_radius``), so the market scope stands in for it.
-    return any(text_within(market, scope) for scope in coverage_scopes(rule))
+    return any(
+        text_within(market, scope, jurisdiction_forms=forms)
+        for forms in _READINGS
+        for scope in coverage_scopes(rule, jurisdiction_forms=forms)
+    )
 
 
 # Evidence weights for geo-relevance resolution.
@@ -195,7 +218,8 @@ def resolve_geo(
         return GeoResolution(resolved_market=None, confidence=0.0)
 
     # Evidence naming the same place in different words ("London, UK" and
-    # "London, United Kingdom") is pooled; the first wording seen is reported.
+    # "London, United Kingdom") is pooled; the first wording seen is reported. Pooling
+    # keeps the word reading: it chooses the reported wording, it decides no coverage.
     keys: dict[str, tuple] = {}
     display: dict[tuple, str] = {}
     per_market: dict[tuple, float] = {}
@@ -203,7 +227,7 @@ def resolve_geo(
     for kind, market in signals:
         text = market.strip()
         if text not in keys:
-            identity = parse_observed(text)
+            identity = parse_observed(text, jurisdiction_forms=False)
             keys[text] = (
                 ("place", identity.city, identity.region, identity.country)
                 if identity is not None and identity.is_qualified
