@@ -71,6 +71,7 @@ def factory() -> Iterator[sessionmaker]:  # pragma: no cover - gated on PostgreS
 
 def _seed(make) -> None:  # pragma: no cover - gated on PostgreSQL
     from app.brands.models import Brand
+    from app.locations.models import BusinessLocation
     from app.organizations.models import Organization, Workspace
     from app.scouting_requests.models import ScoutRequest
     from app.signals.models import NormalizedSignal, RawSignal
@@ -83,6 +84,11 @@ def _seed(make) -> None:  # pragma: no cover - gated on PostgreSQL
         s.add(Workspace(id="ws-p", organization_id="org-p", name="P", slug="ws-p"))
         s.flush()
         s.add(Brand(id="br-p", organization_id="org-p", workspace_id="ws-p", name="B"))
+        s.flush()
+        # A location that resolves (5D-W3 captures US-TX for Dallas, TX).
+        s.add(BusinessLocation(id="loc-p", organization_id="org-p", workspace_id="ws-p",
+                               brand_id="br-p", name="Dallas", city="Dallas",
+                               state_province="TX", country="US"))
         s.flush()
         s.add(ScoutRequest(id="sr-p", organization_id="org-p", workspace_id="ws-p",
                            brand_id="br-p", name="scout"))
@@ -104,7 +110,7 @@ def _seed(make) -> None:  # pragma: no cover - gated on PostgreSQL
             id="sir-p", organization_id="org-p", workspace_id="ws-p", scout_request_id="sr-p",
             normalized_signal_id="ns-p", opportunity_id="opp-p", analysis_version="3c",
             scoring_version="3c.1", fingerprint="fp-p", enricher="deterministic",
-            accepted=True, classification="emerging"))
+            accepted=True, classification="emerging", location_id="loc-p"))
         s.commit()
 
 

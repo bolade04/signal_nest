@@ -1410,7 +1410,9 @@ def creative_rows(world: World) -> dict[str, CreativeRows]:
                 prompt_version="1.2.0", model_identifier="mock-1", input_hash="0" * 64,
                 is_simulated=True, created_by=t.marketer_id, created_by_snapshot=snapshot,
                 summary="s", rationale="r", recommended_actions=[], suggested_angles=[],
-                risk_notes=[], evidence_refs=[], **scoped,
+                risk_notes=[], evidence_refs=[],
+                # A captured jurisdiction: 5D-W3 refuses generation from a brief without one.
+                jurisdiction_code="US-TX", **scoped,
             ))
             s.flush()
             s.add(Approval(

@@ -14,6 +14,11 @@ it stands when the job's turn comes; app.llm.quota):
 
 * the capability ``creative_generation`` resolves enabled for the workspace (the
   deny-biased resolver; dark by default);
+* the brief carries a captured jurisdiction (S1-5D item 31): a brief whose
+  ``jurisdiction_code`` is NULL — written before 5D-W3 captured one — or is not a
+  jurisdiction code is refused (422 ``brief_jurisdiction_missing`` at the route; the job fails
+  terminally with that reason). Nothing is inferred or defaulted; the remedy is a new brief
+  version, which captures one (:func:`app.briefs.service.create_brief`);
 * the brief is the workspace's, and its controlling approval decision (5B: the
   highest ``decision_seq`` for its exact version) is ``approved`` — drafts are generated
   "from an approved recommendation brief" (Phase 5C plan §1);
@@ -45,6 +50,15 @@ kinds in canonical form), and whether every required
 disclaimer (the library's, plus the offer calendar's active offers') is carried. The review
 is stored with the draft, one row per draft version, and a blocked or failed review makes
 the draft unapprovable (:func:`draft_approval_refusal`).
+
+**Jurisdiction propagation** (Project Phase 5D §2: location → brief → creative → review). A
+draft's ``jurisdiction_code`` is its brief's captured code (:func:`draft_jurisdiction`); the
+location is not resolved again at generation (the default recorded while the operator's Q-1
+is open). The review row records the draft's code, the jurisdiction it was evaluated under.
+The claims engine is given that code everywhere it selects the library entries that apply
+(:func:`app.claims.engine.active_entries`, S1-5D B-3): the generation inputs, the
+generation-time review and the approval re-check. A legacy draft with no code reaches the
+re-check with ``None`` and gets the engine's fail-closed reading (S1-5D B-2).
 
 **Provenance from the server.** Prompt name and version, model, ``input_hash`` (the LLM
 service's, over the task, the prompt identity and the sanitized inputs — never a provider's),
@@ -113,6 +127,7 @@ from app.jobs.models import Job
 from app.jobs.registry import HandlerContext
 from app.jobs.service import enqueue_job
 from app.jobs.status import JobErrorCode, JobExecutionError, JobStatus, JobType
+from app.jurisdiction.codes import is_jurisdiction_code
 from app.llm.base import (
     LLMError,
     LLMPromptRenderError,
@@ -169,6 +184,21 @@ class BriefNotApprovedError(ValidationDomainError):
     """The brief's current version is not approved: drafts come from approved briefs."""
 
     code = "brief_not_approved"
+
+
+class BriefJurisdictionMissingError(ValidationDomainError):
+    """The brief has no captured jurisdiction (S1-5D item 31): no draft is generated from it."""
+
+    code = "brief_jurisdiction_missing"
+
+
+#: The one answer to an item-31 refusal (fixed).
+BRIEF_JURISDICTION_MISSING_MESSAGE = (
+    "This brief was created before jurisdictions were recorded, so no draft can be generated "
+    "from it. Create a new version of the brief."
+)
+#: The job's and the log's reason for an item-31 refusal.
+BRIEF_JURISDICTION_MISSING = "brief_jurisdiction_missing"
 
 
 class CreativeGenerationUnconfiguredError(SignalNestError):
@@ -235,6 +265,24 @@ def brief_is_approved(db: Session, brief: RecommendationBrief) -> bool:
     return latest == ApprovalDecision.APPROVED.value
 
 
+def brief_has_jurisdiction(brief: RecommendationBrief) -> bool:
+    """Whether ``brief`` carries a captured jurisdiction code (S1-5D item 31). A NULL — no
+    resolution was ever captured — or any value that is not a jurisdiction code is refused;
+    nothing is inferred or defaulted."""
+    return is_jurisdiction_code(brief.jurisdiction_code)
+
+
+def draft_jurisdiction(brief: RecommendationBrief) -> str | None:
+    """The jurisdiction a draft of ``brief`` is generated, reviewed and stored under.
+
+    The brief's captured code (Phase 5D §2 propagation): the location is **not** resolved
+    again at generation. This is the default recorded while the operator's Q-1 is open (S1-5D
+    rulings record, "Remaining policy choice"); this function is the one place that choice is
+    made. Called only after :func:`brief_has_jurisdiction` has passed.
+    """
+    return brief.jurisdiction_code
+
+
 def reviews_by_draft(db: Session, drafts: Iterable[CreativeDraft]) -> dict[str, ContentReview]:
     """Each draft's review, read by the review's own tenant columns and the draft id."""
     drafts = list(drafts)
@@ -285,7 +333,10 @@ def draft_approval_refusal(db: Session, draft: CreativeDraft) -> str | None:
     their canonical form (:func:`app.claims.engine.canonical_kind`, DEFECT-5CW4-2), as the
     review reads them; any other kind blocks and requires nothing. An offer's disclaimer is
     not re-read: which offers apply depends on the generation's date and location, so the
-    stored review governs it. A retired entry blocks nothing and requires nothing.
+    stored review governs it. A retired entry blocks nothing and requires nothing. The library
+    is read for the draft's own ``jurisdiction_code`` (Phase 5D; S1-5D B-3), so a
+    jurisdiction-restricted entry counts only where it applies; a legacy draft with none gets
+    the engine's fail-closed reading (S1-5D B-2).
     """
     review = db.scalar(
         select(ContentReview).where(
@@ -300,7 +351,9 @@ def draft_approval_refusal(db: Session, draft: CreativeDraft) -> str | None:
     if not review.disclaimers_resolved or not review.passed:
         return "review_not_passed"
     text = fold(_draft_text(draft))
-    active = active_entries(load_library(db, draft.workspace_id))
+    active = active_entries(
+        load_library(db, draft.workspace_id), jurisdiction=draft.jurisdiction_code
+    )
     for entry in active:
         if is_blocking_kind(entry.kind) and contains_phrase(text, fold(entry.text)):
             return "blocked_claim"
@@ -358,13 +411,18 @@ def request_generation(
 ) -> Job:
     """Validate a generate request and enqueue (or join) its ``creative.generate`` job.
 
-    Raises :class:`BriefNotApprovedError` (422), :class:`~app.core.errors.NotFoundError`
+    Raises :class:`BriefJurisdictionMissingError` (422; S1-5D item 31),
+    :class:`BriefNotApprovedError` (422), :class:`~app.core.errors.NotFoundError`
     (a parent draft not of this brief, 404), :class:`CreativeGenerationUnconfiguredError`
-    (503) and :class:`CreativeQuotaExceededError` (429). The capability and role gates are
-    the route's; the job re-checks every gate after taking the generation locks
-    (:func:`execute_generation`).
+    (503) and :class:`CreativeQuotaExceededError` (429). None of them enqueues a job. The
+    capability and role gates are the route's; the job re-checks every gate after taking the
+    generation locks (:func:`execute_generation`).
     """
     now = now or datetime.now(UTC)
+    if not brief_has_jurisdiction(brief):
+        # Item 31 first: approving a legacy brief cannot cure it; a new version can.
+        _log_not_generated(brief.workspace_id, brief.id, "refused", BRIEF_JURISDICTION_MISSING)
+        raise BriefJurisdictionMissingError(BRIEF_JURISDICTION_MISSING_MESSAGE)
     if not brief_is_approved(db, brief):
         raise BriefNotApprovedError(
             "Approve this brief before generating drafts from it."
@@ -492,9 +550,12 @@ def generation_context(
     db: Session, brief: RecommendationBrief, channel: str, now: datetime
 ) -> GenerationContext:
     """The ``generate_creative`` inputs (every template field a key) and the review's
-    library, from the brief and the workspace's stored context."""
+    library, from the brief and the workspace's stored context. The approved claims and
+    required disclaimers offered to the model are the entries that apply in the brief's
+    captured jurisdiction (Phase 5D; S1-5D B-3), which is the draft's
+    (:func:`draft_jurisdiction`)."""
     library = load_library(db, brief.workspace_id)
-    active = active_entries(library)
+    active = active_entries(library, jurisdiction=draft_jurisdiction(brief))
     offer_disclaimers = _offer_disclaimers(db, brief, now)
     disclaimers = [e.text for e in active if is_disclaimer_kind(e.kind)] + offer_disclaimers
     profile = db.scalar(
@@ -545,6 +606,8 @@ def _review_row(draft: CreativeDraft, review: LibraryReview) -> ContentReview:
         required_disclaimers=_cap_items(review.required_disclaimers),
         disclaimers_resolved=review.disclaimers_resolved,
         passed=review.passed,
+        # The jurisdiction the review was evaluated under: the draft's (Phase 5D §2).
+        jurisdiction_code=draft.jurisdiction_code,
     )
 
 
@@ -590,11 +653,12 @@ def execute_generation(
 ) -> dict[str, Any]:
     """Run one ``creative.generate`` attempt; returns the job's safe result summary.
 
-    Raises :class:`~app.jobs.status.JobExecutionError`: ``VALIDATION`` (payload, brief,
-    approval or parent), ``AUTHORIZATION`` (requester), ``POLICY`` (capability, ceilings,
-    budget), ``TRANSIENT`` (the model stayed unavailable after the service's retries, or a
-    version clash; the worker retries), ``NON_RETRYABLE`` (a permanent model failure or
-    withheld output). Nothing is stored on any of them except the usage rows.
+    Raises :class:`~app.jobs.status.JobExecutionError`: ``VALIDATION`` (payload, brief, the
+    brief's captured jurisdiction (item 31), approval or parent), ``AUTHORIZATION``
+    (requester), ``POLICY`` (capability, ceilings, budget), ``TRANSIENT`` (the model stayed
+    unavailable after the service's retries, or a version clash; the worker retries),
+    ``NON_RETRYABLE`` (a permanent model failure or withheld output). Nothing is stored on any
+    of them except the usage rows.
     """
     db = ctx.db
     try:
@@ -616,6 +680,10 @@ def execute_generation(
         raise _fail(JobErrorCode.VALIDATION, "workspace_not_found")
     if not creative_capability(db, settings, org_id, ws_id).effective_enabled:
         raise _fail(JobErrorCode.POLICY, "capability_unavailable")
+    if not brief_has_jurisdiction(brief):
+        # Item 31, re-read under the locks: terminal (VALIDATION is never retried).
+        _log_not_generated(ws_id, brief.id, "refused", BRIEF_JURISDICTION_MISSING)
+        raise _fail(JobErrorCode.VALIDATION, BRIEF_JURISDICTION_MISSING)
     if not brief_is_approved(db, brief):
         raise _fail(JobErrorCode.VALIDATION, "brief_not_approved")
     try:
@@ -629,6 +697,9 @@ def execute_generation(
         raise _fail(JobErrorCode.CANCELLED, "cancelled before generation")
 
     now = ctx.now if ctx.now.tzinfo is not None else ctx.now.replace(tzinfo=UTC)
+    # The draft's jurisdiction (Q-1 default: its brief's captured code; the location is not
+    # resolved again). The generation inputs, the review and the draft row all use it.
+    jurisdiction = draft_jurisdiction(brief)
     context = generation_context(db, brief, payload.channel.value, now)
 
     meter = CeilingMeter(
@@ -679,7 +750,11 @@ def execute_generation(
         _log_not_generated(ws_id, brief.id, "withheld", screened.withheld_reason)
         raise _fail(JobErrorCode.NON_RETRYABLE, f"withheld:{screened.withheld_reason}")
     review = review_against_library(
-        screened.screening_text, context.industry, context.library, context.offer_disclaimers
+        screened.screening_text,
+        context.industry,
+        context.library,
+        context.offer_disclaimers,
+        jurisdiction=jurisdiction,
     )
 
     version = _next_version(db, brief)
@@ -690,6 +765,7 @@ def execute_generation(
         brief_id=brief.id,
         opportunity_id=brief.opportunity_id,
         location_id=brief.location_id,
+        jurisdiction_code=jurisdiction,
         campaign_id=brief.campaign_id,
         draft_version=version,
         parent_draft_id=payload.parent_draft_id,
@@ -774,17 +850,22 @@ def _log_not_generated(workspace_id: str, brief_id: str, outcome: str, reason: s
 
 
 __all__ = [
+    "BRIEF_JURISDICTION_MISSING",
+    "BRIEF_JURISDICTION_MISSING_MESSAGE",
     "BRIEF_NOT_FOUND",
     "DRAFT_NOT_FOUND",
     "GENERATE_TASK",
     "GENERATOR_ROLES",
+    "BriefJurisdictionMissingError",
     "BriefNotApprovedError",
     "CreativeGenerationUnconfiguredError",
     "CreativeQuotaExceededError",
     "GenerationContext",
+    "brief_has_jurisdiction",
     "brief_is_approved",
     "creative_capability",
     "draft_approval_refusal",
+    "draft_jurisdiction",
     "draft_out",
     "execute_generation",
     "generation_context",

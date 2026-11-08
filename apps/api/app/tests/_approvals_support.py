@@ -19,6 +19,7 @@ from app.briefs.models import RecommendationBrief
 from app.core.actor_snapshot import actor_snapshot
 from app.core.enums import Role
 from app.intelligence.records import SignalIntelligenceRecord
+from app.locations.models import BusinessLocation
 from app.opportunities.models import Opportunity
 from app.organizations.models import Organization, OrganizationMember, User, Workspace
 from app.scouting_requests.models import ScoutRequest
@@ -76,11 +77,26 @@ class Evidence:
 
 
 def add_evidence(s: Session, *, org_id: str, ws_id: str, key: str) -> Evidence:
-    """One opportunity and its immutable intelligence record in ``ws_id``."""
+    """One opportunity and its immutable intelligence record in ``ws_id``, bound to a
+    location that resolves to a jurisdiction (Dallas, TX: the 5D-W3 capture stores US-TX)."""
     brand = f"br-{key}"
     if s.get(Brand, brand) is None:
         s.add(Brand(id=fit(brand), organization_id=org_id, workspace_id=ws_id, name=f"B {key}"))
         s.flush()
+    location = fit(f"loc-{key}")
+    s.add(
+        BusinessLocation(
+            id=location,
+            organization_id=org_id,
+            workspace_id=ws_id,
+            brand_id=brand,
+            name="Dallas",
+            city="Dallas",
+            state_province="TX",
+            country="US",
+        )
+    )
+    s.flush()
     request = fit(f"sr-{key}")
     s.add(
         ScoutRequest(
@@ -146,6 +162,7 @@ def add_evidence(s: Session, *, org_id: str, ws_id: str, key: str) -> Evidence:
             enricher="deterministic",
             accepted=True,
             classification="emerging",
+            location_id=location,
         )
     )
     s.flush()

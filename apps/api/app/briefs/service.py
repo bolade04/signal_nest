@@ -9,6 +9,17 @@ trustworthy compliance record:
   in the same organization and workspace (422 otherwise, the feedback precedent; the route
   has already answered 404 for a record outside the workspace). An optional ``campaign_id``
   must name a campaign of the same workspace (404 otherwise, uniform with a missing id).
+* **Jurisdiction snapshot, or an explicit refusal** (Project Phase 5D §2, lane 5D-W3; the
+  S1-5D capture rule). Before any budget check or model call, the record's location is
+  resolved with the shared :func:`app.jurisdiction.resolver.resolve_jurisdiction` and the
+  coverage rules attached to that location (:func:`_capture_jurisdiction`). A resolved code is
+  stored once, at insert, as ``jurisdiction_code``. An ``UNRESOLVED`` answer — including a
+  record with no location, or one whose location is not this workspace's — is refused
+  (422 ``jurisdiction_unresolved``, :class:`BriefJurisdictionUnresolvedError`): no model
+  call, no usage or budget, no brief. Nothing is guessed or defaulted, so capture never
+  writes ``NULL``; only briefs written before 5D-W3 carry one (S1-5D item 31, which the
+  creative service enforces). The answer and the log carry a fixed message and a reason
+  category, never the resolver's evidence or any text of the location.
 * **Metered model call.** The brief's one model task goes through
   :meth:`app.llm.service.LLMService.run` with the tenant named and an
   :class:`~app.llm.metering.LLMMeter` bound to it: the run cap, the workspace's monthly
@@ -20,7 +31,8 @@ trustworthy compliance record:
   before it can be stored or shown; withheld output stores nothing (422 ``brief_withheld``).
   Content is validated against the frozen :class:`~app.briefs.schemas.BriefContent` bounds.
 * **Provenance from the server, never the caller.** ``analysis_version`` /
-  ``scoring_version`` / ``location_id`` are copied from the intelligence record; the prompt
+  ``scoring_version`` / ``location_id`` are copied from the intelligence record, and
+  ``jurisdiction_code`` is resolved from that location (above); the prompt
   name and version, model, ``input_hash`` (computed by the LLM service), trace id and
   simulation flag come from the response; ``llm_usage_event_id`` is the usage-ledger row of
   the attempt that produced the brief; ``created_by_snapshot`` is the author as they are now.
@@ -67,6 +79,7 @@ from app.core.config import Settings
 from app.core.errors import NotFoundError, SignalNestError, ValidationDomainError
 from app.core.logging import get_logger, log_event
 from app.intelligence.records import SignalIntelligenceRecord
+from app.jurisdiction.resolver import resolve_jurisdiction
 from app.llm.base import LLMError
 from app.llm.metering import (
     LLMBudgetExceededError,
@@ -77,6 +90,7 @@ from app.llm.metering import (
 from app.llm.models import LLMUsageEvent
 from app.llm.screening import screen_explanation
 from app.llm.service import LLMService
+from app.locations.models import BusinessLocation, GeoCoverageRule
 from app.opportunities.context import build_business_context
 from app.opportunities.models import Opportunity, ValidationEvidence
 from app.organizations.models import User
@@ -123,6 +137,76 @@ class BriefVersionConflictError(BriefNotProducedError):
 
     status_code = 409
     code = "conflict"
+
+
+class BriefJurisdictionUnresolvedError(ValidationDomainError):
+    """The brief's location did not resolve to a jurisdiction (the S1-5D capture rule): no
+    model call was made and nothing was stored (422).
+
+    Not a :class:`BriefNotProducedError`: the refusal comes before any model call or budget
+    check, so there is no usage to keep."""
+
+    code = "jurisdiction_unresolved"
+
+
+#: The one answer to an unresolved capture. Fixed: it never quotes the location or the
+#: resolver's evidence.
+JURISDICTION_UNRESOLVED_MESSAGE = (
+    "The jurisdiction of this opportunity's location could not be determined, so no brief "
+    "was generated. Complete the location's details, for example add its state or province, "
+    "and try again."
+)
+
+
+def _capture_jurisdiction(
+    db: Session, opportunity: Opportunity, record: SignalIntelligenceRecord
+) -> str:
+    """The jurisdiction code a new brief from ``record`` captures (Phase 5D §2), or
+    :class:`BriefJurisdictionUnresolvedError`.
+
+    The location is ``record.location_id`` when it names a location of the opportunity's
+    workspace; otherwise there is none (the resolver answers ``UNRESOLVED`` for "no
+    location"). The coverage rules are the ones attached to that location in the workspace
+    (``GeoCoverageRule.location_id``), the rule set the scout pipeline and the geo-coverage
+    routes already choose for a location; workspace-level rules (``location_id`` NULL) are
+    not the location's and are not read. Logs a reason category only.
+    """
+    location: BusinessLocation | None = None
+    rules: list[GeoCoverageRule] = []
+    reason = "jurisdiction_no_location"
+    if record.location_id is not None:
+        candidate = db.get(BusinessLocation, record.location_id)
+        if (
+            candidate is not None
+            and candidate.workspace_id == opportunity.workspace_id
+            and candidate.organization_id == opportunity.organization_id
+        ):
+            location = candidate
+            rules = list(
+                db.scalars(
+                    select(GeoCoverageRule)
+                    .where(
+                        GeoCoverageRule.workspace_id == opportunity.workspace_id,
+                        GeoCoverageRule.location_id == location.id,
+                    )
+                    .order_by(GeoCoverageRule.created_at, GeoCoverageRule.id)
+                ).all()
+            )
+            reason = "jurisdiction_location_unresolved"
+        else:
+            reason = "jurisdiction_location_outside_workspace"
+    resolution = resolve_jurisdiction(location, rules)
+    if not resolution.is_resolved:
+        log_event(
+            logger,
+            "recommendation_brief_not_generated",
+            outcome="refused",
+            workspace_id=opportunity.workspace_id,
+            opportunity_id=opportunity.id,
+            reason=reason,
+        )
+        raise BriefJurisdictionUnresolvedError(JURISDICTION_UNRESOLVED_MESSAGE)
+    return resolution.code
 
 
 def _brief_inputs(
@@ -238,8 +322,10 @@ def create_brief(
 
     Raises :class:`~app.core.errors.ValidationDomainError` (record not this opportunity's),
     :class:`~app.core.errors.NotFoundError` (campaign not in the workspace),
-    and :class:`BriefNotProducedError` subclasses (budget, model failure, withheld output, a
-    concurrent capture that took the version).
+    :class:`BriefJurisdictionUnresolvedError` (the location's jurisdiction did not resolve;
+    raised before any budget check or model call), and :class:`BriefNotProducedError`
+    subclasses (budget, model failure, withheld output, a concurrent capture that took the
+    version).
     """
     record = intelligence_record
     if (
@@ -254,6 +340,9 @@ def create_brief(
         campaign = db.get(Campaign, campaign_id)
         if campaign is None or campaign.workspace_id != opportunity.workspace_id:
             raise NotFoundError("Campaign not found in this workspace.")
+
+    # The S1-5D capture rule: resolve first, refuse UNRESOLVED before any budget or model use.
+    jurisdiction_code = _capture_jurisdiction(db, opportunity, record)
 
     try:
         ensure_run_allowed(db, settings, opportunity.workspace_id)
@@ -336,6 +425,8 @@ def create_brief(
         opportunity_id=opportunity.id,
         intelligence_record_id=record.id,
         location_id=record.location_id,
+        # Captured once, here (Phase 5D §2); never NULL for a brief written by this function.
+        jurisdiction_code=jurisdiction_code,
         campaign_id=campaign_id,
         brief_version=version,
         parent_brief_id=parent_id,
@@ -396,8 +487,10 @@ def create_brief(
 
 __all__ = [
     "BRIEF_TASK",
+    "JURISDICTION_UNRESOLVED_MESSAGE",
     "BriefBudgetExhaustedError",
     "BriefGenerationUnavailableError",
+    "BriefJurisdictionUnresolvedError",
     "BriefNotProducedError",
     "BriefVersionConflictError",
     "BriefWithheldError",
