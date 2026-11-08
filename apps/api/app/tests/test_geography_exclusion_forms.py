@@ -17,6 +17,9 @@ This module pins:
   observed market in its jurisdiction under every coverage type, in upper, lower and spaced
   forms and with a country suffix; a code the tables cannot place fails closed and is never
   read as a city;
+* an observed market (evidence, a request's market, a business address) reads only a code the
+  tables place: a road number or hyphenated name ("US-9", "GA-400", "AL-AIN") is no
+  contradiction and widens no rule (W21-REV-5DW2FIX r1, C-1);
 * a Nigerian state (or the FCT) named with its suffix removes markets in that state, and both
   parsers read it the same way, from ``app.jurisdiction.subdivisions``;
 * same-name readings (W21-REV-5DW4 r1 C-1, decided from the item-35 ruling): an exclusion of a
@@ -39,7 +42,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.connectors.policy import ConnectorPolicy
-from app.connectors.sample_feeds import _MARKET_FEEDS
+from app.connectors.sample_feeds import _MARKET_FEEDS, sample_feed_covers
 from app.db.seed import CITIES
 from app.geography import markets
 from app.geography.engine import CoverageRule, is_excluded, market_in_coverage, resolve_geo
@@ -58,7 +61,7 @@ from app.geography.places_data import COUNTRIES, KNOWN_CITIES, SUBDIVISIONS
 from app.jurisdiction.codes import UNRESOLVED
 from app.jurisdiction.resolver import resolve_jurisdiction
 from app.jurisdiction.subdivisions import SUBDIVISION_JURISDICTIONS
-from app.scouting_requests.fixtures import ALL_MARKETS
+from app.scouting_requests.fixtures import ALL_MARKETS, fixtures_for_market
 
 DALLAS = market_from_parts(city="Dallas", region="Texas", country="United States")
 LONDON = market_from_parts(city="London", region="England", country="United Kingdom")
@@ -249,12 +252,14 @@ def test_an_unplaceable_code_removes_every_market_its_country_cannot_rule_out(co
 
 
 def test_an_unplaceable_code_is_never_read_as_a_city():
-    """Before the fix "US-ZZ" was a city "us zz" (in the location's country), which removed no
-    Texas market. Neither parser, with or without a location country, reads it as one now."""
+    """Before the fix the exclusion "US-ZZ" was a city "us zz" (in the location's country),
+    which removed no Texas market. A rule's text, with or without a location country, is never
+    read as one now. An observed unplaceable code is read as words, as at the base (it names
+    no region): an address's road number is no contradiction (W21-REV-5DW2FIX r1, C-1)."""
     for text, home in itertools.product(("US-ZZ", "us-zz", "NG-ZZ", "GB-LND", "DE-BY"), HOMES):
         country = home.country if home else None
         assert parse_market(text, default_country=country).city is None, (text, home)
-        assert parse_observed(text).city is None, text
+        assert parse_observed(text).region is None, text
 
 
 def test_an_unplaceable_code_rules_out_nothing_in_its_country_and_contains_nothing():
@@ -294,6 +299,13 @@ def test_a_code_its_own_text_contradicts_cannot_be_placed(text, city, country, r
         assert market_in_coverage(rule, market) is False
     policy = ConnectorPolicy(source_type="rss_news", enabled=True, allowed_markets={text})
     assert not policy.permits(source_types=(), market="Dallas, TX")
+    # Not even the same text: a region the tables cannot place contains nothing and lies in
+    # no scope, so the code's own country never admits the self-contradicting observation
+    # (the word reading still places it in the suffix's country, as at the base).
+    assert market_within(parse_observed(text), parse_market(text)) is False
+    assert not policy.permits(source_types=(), market=text)
+    own = CoverageRule(coverage_type="country", country=country)
+    assert market_in_coverage(own, text) is False, (country, text)
 
 
 @pytest.mark.parametrize("address", ["US-TX, Canada", "NG-LA, Kenya", "Dallas, US-TX, Canada"])
@@ -327,6 +339,146 @@ def test_a_code_in_a_business_address_is_read_as_its_jurisdiction():
     ):
         rule = SimpleNamespace(business_address=address)
         assert resolve_jurisdiction(location, [rule]).code == code, address
+
+
+# --------------------------------------------------------------------------- #
+# An observed market reads only a placeable code (W21-REV-5DW2FIX r1, C-1)
+# --------------------------------------------------------------------------- #
+
+US = "United States"
+#: (location city, state, country), a realistic business address, the location's own code.
+#: Road numbers and hyphenated names that look like codes; each resolved so at e3571ac8.
+REALISTIC_ADDRESSES = [
+    # The review's eight.
+    (("Freehold", "New Jersey", US), "US-9, Freehold, NJ 07728", "US-NJ"),
+    (("Freehold", "New Jersey", US), "US-9", "US-NJ"),
+    (("Islamorada", "Florida", US), "Mile Marker 82, US-1, Islamorada, FL 33036", "US-FL"),
+    (("Cumming", "Georgia", US), "GA-400", "US-GA"),
+    (("Cumming", "Georgia", US), "Suite 100, GA-400", "US-GA"),
+    (("Malibu", "California", US), "CA-1, Malibu, CA 90265", "US-CA"),
+    (("Malibu", "California", US), "CA-1", "US-CA"),
+    (("Bloomington", "Indiana", US), "IN-37", "US-IN"),
+    (("Al Ain", "Abu Dhabi", "United Arab Emirates"), "KHALIFA ST, AL-AIN", "AE"),
+    (("Ca Mau", "Ca Mau", "Vietnam"), "Ca-Mau, Vietnam", "VN"),
+    # US and state highway numbers whose prefix is also an ISO country code.
+    (("Ventura", "California", US), "US-101, Ventura, CA 93001", "US-CA"),
+    (("Baltimore", "Maryland", US), "Mile Marker 5, US-1, Baltimore, MD", "US-MD"),
+    (("Dover", "Delaware", US), "US-9, Dover, DE 19901", "US-DE"),
+    (("Annapolis", "Maryland", US), "MD-2, Annapolis, MD 21401", "US-MD"),
+    (("Payson", "Arizona", US), "AZ-87, Payson, AZ 85541", "US-AZ"),
+    (("Aspen", "Colorado", US), "CO-82, Aspen, CO 81611", "US-CO"),
+    (("Kennebunk", "Maine", US), "ME-1, Kennebunk, ME 04043", "US-ME"),
+    (("Rehoboth Beach", "Delaware", US), "DE-1, Rehoboth Beach, DE 19971", "US-DE"),
+    (("Easton", "Pennsylvania", US), "PA-611, Easton, PA 18042", "US-PA"),
+    (("Tuscaloosa", "Alabama", US), "AL-69, Tuscaloosa, AL 35401", "US-AL"),
+    (("Lincoln", "Nebraska", US), "NE-2, Lincoln, NE 68502", "US-NE"),
+    (("Grand Isle", "Louisiana", US), "LA-1, Grand Isle, LA 70358", "US-LA"),
+    (("Duluth", "Minnesota", US), "MN-61, Duluth, MN 55802", "US-MN"),
+    (("Gatlinburg", "Tennessee", US), "TN-73", "US-TN"),
+    (("Myrtle Beach", "South Carolina", US), "SC-17, Myrtle Beach, SC 29577", "US-SC"),
+    (("Leesburg", "Virginia", US), "VA-7", "US-VA"),
+    (("Sonoma", "California", US), "Suite 5, CA-12", "US-CA"),
+    # Arabic names with the article written "AL-".
+    (("AlUla", "Medina", "Saudi Arabia"), "AL-ULA", "SA"),
+    (("AlUla", "Medina", "Saudi Arabia"), "Old Town, AL-ULA, Saudi Arabia", "SA"),
+    (("Kut", "Wasit", "Iraq"), "AL-KUT", "IQ"),
+    (("Al Bab", "Aleppo", "Syria"), "AL-BAB, Syria", "SY"),
+    (("Al Ain", "Abu Dhabi", "United Arab Emirates"), "AL-AIN", "AE"),
+    # Vietnamese hyphenated names.
+    (("Ca Mau", "Ca Mau", "Vietnam"), "CA-MAU", "VN"),
+    (("Ba Ria", "Ba Ria-Vung Tau", "Vietnam"), "Ba-Ria, Vietnam", "VN"),
+    (("Ba Ria", "Ba Ria-Vung Tau", "Vietnam"), "BA-RIA", "VN"),
+    (("Ca Na", "Ninh Thuan", "Vietnam"), "Ca-Na, Ninh Thuan, Vietnam", "VN"),
+]
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "code"), REALISTIC_ADDRESSES, ids=[a for _, a, _ in REALISTIC_ADDRESSES]
+)
+def test_a_road_number_or_hyphenated_name_in_an_address_is_no_contradiction(
+    location, address, code
+):
+    city, state, country = location
+    resolution = resolve_jurisdiction(
+        SimpleNamespace(city=city, state_province=state, country=country),
+        [SimpleNamespace(business_address=address)],
+    )
+    assert resolution.code == code, resolution.evidence
+
+
+def test_genuine_address_contradictions_still_refuse_and_agreements_still_agree():
+    lagos = SimpleNamespace(city="Lagos", state_province="Lagos", country="Nigeria")
+    dallas = SimpleNamespace(city="Dallas", state_province="Texas", country=US)
+    for address in ("US-TX, Canada", "NG-LA, Kenya", "Dallas, US-TX, Canada", "Ikeja, Ogun State"):
+        rule = SimpleNamespace(business_address=address)
+        assert resolve_jurisdiction(lagos, [rule]).code == UNRESOLVED, address
+    for location, address, code in (
+        (lagos, "Ikeja, NG-LA", "NG-LA"),
+        (lagos, "Lagos State, Nigeria", "NG-LA"),
+        (dallas, "Dallas, US-TX", "US-TX"),
+        (dallas, "4400 US-9, Dallas, TX 75201", "US-TX"),
+    ):
+        rule = SimpleNamespace(business_address=address)
+        assert resolve_jurisdiction(location, [rule]).code == code, address
+
+
+def test_an_observed_market_reads_only_a_placeable_code():
+    for text in ("US-9", "GA-400", "IN-37", "CA-1", "AL-AIN", "Ca-Mau", "DE-BY", "US-ZZ"):
+        assert parse_observed(text) == parse_observed(text, jurisdiction_forms=False), text
+    assert _ident(parse_observed("US-TX")) == (None, "US-TX", "US")
+    assert _ident(parse_observed("ng-la")) == (None, "NG:lagos", "NG")
+    # A rule's text keeps the fail-closed reading of the same spelling.
+    assert _ident(parse_market("US-9")) == (None, "US-9", "US")
+    assert _ident(parse_market("IN-37")) == (None, "IN-37", "IN")
+
+
+@pytest.mark.parametrize(
+    ("country", "markets_outside"),
+    [
+        ("India", ["IN-37", "Bloomington, IN-37"]),
+        ("Canada", ["CA-12", "Suite 5, CA-12", "CA-1, Malibu, CA 90265"]),
+        ("Albania", ["AL-69", "AL-ULA", "KHALIFA ST, AL-AIN"]),
+        ("Gabon", ["GA-400"]),
+        ("United States", ["US-AZ, Australia"]),
+    ],
+)
+def test_a_road_number_widens_no_country_rule(country, markets_outside):
+    rule = CoverageRule(coverage_type="country", country=country)
+    for market in markets_outside:
+        assert market_in_coverage(rule, market) is False, (country, market)
+
+
+def test_a_road_number_keeps_its_clearance_and_its_fixture_market():
+    for allowed, market in (
+        ("DE, USA", "US-9, Dover, DE 19901"),
+        ("Kentucky, US", "US-9, Louisville, KY 40202"),
+        ("Maryland, US", "Mile Marker 5, US-1, Baltimore, MD"),
+        ("Florida, US", "Mile Marker 82, US-1, Islamorada, FL 33036"),
+    ):
+        policy = ConnectorPolicy(source_type="rss_news", enabled=True, allowed_markets={allowed})
+        assert policy.permits(source_types=(), market=market), (allowed, market)
+    for market in ("US-9, Dallas, TX 75201", "Mile Marker 5, US-1, Dallas, TX"):
+        signals = fixtures_for_market(market)
+        assert signals and {s.market for s in signals} == {"Dallas, TX"}, market
+        assert sample_feed_covers(market), market
+
+
+@pytest.mark.parametrize("excluded", ["Ogun State", "NG-OG", "Kano State", "FCT, Nigeria"])
+def test_another_nigerian_state_excluded_removes_a_lagos_market_that_names_no_state(excluded):
+    """Recorded breadth (W21-REV-5DW2FIX r1, decision 5; item 35): "Lagos, NG" names no state,
+    so an exclusion of another Nigerian state cannot rule it out. A market that names Lagos
+    State is kept."""
+    for rule in (
+        CoverageRule(coverage_type="online", excluded_markets=(excluded,), home_market=LAGOS),
+        CoverageRule(
+            coverage_type="radius",
+            included_markets=("Lagos, NG",),
+            excluded_markets=(excluded,),
+            home_market=LAGOS,
+        ),
+    ):
+        assert market_in_coverage(rule, "Lagos, NG") is False, (excluded, rule)
+        assert market_in_coverage(rule, "Lagos, Lagos State, Nigeria") is True, (excluded, rule)
 
 
 def test_a_hyphenated_place_name_is_not_a_code():

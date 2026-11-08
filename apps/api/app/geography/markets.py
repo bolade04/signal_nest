@@ -39,11 +39,13 @@ same way on both sides of a comparison:
   subdivision, never a city. A code of a country whose subdivisions are listed (here or in
   ``app.jurisdiction.subdivisions``) is always a code; an upper-case code of any other
   country is read as one too, unless the text names another country ("Al-Ain, UAE" stays
-  a place name). A code the tables cannot place ("US-ZZ", "DE-BY") keeps its own key: it
-  rules nothing out within its country (:func:`may_overlap`) and contains nothing
-  (:func:`market_within`). A listed code contradicted by the rest of the text ("US-TX,
-  Canada") is placed no better: it is read as its own country with the region "US-TX?",
-  which no location has.
+  a place name). In a rule's text a code the tables cannot place ("US-ZZ", "DE-BY") keeps
+  its own key: it rules nothing out within its country (:func:`may_overlap`) and contains
+  nothing (:func:`market_within`). In an observed market (evidence, a request's market, a
+  business address) only a placeable code is read: a road number or hyphenated name ("US-9",
+  "GA-400", "AL-AIN", "Ca-Mau") is read as words, as before. A listed code contradicted by
+  the rest of the text ("US-TX, Canada") is read as its own country with the region
+  "US-TX?", which no location has and no scope contains.
 * a Nigerian state or the FCT named with its suffix ("Lagos State", "Ogun State, Nigeria",
   "Federal Capital Territory"), read from ``app.jurisdiction.subdivisions`` (Nigeria is
   deliberately not in ``places_data.SUBDIVISIONS``, so a bare "Lagos" stays the city).
@@ -854,8 +856,13 @@ def _subdivision_key(country: str, part: str) -> str | None:
     return f"{country}:{fold(names[0])}" if names else None
 
 
-def _code_form(folded: str, raw: str) -> _Form | None:
-    """A part written as a jurisdiction code: "US-TX", "us - tx", "NG-LA", "US TX"."""
+def _code_form(folded: str, raw: str, *, observed: bool = False) -> _Form | None:
+    """A part written as a jurisdiction code: "US-TX", "us - tx", "NG-LA", "US TX".
+
+    In an ``observed`` market (evidence, a request's market, a business address) only a code
+    the tables place is one: a road number ("US-9", "GA-400", "IN-37") or a hyphenated name
+    ("AL-AIN", "Ca-Mau") there is read as words, as before (W21-REV-5DW2FIX r1, C-1). A
+    rule's text keeps the fail-closed reading of an unplaceable code."""
     match = _CODE_FORM.fullmatch(raw.strip())
     if match:
         country, part = match[1].upper(), match[2].upper()
@@ -875,7 +882,10 @@ def _code_form(folded: str, raw: str) -> _Form | None:
             return None
         strict = True
     code = f"{country}-{part}"
-    return _Form(country, _subdivision_key(country, part) or code, strict, code)
+    key = _subdivision_key(country, part)
+    if observed and key is None:
+        return None
+    return _Form(country, key or code, strict, code)
 
 
 def _named_subdivision(folded: str) -> _Form | None:
@@ -894,8 +904,8 @@ def _named_subdivision(folded: str) -> _Form | None:
     return _Form(country, key, strict=False)
 
 
-def _form(folded: str, raw: str, *, head_of_two: bool) -> _Form | None:
-    form = _code_form(folded, raw) or _named_subdivision(folded)
+def _form(folded: str, raw: str, *, head_of_two: bool, observed: bool) -> _Form | None:
+    form = _code_form(folded, raw, observed=observed) or _named_subdivision(folded)
     if form is None and head_of_two and len(folded) == 2 and folded.upper() in COUNTRIES:
         # "KE, Kenya": a country code before its country. Soft: "Bo, Sierra Leone" is a city.
         form = _Form(folded.upper(), None, strict=False)
@@ -926,13 +936,15 @@ def _unplaceable(label: str, *forms: _Form, city: str | None = None) -> MarketId
     return _identity(city, f"{strict.code}?", strict.country, label)
 
 
-def _form_reading(parts: list[tuple[str, str]], label: str) -> MarketIdentity | None:
+def _form_reading(
+    parts: list[tuple[str, str]], label: str, *, observed: bool
+) -> MarketIdentity | None:
     """The reading of a text with a jurisdiction form where a qualifier goes, or ``None``
     to read the text as words (no form there, or one that place names could explain)."""
     words = [folded for folded, _ in parts]
     n = len(parts)
     forms = [
-        _form(folded, raw, head_of_two=n == 2 and index == 0)
+        _form(folded, raw, head_of_two=n == 2 and index == 0, observed=observed)
         for index, (folded, raw) in enumerate(parts)
     ]
     last = forms[-1]
@@ -1080,7 +1092,7 @@ def _parse(
     if not cleaned:
         return None
     if forms:
-        reading = _form_reading(cleaned, label)
+        reading = _form_reading(cleaned, label, observed=not qualify)
         if reading is not None:
             return reading
     parts = [folded for folded, _ in cleaned]
@@ -1206,12 +1218,13 @@ def market_within(candidate: MarketIdentity | None, scope: MarketIdentity | None
     The scope must name a country, which the candidate must share. A scope's city
     must be the candidate's. A scope's region must be the candidate's region, except
     that a city outside ``REGION_QUALIFIES_CITY`` countries is identified by city and
-    country, so there the region only has to agree when the candidate states one. A scope
-    whose region is a code the tables cannot place ("US-ZZ") contains nothing.
+    country, so there the region only has to agree when the candidate states one. A region
+    the tables cannot place ("US-ZZ", a contradicted "US-TX?") contains nothing and lies in
+    no scope.
     """
     if candidate is None or scope is None or not scope.is_qualified:
         return False
-    if _unplaced(scope.region):
+    if _unplaced(scope.region) or _unplaced(candidate.region):
         return False
     if candidate.country != scope.country:
         return False
