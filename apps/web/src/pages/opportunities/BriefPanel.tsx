@@ -38,23 +38,29 @@ export function briefAuthorName(snapshot: string): string {
 /**
  * Operator ruling Q-1 (2026-11-08): a draft inherits its brief's captured jurisdiction;
  * editing the location changes no existing brief, draft or review; a new brief version is
- * needed to use a changed location. Said where a version's drafts are opened. No jurisdiction
- * code is shown: briefs do not expose one.
+ * needed to use a changed location. Said where a version's drafts are opened, to every member
+ * who sees "Open drafts"; the remedy (`NEW_VERSION_REMEDY`) only to members who can create a
+ * brief version (review r3 copy C-a). No jurisdiction code is shown: briefs do not expose one.
  */
 const DRAFT_JURISDICTION_NOTE =
   'Drafts from this version use the jurisdiction recorded when this version was created. ' +
-  'Editing the location does not change existing briefs, drafts or reviews. To use a changed ' +
-  'location, generate a new version first.';
+  'Editing the location does not change existing briefs, drafts or reviews.';
+const NEW_VERSION_REMEDY = 'To use a changed location, generate a new version first.';
 
 /**
- * The brief capture's `jurisdiction_unresolved` refusal (5D-W3; S1-5D capture rule): one
- * wording that is true whether the location lacks a country or a state or province, or its
- * address names another place. Static copy, never the server's text.
+ * The brief capture's `jurisdiction_unresolved` refusal (5D-W3; S1-5D capture rule). The API
+ * sends only the code, so one static wording must be true for every cause: an opportunity
+ * with no location (for example from a workspace-wide scout, which no edit can cure, review r3
+ * C-1), a missing or unknown country, a missing state or province where one is required (the
+ * item-33 list: US, CA, AU, NG), and an address that names another place. Never the server's
+ * text.
  */
 const JURISDICTION_UNRESOLVED_MESSAGE =
-  'No brief was generated because the jurisdiction of this opportunity’s location could not ' +
-  'be determined. Complete or correct the location’s details so that its country, its state ' +
-  'or province (where the country has them) and its address all name the same place, then ' +
+  'No brief was generated because this opportunity’s jurisdiction could not be determined from ' +
+  'its location. If the opportunity has no location, for example because it came from a ' +
+  'workspace-wide scout, no brief can be generated for it. Otherwise, complete or correct the ' +
+  'location’s details so that its country, its state or province (required in the United ' +
+  'States, Canada, Australia and Nigeria) and its address all name the same place, then ' +
   'generate the brief again.';
 
 function isJurisdictionUnresolved(error: unknown): boolean {
@@ -211,7 +217,10 @@ function BriefPanelBody({
                     Open drafts
                   </Link>
                 </Button>
-                <p className="text-xs text-muted-foreground">{DRAFT_JURISDICTION_NOTE}</p>
+                <p className="text-xs text-muted-foreground">
+                  {DRAFT_JURISDICTION_NOTE}
+                  {canCreate ? ` ${NEW_VERSION_REMEDY}` : null}
+                </p>
               </div>
             ) : null}
           </>
