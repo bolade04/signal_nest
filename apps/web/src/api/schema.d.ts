@@ -3165,7 +3165,7 @@ export interface components {
             category?: string | null;
             /**
              * Jurisdiction Codes
-             * @description Jurisdiction codes the entry applies in (ISO 3166-1 alpha-2, optionally '-' and an ISO 3166-2 subdivision part: GB, US-TX). Empty means every jurisdiction.
+             * @description Jurisdiction codes the entry applies in: an ISO 3166-1 alpha-2 country code (GB, PR, US), or a state or province code of the United States, Canada, Australia or Nigeria (US-TX, NG-LA). Empty means every jurisdiction.
              */
             jurisdiction_codes?: string[];
             /**
@@ -3189,7 +3189,7 @@ export interface components {
             category?: string | null;
             /**
              * Jurisdiction Codes
-             * @description Jurisdiction codes the entry applies in (ISO 3166-1 alpha-2, optionally '-' and an ISO 3166-2 subdivision part: GB, US-TX). Empty means every jurisdiction.
+             * @description Jurisdiction codes the entry applies in: an ISO 3166-1 alpha-2 country code (GB, PR, US), or a state or province code of the United States, Canada, Australia or Nigeria (US-TX, NG-LA). Empty means every jurisdiction.
              */
             jurisdiction_codes?: string[];
             /** Kind */

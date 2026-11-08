@@ -36,6 +36,15 @@ what the entry does, so the review can only become stricter (fail closed):
   restricted entry that restricts and none that permits.
 
 An entry with ``NULL`` or an empty list applies everywhere, as before.
+
+**Reachable codes only (operator ruling Q-2, 2026-11-08).** An entry may carry only a code the
+shared resolver can produce, or a country that contains such codes
+(:func:`jurisdiction_code_refusal`, read through the resolver's own readers, never a copy of
+their tables): ``ClaimIn`` refuses any other on create and update, so ``US-PR`` is refused and
+``PR`` accepted. A stored value no draft can carry (one written before the rule, or by hand) is
+read as **unreadable** (:func:`jurisdiction_restriction`): a restricting entry then applies to
+every draft and an approved one clears nothing for it, the same fail-closed reading as any
+unreadable value. A restriction is never silently dropped.
 """
 
 from __future__ import annotations
@@ -46,7 +55,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from app.core.enums import ClaimRisk
-from app.jurisdiction.resolver import jurisdiction_permits
+from app.jurisdiction.codes import is_jurisdiction_code
+from app.jurisdiction.resolver import country_code_of, jurisdiction_permits, subdivision_code_of
+from app.jurisdiction.subdivisions import SUBDIVISION_JURISDICTIONS
 from app.llm.untrusted import normalise
 
 # Industries requiring stricter controls.
@@ -222,19 +233,70 @@ class LibraryEntry:
     jurisdiction_codes: tuple[str, ...] | None = None
 
 
+def jurisdiction_code_refusal(code: object) -> str | None:
+    """Why a claims-library entry may not carry ``code``, or ``None`` when it may (operator
+    ruling Q-2: "Refuse new or edited claims-library codes that the supported jurisdiction
+    resolver cannot produce").
+
+    An entry may carry exactly the codes that appear in a resolution's ``codes``
+    (:func:`app.jurisdiction.resolver.resolve_jurisdiction`):
+
+    * a country code the resolver reads as itself
+      (:func:`~app.jurisdiction.resolver.country_code_of`, its reader of a location's country
+      field): every ISO 3166-1 code it knows, ``PR`` and ``GB`` included. A country that
+      resolves by first-level subdivision (the item-33 list,
+      :data:`~app.jurisdiction.subdivisions.SUBDIVISION_JURISDICTIONS`: US, CA, AU, NG) is
+      accepted too, as the country that contains its subdivision-level drafts (ruling B-3);
+    * a subdivision code the resolver reads as itself
+      (:func:`~app.jurisdiction.resolver.subdivision_code_of`), which exists only for a country
+      on that list and only for a subdivision in its table: ``US-TX``, ``NG-LA``.
+
+    So ``US-PR`` is refused (Puerto Rico has its own country code, ``PR``, and is not in the
+    US table), as are ``US-ZZ``, ``GB-ENG`` (GB resolves as a whole country) and any country
+    code the resolver does not know. The definitions are the resolver's own: this composes its
+    public readers and its subdivision list and copies no table, so a change to them changes
+    this rule with them. It lives here, not in ``app.jurisdiction`` (lane 5D-W2's, merged),
+    because the claims library is its only caller. The answer names only codes, so a 422 may
+    carry it."""
+    if not isinstance(code, str) or not is_jurisdiction_code(code):
+        return "it is not a jurisdiction code"
+    country, _, part = code.partition("-")
+    if country_code_of(country) != country:
+        return f"{country} is not an ISO 3166-1 country code"
+    if not part:
+        return None
+    if country not in SUBDIVISION_JURISDICTIONS:
+        return f"{country} applies as a whole country, so use {country}"
+    if subdivision_code_of(country, code) != code:
+        own = f" ({part} has its own country code, so use {part})"
+        return f"{part} is not a state or province of {country}" + (
+            own if country_code_of(part) == part else ""
+        )
+    return None
+
+
+def is_reachable_jurisdiction_code(code: object) -> bool:
+    """Whether a claims-library entry may carry ``code`` (:func:`jurisdiction_code_refusal`)."""
+    return jurisdiction_code_refusal(code) is None
+
+
 def jurisdiction_restriction(stored: object) -> tuple[str, ...] | None:
     """An entry's jurisdiction restriction from its stored ``jurisdiction_codes`` value.
 
     ``None`` (applies everywhere) for ``NULL`` or an empty list, the column's meaning (CF-3).
-    Otherwise the listed values; a value that is not a string becomes ``""``, and a stored value
-    that is not a list becomes ``("",)``: a restriction naming nothing readable, which no
-    jurisdiction lies inside and none can be ruled out of (fail closed both ways)."""
+    Otherwise the listed values. A value no draft can carry becomes ``""``: one that is not a
+    string, one outside the grammar, or (Q-2) a well-formed code the resolver cannot produce
+    (:func:`is_reachable_jurisdiction_code`: ``US-PR``, ``US-ZZ``, ``GB-ENG``, written before
+    the rule or by hand). A stored value that is not a list becomes ``("",)``. ``""`` names
+    nothing readable: no jurisdiction lies inside it and none can be ruled out of it, so a
+    restricting entry applies to every draft and an approved one clears nothing for it (fail
+    closed both ways). A restriction is never silently dropped."""
     if stored is None:
         return None
     if isinstance(stored, list | tuple):
         if not stored:
             return None
-        return tuple(code if isinstance(code, str) else "" for code in stored)
+        return tuple(code if is_reachable_jurisdiction_code(code) else "" for code in stored)
     return ("",)
 
 
