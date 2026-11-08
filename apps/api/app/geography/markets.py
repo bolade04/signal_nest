@@ -54,19 +54,19 @@ same way on both sides of a comparison:
   name, so every spelling of one state is one key.
 * an alpha-2 code followed by the same country ("KE, Kenya") is that country.
 
-A bare name that is also a Nigerian subdivision ("Lagos", "Lagos, NG", "Kano, Nigeria",
-"Niger", "Minna, Niger") keeps its reading as a city or country everywhere. Only an
-exclusion reads it both ways (:func:`exclusion_readings`; the item-35 ruling: an exclusion
-removes what the recorded geography cannot rule out); inclusions, connector clearance and
-observations do not, so the ambiguity admits nothing new. "Niger" stays the country NE and
-"Niger State" the region NG:niger; "Nigeria" is neither. An exclusion likewise reads every
-area a single ambiguous name may be ("CA": Canada and California; "NE": Niger and Nebraska),
-which :func:`parse_market` leaves unplaced.
+**Exclusion checks** (operator rulings X-1 to X-5, 2026-11-08) compare every reading of an
+exclusion's text (:func:`exclusion_readings`) with every plausible reading of the observed
+market (:func:`observed_readings`). An explicit, valid identifier is read as itself only
+("NG-LA" is Lagos State and never overlaps a market identified as Kenya); a name with several
+places ("Niger", "CA", "New York") is each of them, narrowed by a known country; a missing
+country or subdivision is still matched conservatively (item 35). Inclusions and connector
+clearance read their text and the observed market once (:func:`inclusion_readings`,
+:func:`parse_observed`), so ambiguity admits nothing new.
 
 ``jurisdiction_forms=False`` reads text exactly as before those forms were recognised (the
-"word reading"). Coverage applies both readings (``app.geography.engine``), so the forms
-only ever add to what an exclusion removes; display and source-text helpers keep the word
-reading.
+"word reading"). Display and source-text helpers keep it; coverage keeps it only beside an
+upper-case code of a country whose subdivisions are not listed ("AL-AIN"), which may be a
+place name.
 """
 
 from __future__ import annotations
@@ -973,55 +973,211 @@ def _form_reading(
     return _unplaceable(label, form, city=words[-3] if n >= 3 else None)
 
 
-def _subdivision_homonyms(text: str, label: str) -> list[MarketIdentity]:
-    """The Nigerian subdivision that a bare name in ``text`` may also be: the name alone
-    ("Lagos", "Niger"), before its own country ("Lagos, NG", "Kano, Nigeria"), or as the last
-    qualifier ("Minna, Niger", "Ikeja, Lagos"). A name before another country is not one
-    ("Lagos, Portugal"). Names and aliases only, from ``app.jurisdiction.subdivisions``: a
-    two-letter state code is not read here ("KE" is Kenya, never Kebbi)."""
-    words = [folded for folded, _ in _clean_parts(text)]
-    out: list[MarketIdentity] = []
-    for country, names in _JURISDICTION_REGION_NAMES.items():
-        head = names.get(words[0]) if words else None
-        before_country = len(words) == 2 and (country, None) in _area_candidates(words[1])
-        if head and (len(words) == 1 or before_country):
-            out.append(_identity(None, f"{country}:{head}", country, label))
-        last = names.get(words[-1]) if len(words) >= 2 else None
-        if last:
-            out.append(_identity(words[-2], f"{country}:{last}", country, label))
-    return out
+# --- every reading, for exclusion checks (operator rulings X-1 to X-5, 2026-11-08) -------
+
+#: "<name> City" where a city-first name's city lies in the subdivision of the same name. The
+#: qualifier narrows "New York" to the city (X-4); both spellings of the city are read.
+_CITY_QUALIFIED: Final[dict[str, tuple[str, str, tuple[str, ...]]]] = {
+    "new york city": ("US", "US-NY", ("new york", "new york city")),
+    "nyc": ("US", "US-NY", ("new york", "new york city")),
+    "quebec city": ("CA", "CA-QC", ("quebec", "quebec city")),
+}
+
+
+def _homonym_areas(word: str) -> list[_Area]:
+    """The Nigerian subdivision a bare name also is ("lagos", "niger", "abuja"): names and
+    aliases from ``app.jurisdiction.subdivisions``, never a two-letter state code ("ke" is
+    Kenya, never Kebbi)."""
+    return [
+        (country, f"{country}:{name}")
+        for country, names in _JURISDICTION_REGION_NAMES.items()
+        if (name := names.get(word))
+    ]
+
+
+def _narrow(areas: list[_Area], city: str | None, country: str | None) -> list[_Area]:
+    """X-2: "a known country must constrain the possible readings". Place knowledge first (a
+    city that ``KNOWN_CITIES`` lists under exactly one reading: "Niamey, Niger" is the
+    country), then the location's country ("Niger" for a Nigerian location is Niger State).
+    With neither, every reading stays."""
+    if len(areas) < 2:
+        return areas
+    knowing = [area for area in areas if _city_known_in(city, area, None)]
+    if len(knowing) == 1:
+        return knowing
+    local = [area for area in areas if area[0] == country]
+    return local or areas
+
+
+def _may_be_a_place_name(region: str | None, country: str | None) -> bool:
+    """An upper-case code of a country whose subdivisions are not listed, with a letters-only
+    part ("AL-AIN", "DE-BY"): it cannot be checked, and a hyphenated place name looks the
+    same, so its word reading ("Al Ain") is kept beside it."""
+    if not _unplaced(region) or (region or "").endswith("?") or country in _CODED_COUNTRIES:
+        return False
+    return (region or "").partition("-")[2].isalpha()
+
+
+def _single_name_readings(
+    word: str,
+    primary: MarketIdentity | None,
+    country: str | None,
+    label: str,
+    *,
+    observed: bool,
+) -> list[MarketIdentity | None]:
+    if word in _CITY_QUALIFIED:  # X-4: "New York City" is the city only.
+        code, region, names = _CITY_QUALIFIED[word]
+        return [_identity(name, region, code, label) for name in names]
+    areas = list(_area_candidates(word))
+    if areas or not observed:
+        # X-5: an observed market that is only a Nigerian state's name ("Lagos") names no
+        # state; no state is invented for it. A rule's text may mean the state.
+        areas += [area for area in _homonym_areas(word) if area not in areas]
+    if len(areas) > 1:
+        # X-1, X-2: a name with several areas ("CA", "NE", "Georgia", "Niger") is each of them,
+        # never an unqualified city; the location's country narrows them.
+        return [
+            _identity(None, region, code, label) for code, region in _narrow(areas, None, country)
+        ]
+    if areas:
+        # X-4 and X-1: one area and a place: "New York" is the city and the state, "Lagos" the
+        # city and the state, and a subdivision the location's country re-read as a local place
+        # ("Texas" for a Nigerian location) is still the subdivision too.
+        code, region = areas[0]
+        return [primary, _identity(None, region, code, label)]
+    return [primary]
+
+
+def _qualified_readings(
+    text: str,
+    words: list[str],
+    primary: MarketIdentity | None,
+    country: str | None,
+    label: str,
+    *,
+    observed: bool,
+) -> list[MarketIdentity | None]:
+    n = len(words)
+    readings: list[MarketIdentity | None] = [primary]
+    candidates = _area_candidates(words[-1])
+    if observed and len(candidates) > 1 and primary is not None and primary.country is None:
+        # X-3: an observation whose qualifier place knowledge does not decide ("York, PA",
+        # "Smallville, GA") is compared in each reading its qualifier allows, not as a place
+        # anywhere.
+        readings = []
+        for code, region in candidates:
+            city = words[-3] if region is None and n >= 3 else words[-2]
+            known = MarketIdentity(city=city, region=region, country=code)
+            readings.append(_parse(text, None, qualify=False, known=known, forms=True))
+    if n == 2 and not observed:
+        # "Lagos, NG" in a rule's text: the city, and Lagos State. An observed "Lagos, NG"
+        # names no state (X-5).
+        for code, region in _homonym_areas(words[0]):
+            if (code, None) in candidates:
+                readings.append(_identity(None, region, code, label))
+    states = _homonym_areas(words[-1])
+    if states:
+        city = words[-2]
+        others = [area for area in candidates if area not in states]
+        if others:
+            # "Minna, Niger": Niger the country or Niger State, narrowed by a known country.
+            chosen = _narrow(others + states, city, country)
+            readings = [r for r in readings if r is None or (r.country, None) in chosen]
+            readings += [_identity(city, region, code, label) for code, region in chosen if region]
+        else:  # "Ikeja, Lagos": also Lagos State, whatever the location's country.
+            readings += [_identity(city, region, code, label) for code, region in states]
+    return readings
+
+
+def _readings(text: str | None, country: str | None, *, observed: bool) -> list[MarketIdentity]:
+    """Every reading of ``text`` an exclusion check compares (see :func:`exclusion_readings`
+    and :func:`observed_readings`)."""
+    if text is None:
+        return []
+    cleaned = _clean_parts(text)
+    if not cleaned:
+        return []
+    label = text.strip()
+    qualify = not observed
+    form = _form_reading(cleaned, label, observed=observed)
+    if form is not None:
+        # X-1: an explicit identifier is read as itself only ("NG-LA" is Lagos State, never
+        # the city "ng" that the word reading made of it).
+        readings: list[MarketIdentity | None] = [form]
+        if (form.region or "").endswith("?"):  # "US-TX, Canada": also the country it names.
+            stated = _parse(text, country, qualify=qualify, known=None, forms=False)
+            if stated is not None and stated.country not in (None, form.country):
+                readings.append(_identity(form.city, None, stated.country, label))
+        elif _may_be_a_place_name(form.region, form.country):
+            readings.append(_parse(text, country, qualify=qualify, known=None, forms=False))
+        return list(dict.fromkeys(r for r in readings if r is not None))
+    primary = _parse(text, country, qualify=qualify, known=None, forms=True)
+    words = [folded for folded, _ in cleaned]
+    if len(words) == 1:
+        token = words[0]
+        split = None
+        if (
+            token not in CITY_FIRST_NAMES
+            and token not in _CITY_QUALIFIED
+            and not _area_candidates(token)
+            and not _homonym_areas(token)
+        ):
+            split = _split_trailing_code(token)
+        if split is None:
+            found = _single_name_readings(token, primary, country, label, observed=observed)
+            return list(dict.fromkeys(r for r in found if r is not None))
+        words = list(split)
+    found = _qualified_readings(text, words, primary, country, label, observed=observed)
+    return list(dict.fromkeys(r for r in found if r is not None))
 
 
 def exclusion_readings(
-    text: str | None,
-    *,
-    default_country: str | None = None,
-    jurisdiction_forms: bool = True,
+    text: str | None, *, default_country: str | None = None
 ) -> list[MarketIdentity]:
-    """Every place an exclusion's text may name (the item-35 ruling: an exclusion removes
-    whatever the recorded geography cannot rule out): :func:`parse_market`'s reading and,
-    with jurisdiction forms,
+    """Every place an exclusion's text may name. An exclusion removes an observed market that
+    any of them may cover (item 35; operator rulings X-1 to X-5, 2026-11-08):
 
-    * every area a single ambiguous name may be ("CA": Canada and California; "NE": Niger and
-      Nebraska; "Georgia"; "WA"), which :func:`parse_market` leaves unplaced. A name the tables
-      read city-first ("New York") stays the city, as ``CITY_FIRST_NAMES`` decides;
-    * each Nigerian subdivision a bare name may also be ("Lagos, NG" is also Lagos State;
-      "Niger" is also Niger State).
+    * X-1: an explicit, valid identifier ("NG-LA", "Lagos State", "US-TX", "KE, Kenya") is read
+      as itself only. A listed code its own text contradicts ("US-TX, Canada") is its country
+      and the country the text names. An upper-case code of a country whose subdivisions are
+      not listed ("AL-AIN") keeps its word reading too: it may be a place name.
+    * X-1, X-2: a single name with several areas ("CA", "NE", "Georgia", "Niger") is each of
+      them, never an unqualified city; place knowledge and the location's country narrow them.
+    * X-2: "<city>, Niger" is the country or Niger State, narrowed the same way.
+    * X-4: "New York", "Washington", "Quebec" are the city and the state or province; "New York
+      City", "New York, NY", "New York State" and "NY" are the one they name.
+    * a bare name that is also a Nigerian state ("Lagos", "Lagos, NG", "Ikeja, Lagos") is the
+      place and the state.
+    * any other text has the one reading :func:`parse_market` gives it (conservative where
+      its geography is missing: a bare "London" is a London anywhere).
+    """
+    return _readings(text, default_country, observed=False)
 
-    Only exclusions read text this way: inclusions and connector clearance use
-    :func:`parse_market` alone, so the ambiguity widens nothing they admit."""
-    reading = parse_market(
-        text, default_country=default_country, jurisdiction_forms=jurisdiction_forms
-    )
-    readings = [] if reading is None else [reading]
-    if jurisdiction_forms and text is not None:
-        label = text.strip()
-        words = [folded for folded, _ in _clean_parts(text)]
-        if len(words) == 1:
-            areas = _area_candidates(words[0])
-            if len(areas) > 1:
-                readings += [_identity(None, region, country, label) for country, region in areas]
-        readings += _subdivision_homonyms(text, label)
+
+def observed_readings(text: str | None) -> list[MarketIdentity]:
+    """Every plausible reading of an observed market in an exclusion check (X-3: "consistently
+    with its recorded country, recognised codes and qualifiers"): the readings
+    :func:`exclusion_readings` gives a text, without a location's country, and each reading an
+    undecided qualifier allows ("York, PA" is York in Pennsylvania or in Panama). Inclusions
+    and connector clearance read an observed market once (:func:`parse_observed`)."""
+    return _readings(text, None, observed=True)
+
+
+def inclusion_readings(
+    text: str | None, *, default_country: str | None = None
+) -> list[MarketIdentity]:
+    """The places an inclusion's text admits: :func:`parse_market`'s reading, and, for an
+    upper-case code of a country whose subdivisions are not listed ("AL-AIN"), its word reading
+    too (it may be a place name). One reading otherwise: ambiguity widens no inclusion."""
+    reading = parse_market(text, default_country=default_country)
+    if reading is None:
+        return []
+    readings = [reading]
+    if _may_be_a_place_name(reading.region, reading.country):
+        word = parse_market(text, default_country=default_country, jurisdiction_forms=False)
+        if word is not None:
+            readings.append(word)
     return list(dict.fromkeys(readings))
 
 

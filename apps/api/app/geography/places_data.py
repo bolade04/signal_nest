@@ -335,6 +335,9 @@ COUNTRY_ALIASES: Final[dict[str, str]] = {
     "turks and caicos islands": "TC",
     "st kitts and nevis": "KN",
     "st vincent and the grenadines": "VC",
+    # The country Niger alone (operator ruling X-2: a bare "Niger" is also Niger State, Nigeria).
+    "republic of niger": "NE",
+    "niger republic": "NE",
 }
 
 #: First-level subdivisions: country -> {code: (name, *aliases)}. Names folded.

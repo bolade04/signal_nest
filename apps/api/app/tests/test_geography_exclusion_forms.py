@@ -26,8 +26,10 @@ This module pins:
   bare name that is also a Nigerian state ("Lagos, NG", "Niger") removes what either place
   covers; an inclusion or a clearance of it admits only what it did; "Niger" and "Niger State"
   never collapse into one another, and "Nigeria" is never a Niger place;
-* monotonicity: the word reading (``jurisdiction_forms=False``, the parser as it was) still
-  applies, so no exclusion removes less than it did;
+* the operator's exclusion semantics X-1 to X-5 (2026-11-08), which replace the blanket
+  monotonicity requirement: explicit identifiers win over legacy misreadings, ambiguous names
+  cover every reading a known country allows, observed markets are read in every plausible
+  reading, "New York" is the city and the state, and no state is invented;
 * the named inclusion and connector-clearance change ("US-TX" now admits Texas), and that it
   is bounded: it does not reach another jurisdiction, and the seeded market texts read the
   same either way;
@@ -45,7 +47,7 @@ from app.connectors.policy import ConnectorPolicy
 from app.connectors.sample_feeds import _MARKET_FEEDS, sample_feed_covers
 from app.db.seed import CITIES
 from app.geography import markets
-from app.geography.engine import CoverageRule, is_excluded, market_in_coverage, resolve_geo
+from app.geography.engine import CoverageRule, market_in_coverage, resolve_geo
 from app.geography.markets import (
     MarketIdentity,
     country_name,
@@ -53,11 +55,12 @@ from app.geography.markets import (
     market_from_parts,
     market_within,
     may_overlap,
+    observed_readings,
     parse_market,
     parse_observed,
     qualify_for_location,
 )
-from app.geography.places_data import COUNTRIES, KNOWN_CITIES, SUBDIVISIONS
+from app.geography.places_data import COUNTRIES, SUBDIVISIONS
 from app.jurisdiction.codes import UNRESOLVED
 from app.jurisdiction.resolver import resolve_jurisdiction
 from app.jurisdiction.subdivisions import SUBDIVISION_JURISDICTIONS
@@ -641,90 +644,6 @@ def test_a_name_before_another_country_or_a_state_code_is_not_a_nigerian_state()
         assert all(r.country != "NG" for r in exclusion_readings(text)), text
 
 
-def test_niger_and_niger_state_never_collapse_and_nigeria_is_never_a_niger_place():
-    for country in (None, "NG", "NE", "US"):
-        assert _ident(parse_market("Niger", default_country=country)) == (None, None, "NE")
-        assert _ident(parse_market("Niger State", default_country=country)) == (
-            None,
-            "NG:niger",
-            "NG",
-        )
-        assert _ident(parse_market("Nigeria", default_country=country)) == (None, None, "NG")
-        assert [_ident(r) for r in exclusion_readings("Nigeria", default_country=country)] == [
-            (None, None, "NG")
-        ]
-        assert [_ident(r) for r in exclusion_readings("Niger State", default_country=country)] == [
-            (None, "NG:niger", "NG")
-        ]
-    assert _ident(parse_observed("Niger")) == (None, None, "NE")
-    assert _ident(parse_observed("Niger State")) == (None, "NG:niger", "NG")
-    assert _ident(parse_observed("Nigeria")) == (None, None, "NG")
-    # The exclusion reading of "Niger" keeps the country and adds the state.
-    assert [_ident(r) for r in exclusion_readings("Niger")] == [
-        (None, None, "NE"),
-        (None, "NG:niger", "NG"),
-    ]
-    # Niger State never reaches the country Niger, and Nigeria never reaches either Niger.
-    for excluded in ("Niger State, NG", "NG-NI", "Nigeria", "NG"):
-        for market in ("Niamey, Niger", "Niger", "Zinder, NE"):
-            _assert_kept(excluded, market)
-    for market in ("Niamey, Niger", "Zinder, NE"):
-        _assert_kept("Niger State", market)
-    for rule in (
-        CoverageRule(coverage_type="online", excluded_markets=("Niger State",), home_market=LAGOS),
-        CoverageRule(
-            coverage_type="radius",
-            online_global=True,
-            excluded_markets=("Niger State",),
-            home_market=LAGOS,
-        ),
-    ):
-        assert market_in_coverage(rule, "Niger") is True
-    # Monotonic carry-over (requirement 3; an operator decision is requested): with no
-    # location country, e3571ac8 read "Niger State" as an unqualified city "niger state",
-    # which removed every market that names no city, the bare "Niger" among them. It still
-    # does; the jurisdiction-form reading alone keeps it.
-    rule = CoverageRule(coverage_type="online", excluded_markets=("Niger State",))
-    assert market_in_coverage(rule, "Niger") is False
-    assert may_overlap(parse_observed("Niger"), parse_market("Niger State")) is False
-    # "NE" (Niger or Nebraska) removes both, and no Niger State market that names its city.
-    _assert_removed("NE", "Niamey, Niger")
-    _assert_kept("NE", "Minna, Niger State, Nigeria")
-
-
-AMBIGUOUS_NAMES = [
-    # (exclusion, removed: every place the name may be, kept)
-    ("CA", ["Toronto, ON", "Los Angeles, CA", "Vancouver, BC"], ["Dallas, TX", "London, UK"]),
-    ("NE", ["Niamey, Niger", "Omaha, NE"], ["Dallas, TX", "Kano, Kano, NG"]),
-    ("GA", ["Libreville, GA", "Atlanta, GA"], ["Dallas, TX", "Tbilisi, Georgia"]),
-    ("Georgia", ["Tbilisi, Georgia", "Atlanta, Georgia"], ["Dallas, TX", "Libreville, GA"]),
-    ("WA", ["Perth, WA", "Seattle, WA"], ["Dallas, TX", "Darwin, NT"]),
-    ("IN", ["Mumbai, India", "Indianapolis, IN"], ["Dallas, TX"]),
-    ("NT", ["Darwin, NT", "Yellowknife, NT"], ["Perth, WA"]),
-]
-
-
-@pytest.mark.parametrize(("excluded", "removed", "kept"), AMBIGUOUS_NAMES)
-def test_an_ambiguous_alpha2_code_or_name_excludes_every_place_it_may_be(excluded, removed, kept):
-    """Requirement 1 for the alpha-2 codes a US, Canadian or Australian subdivision shares, and
-    item 35 for every name with several readings: "CA" was an unqualified city "ca" that
-    removed neither Canada nor California. Every reading is now removed."""
-    for market, home in itertools.product(removed, [None, DALLAS, LAGOS]):
-        _assert_removed(excluded, market, home)
-    for market in kept:
-        _assert_kept(excluded, market)
-
-
-def test_a_city_first_name_stays_the_city_in_an_exclusion():
-    """``CITY_FIRST_NAMES`` reads "New York", "Washington" and "Quebec" as the city (the
-    narrower scope; the state is "New York State" or "NY"). Not changed here: an operator
-    decision is requested on whether an exclusion should also read the subdivision."""
-    for name in ("New York", "Washington", "Quebec"):
-        assert exclusion_readings(name) == [parse_market(name)], name
-    _assert_kept("New York", "Buffalo, New York, USA")
-    _assert_kept("New York", "York")
-
-
 def test_an_ambiguous_inclusion_still_admits_only_what_it_did():
     """No widening: "CA" alone is still read once (unplaced, or in the location's country)."""
     bare = CoverageRule(coverage_type="radius", included_markets=("CA",))
@@ -760,57 +679,255 @@ def test_an_ambiguous_inclusion_or_clearance_admits_only_what_it_did(included, a
 
 
 # --------------------------------------------------------------------------- #
-# Monotonic: the word reading still applies, so nothing is removed that was kept
+# Operator rulings X-1 to X-5 (2026-11-08): exclusion semantics. These replace the
+# blanket monotonicity requirement (the narrowing is measured and disclosed in the lane's
+# evidence).
 # --------------------------------------------------------------------------- #
 
-#: Exclusion texts: the reproductions', this module's, and names from the place tables.
-_TEXTS = sorted(
-    {c for c, _, _ in CODE_CASES}
-    | {c for c, _ in UNPLACEABLE}
-    | {"Lagos State", "Lagos State, Nigeria", "Ogun State, Nigeria", "NG-FC", "AL-AIN"}
-    | {"Al-Ain", "KE, Kenya", "US-TX, Canada", "Texas", "GB", "KE", "London, UK", "Ikeja"}
-    | {f"{country}-{code}" for country, code, _ in LISTED[::7]}
-    | {_state_words(names) for _, names in NG_STATES[::5]}
+NIGER_HOME = market_from_parts(city="Niamey", region=None, country="Niger")
+TEXAS_ELSEWHERE = ["Dallas, TX", "Austin, Texas, USA"]
+
+
+def _online_only(excluded: str, observed: str, home=None) -> bool:
+    """The online decision for one exclusion (no inclusion can interfere)."""
+    return market_in_coverage(
+        CoverageRule(coverage_type="online", excluded_markets=(excluded,), home_market=home),
+        observed,
+    )
+
+
+@pytest.mark.parametrize(
+    "excluded", ["NG-LA", "ng - la", "NG LA", "Lagos State", "Lagos State, Nigeria", "NG-LA, NG"]
 )
-#: Observed markets: the four fixture markets, principal cities, and markets that state no
-#: city (the word reading of an unqualified exclusion such as "ng" removed those).
-_OBSERVED = sorted(
-    set(ALL_MARKETS)
-    | {f"{city}, {key}" for key, cities in sorted(KNOWN_CITIES.items())[::6] for city in cities[:2]}
-    | {"Kenya", "Texas", "Nigeria", "Lagos State", "Al Ain, AE", "Springfield", "US-TX"}
-)
+def test_x1_an_explicit_identifier_is_that_jurisdiction_only(excluded):
+    """X-1: "explicit, valid geographic identifiers take precedence over erroneous legacy
+    interpretations. NG-LA identifies Lagos State, Nigeria. An observation positively
+    identified as Kenya cannot overlap it." """
+    assert [_ident(r) for r in exclusion_readings(excluded)] == [(None, "NG:lagos", "NG")]
+    for observed in ("Kenya", "Nairobi, KE", "Texas", "Dallas, TX", "London, UK", "Ghana"):
+        _assert_kept(excluded, observed)
+    for observed in ("Abeokuta, Ogun State, Nigeria", "Kano, Kano, NG", "NG-OG", "Niger State"):
+        _assert_kept(excluded, observed)
+    for observed in ("Ikeja, Lagos, NG", "Ikeja, Lagos State, Nigeria", "NG-LA", "Lagos State"):
+        _assert_removed(excluded, observed)
 
 
-def _word_excluded(text: str, observed: str, home) -> bool:
-    country = home.country if home else None
-    excluded = parse_market(text, default_country=country, jurisdiction_forms=False)
-    reading = parse_observed(observed, jurisdiction_forms=False)
-    return excluded is not None and may_overlap(reading, excluded)
+@pytest.mark.parametrize("excluded", ["NG-LA", "Lagos State", "US-TX", "US-ZZ"])
+def test_x1_missing_geography_is_still_matched_conservatively(excluded):
+    """X-1: "Retain conservative matching when geography is genuinely missing or ambiguous":
+    a market that names no country, or no subdivision of a country that has them, cannot be
+    ruled out and is removed (item 35)."""
+    country = parse_market(excluded).country
+    for observed in ("London", "Springfield", "anywhere", None, "", country_name(country)):
+        assert _online_only(excluded, observed) is False, (excluded, observed)
 
 
-def test_no_exclusion_removes_less_than_its_word_reading():
-    """``is_excluded`` is a superset of the word reading (``jurisdiction_forms=False``), which
-    is the parser before the fix (proved against e3571ac8 in the lane's evidence)."""
-    word_only = 0
-    for text, observed, home in itertools.product(_TEXTS, _OBSERVED, HOMES):
-        rule = CoverageRule(coverage_type="online", excluded_markets=(text,), home_market=home)
-        if _word_excluded(text, observed, home):
-            assert is_excluded(rule, observed), (text, observed, home)
-            forms = parse_market(text, default_country=home.country if home else None)
-            if not may_overlap(parse_observed(observed), forms):
-                word_only += 1
-    assert word_only > 0, "the corpus never exercises the word reading on its own"
+def test_x1_codes_and_identified_observations_never_overlap_by_a_word_misreading():
+    """X-1 for the other explicit forms: none keeps the old city misreading ("us zz", "ca",
+    "ng"), so none removes a market positively identified elsewhere."""
+    for excluded in ("US-ZZ", "GB-LND", "NG-ZZ", "CA", "NE", "GA", "Georgia", "KE-30"):
+        for observed in ("Kenya", "Nairobi, KE", "Lima, Peru"):
+            if parse_observed(observed).country not in {
+                r.country for r in exclusion_readings(excluded)
+            }:
+                assert _online_only(excluded, observed) is True, (excluded, observed)
+    # An observation identified by an explicit form is that place only.
+    for excluded, observed in (("Texas", "NG-LA"), ("Kenya", "NG-LA"), ("Kenya", "Lagos State")):
+        assert _online_only(excluded, observed) is True, (excluded, observed)
 
 
-def test_the_word_reading_keeps_what_an_unqualified_misreading_removed():
-    """Fail closed until an operator rules otherwise: "NG-LA" was read as the unqualified city
-    "ng", which removed every observation that states no city. It still does."""
-    for market in ("Kenya", "Texas", "Springfield"):
-        rule = CoverageRule(coverage_type="online", excluded_markets=("NG-LA",))
+def test_x1_a_code_that_may_be_a_place_name_keeps_both_readings():
+    """Not an explicit valid identifier: an upper-case code of a country whose subdivisions
+    are not listed ("AL-AIN") may be the place Al Ain, so its word reading is kept."""
+    assert _online_only("AL-AIN", "Al Ain, AE", AL_AIN) is False
+    assert _online_only("AL-AIN", "Tirana, Albania", AL_AIN) is False
+    assert _online_only("AL-AIN", "Kenya", AL_AIN) is True
+    assert _online_only("AL-AIN", "Dubai, AE", AL_AIN) is True
+
+
+def test_x1_a_contradicted_code_is_its_country_and_the_country_its_text_names():
+    for observed in ("Dallas, TX", "Houston, Texas", "Toronto, ON", "Canada"):
+        assert _online_only("US-TX, Canada", observed) is False, observed
+    for observed in ("London, UK", "Lagos, NG", "Kenya"):
+        assert _online_only("US-TX, Canada", observed) is True, observed
+
+
+@pytest.mark.parametrize("home", [LONDON, LAGOS, NAIROBI])
+def test_x1_a_named_subdivision_is_that_subdivision_for_any_location(home):
+    """An excluded "Texas" for a location outside the US was a local place (a city "texas" in the
+    location's country); the named subdivision now wins and the local reading stays."""
+    for observed in TEXAS_ELSEWHERE:
+        assert _online_only("Texas", observed, home) is False, (home, observed)
+    assert _online_only("Texas", "Little Rock, AR", home) is True
+
+
+NIGER_COUNTRY_ONLY = ["Republic of Niger", "Niger Republic", "republic of niger", "NE, Niger"]
+NIGER_STATE_ONLY = ["Niger State", "Niger State, Nigeria", "Niger State, NG", "NG-NI", "ng-ni"]
+NIGER_COUNTRY_MARKETS = ["Niamey, Niger", "Zinder, NE", "Niger Republic"]
+NIGER_STATE_MARKETS = ["Minna, Niger State, Nigeria", "Minna, Niger, NG", "Niger State, NG"]
+
+
+def test_x2_a_bare_niger_covers_both():
+    """X-2: "an ambiguous bare 'Niger' may cover both country Niger and Niger State." """
+    for home in (None, DALLAS, LONDON):
+        for observed in NIGER_COUNTRY_MARKETS + NIGER_STATE_MARKETS:
+            assert _online_only("Niger", observed, home) is False, (home, observed)
+        for observed in ("Kano, Kano, NG", "Ikeja, Lagos State, Nigeria", "Accra, Ghana"):
+            assert _online_only("Niger", observed, home) is True, (home, observed)
+
+
+@pytest.mark.parametrize("excluded", NIGER_COUNTRY_ONLY)
+def test_x2_the_country_niger_alone(excluded):
+    """X-2: "Preserve unambiguous ways to specify country Niger and Nigerian Niger State
+    separately." """
+    assert {_ident(r) for r in exclusion_readings(excluded)} == {(None, None, "NE")}
+    for observed in NIGER_COUNTRY_MARKETS:
+        assert _online_only(excluded, observed) is False, observed
+    for observed in NIGER_STATE_MARKETS + ["Nigeria", "Lagos, NG", "Kano, Kano, NG"]:
+        assert _online_only(excluded, observed) is True, observed
+
+
+@pytest.mark.parametrize("excluded", NIGER_STATE_ONLY)
+def test_x2_niger_state_alone(excluded):
+    assert {_ident(r) for r in exclusion_readings(excluded)} == {(None, "NG:niger", "NG")}
+    for observed in NIGER_STATE_MARKETS:
+        assert _online_only(excluded, observed) is False, observed
+    for observed in NIGER_COUNTRY_MARKETS + ["Kano, Kano, NG", "Ikeja, Lagos State, Nigeria"]:
+        assert _online_only(excluded, observed) is True, observed
+
+
+def test_x2_a_known_country_constrains_the_readings():
+    """X-2: "A known country must constrain the possible readings": place knowledge
+    (KNOWN_CITIES) and the location's country."""
+    # "Niamey, Niger": Niamey is a principal city of the country Niger only.
+    assert [_ident(r) for r in exclusion_readings("Niamey, Niger")] == [("niamey", None, "NE")]
+    assert _online_only("Niamey, Niger", "Minna, Niger State, Nigeria") is True
+    assert _online_only("Niamey, Niger", "Niamey, NE") is False
+    # "Minna, Niger" for a Nigerian location cannot be the country Niger ...
+    assert [_ident(r) for r in exclusion_readings("Minna, Niger", default_country="NG")] == [
+        ("minna", "NG:niger", "NG")
+    ]
+    assert _online_only("Minna, Niger", "Minna, Niger State, Nigeria", LAGOS) is False
+    assert _online_only("Minna, Niger", "Minna, NE", LAGOS) is True
+    # ... and with no known country it is both.
+    assert _online_only("Minna, Niger", "Minna, NE") is False
+    assert _online_only("Minna, Niger", "Minna, Niger State, Nigeria") is False
+    # A bare "Niger" in a location's own country context is that country's reading only.
+    assert _online_only("Niger", "Niamey, Niger", NIGER_HOME) is False
+    assert _online_only("Niger", "Minna, Niger State, Nigeria", NIGER_HOME) is True
+    assert _online_only("Niger", "Minna, Niger State, Nigeria", LAGOS) is False
+    assert _online_only("Niger", "Niamey, Niger", LAGOS) is True
+    # "Nigeria" is never read as a Niger place.
+    assert [_ident(r) for r in exclusion_readings("Nigeria")] == [(None, None, "NG")]
+    assert [_ident(r) for r in observed_readings("Nigeria")] == [(None, None, "NG")]
+
+
+def test_x2_ne_is_niger_and_nebraska_narrowed_by_the_location():
+    """ "NE" is the country Niger and the US state Nebraska (never the old city "ne")."""
+    assert {_ident(r) for r in exclusion_readings("NE")} == {
+        (None, None, "NE"),
+        (None, "US-NE", "US"),
+    }
+    for observed in ("Niamey, Niger", "Omaha, NE"):
+        assert _online_only("NE", observed) is False, observed
+    for observed in ("Kenya", "Nigeria", "Lagos, NG", "Minna, Niger State, Nigeria"):
+        assert _online_only("NE", observed) is True, observed
+    assert _online_only("NE", "Niamey, Niger", DALLAS) is True  # a US location: Nebraska
+    assert _online_only("NE", "Omaha, NE", DALLAS) is False
+    assert _online_only("NE", "Omaha, NE", NIGER_HOME) is True  # a Niger location: Niger
+    assert _online_only("NE", "Niamey, Niger", NIGER_HOME) is False
+
+
+def test_x3_every_plausible_observed_reading():
+    """X-3: "evaluate every plausible reading of an observed market, consistently with its
+    recorded country, recognised codes and qualifiers." """
+    # "Minna, Niger" may be in Niger State; "Niamey, Niger" is the country (place knowledge).
+    for excluded in NIGER_STATE_ONLY:
+        assert _online_only(excluded, "Minna, Niger") is False, excluded
+        assert _online_only(excluded, "Niger") is False, excluded
+        assert _online_only(excluded, "Niamey, Niger") is True, excluded
+    # "York, PA" is York in Pennsylvania or in Panama: never in New York, never in Kenya.
+    assert {_ident(r) for r in observed_readings("York, PA")} == {
+        ("york", "US-PA", "US"),
+        ("york", None, "PA"),
+    }
+    for excluded, removed in (("Pennsylvania", False), ("Panama", False), ("New York", True)):
+        assert _online_only(excluded, "York, PA") is removed, excluded
+    assert _online_only("Kenya", "York, PA") is True
+    # "CA" observed is Canada or California.
+    assert _online_only("Ontario", "CA") is False
+    assert _online_only("California", "CA") is False
+    assert _online_only("Kenya", "CA") is True
+
+
+def test_x3_inclusions_and_clearance_read_an_observed_market_once():
+    rule = CoverageRule(coverage_type="radius", included_markets=("Niger State",))
+    policy = ConnectorPolicy(source_type="rss_news", enabled=True, allowed_markets={"Niger State"})
+    for market in ("Minna, Niger", "Niger", "CA"):
         assert market_in_coverage(rule, market) is False, market
-    # "AL-AIN" as a code is Albania; as words it is the city Al Ain: both are removed.
-    _assert_removed("AL-AIN", "Al Ain, AE", AL_AIN)
-    _assert_removed("AL-AIN", "Tirana, Albania", AL_AIN)
+        assert not policy.permits(source_types=(), market=market), market
+
+
+@pytest.mark.parametrize("excluded", ["New York", "new york", "NEW YORK"])
+def test_x4_new_york_covers_the_city_and_the_state(excluded):
+    """X-4: "ambiguous city/state exclusions such as 'New York' cover both readings." """
+    for home in (None, DALLAS):
+        for observed in ("New York, NY", "Buffalo, New York, USA", "Albany, NY", "New York City"):
+            assert _online_only(excluded, observed, home) is False, (home, observed)
+        for observed in ("Newark, NJ", "London, UK", "Pittsburgh, PA", "York, PA"):
+            assert _online_only(excluded, observed, home) is True, (home, observed)
+
+
+def test_x4_washington_and_quebec_cover_the_city_and_the_state_or_province():
+    for observed in ("Seattle, WA", "Spokane, Washington, USA", "Washington, DC"):
+        assert _online_only("Washington", observed) is False, observed
+    assert _online_only("Washington", "Portland, OR") is True
+    for observed in ("Montreal, QC", "Quebec City, QC", "Quebec, QC"):
+        assert _online_only("Quebec", observed) is False, observed
+    assert _online_only("Quebec", "Toronto, ON") is True
+
+
+def test_x4_explicit_qualifiers_narrow_the_interpretation():
+    """X-4: "Explicit qualifiers narrow the interpretation." """
+    for city_only in ("New York City", "NYC", "New York, NY", "New York, New York, USA"):
+        assert _online_only(city_only, "New York, NY") is False, city_only
+        for observed in ("Buffalo, New York, USA", "Albany, NY"):
+            assert _online_only(city_only, observed) is True, (city_only, observed)
+    for state in ("New York State", "NY", "US-NY"):
+        for observed in ("New York, NY", "Buffalo, New York, USA", "Albany, NY"):
+            assert _online_only(state, observed) is False, (state, observed)
+        assert _online_only(state, "Newark, NJ") is True
+    assert _online_only("Quebec City", "Quebec City, QC") is False
+    assert _online_only("Quebec City", "Montreal, QC") is True
+
+
+@pytest.mark.parametrize("excluded", ["New York", "New York City", "New York, NY", "NY"])
+def test_x4_word_boundaries_and_york_gb(excluded):
+    """X-4: "Preserve word boundaries and distinguish unrelated places such as York, GB." """
+    for observed in ("York, GB", "York, UK", "York, England, UK", "York, Ontario, Canada"):
+        assert _online_only(excluded, observed) is True, (excluded, observed)
+    for york in ("York", "York, UK", "York, PA"):
+        assert _online_only(york, "New York, NY") is True, york
+
+
+def test_x4_an_unqualified_york_cannot_be_ruled_out_of_new_york_state():
+    """The outcome implemented for a bare "York" (ambiguous geography, X-1's conservative
+    rule): it names no country, so New York State cannot be ruled out and it is removed by an
+    exclusion that covers the state; it is kept by one that names only the city."""
+    assert _online_only("New York", "York") is False
+    assert _online_only("New York State", "York") is False
+    assert _online_only("New York City", "York") is True
+    assert _online_only("New York, NY", "York") is True
+
+
+def test_x5_no_state_is_invented_for_a_market_that_names_none():
+    """X-5: "record the disclosed Lagos, NG consequence under item 35. Do not invent a missing
+    state." An observed "Lagos, NG" names no state (and so a Nigerian state exclusion removes
+    it: test_another_nigerian_state_excluded_removes_a_lagos_market_that_names_no_state)."""
+    for observed in ("Lagos, NG", "Lagos", "Kano, Nigeria", "Abuja, Nigeria"):
+        assert all(r.region is None for r in observed_readings(observed)), observed
+    assert _online_only("Ikeja", "Lagos, NG", LAGOS) is True
+    assert _online_only("Ogun State", "Lagos, NG", LAGOS) is False
 
 
 # --------------------------------------------------------------------------- #

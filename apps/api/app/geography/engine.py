@@ -11,14 +11,12 @@ or a rule that names no place it could be compared with, is outside the scout ar
 Exclusions are evaluated first and bind every rule (Project Phase 5D): an ``online`` /
 ``online_global`` rule admits every market its exclusions do not remove.
 
-Coverage applies two readings of every market text (W21 5DW2FIX, defects D-5DW4-01/02):
-the reading with jurisdiction forms ("US-TX", "Lagos State") and the word reading the
-engine used before they were recognised. An exclusion removes a market when either
-reading may cover it, so no exclusion removes less than it did; a rule admits a market
-that either reading places inside it. Each reading compares like with like (observation
-and rule read the same way). An exclusion's text also has every reading a bare name in it
-may have (``markets.exclusion_readings``: "Lagos, NG" is also Lagos State), which no
-inclusion has.
+An exclusion compares every reading of its text with every plausible reading of the
+observed market (``markets.exclusion_readings`` and ``markets.observed_readings``; operator
+rulings X-1 to X-5, 2026-11-08): an explicit identifier is read as itself only ("NG-LA" is
+Lagos State and cannot overlap a market identified as Kenya), and an ambiguous name as each of
+its places. An inclusion reads its text and the observed market once
+(``markets.inclusion_readings``): ambiguity widens nothing a rule admits.
 """
 
 from __future__ import annotations
@@ -29,10 +27,11 @@ from dataclasses import dataclass, field
 from app.geography.markets import (
     MarketIdentity,
     exclusion_readings,
+    inclusion_readings,
     may_overlap,
     normalize_country,
     normalize_region,
-    parse_market,
+    observed_readings,
     parse_observed,
     text_within,
 )
@@ -88,10 +87,6 @@ def is_within_radius(
     return distance <= rule.radius_miles
 
 
-#: The readings coverage applies (``jurisdiction_forms``): with jurisdiction forms, and the
-#: word reading of before they were recognised (see the module docstring).
-_READINGS = (True, False)
-
 #: Coverage types whose scope is a whole country / a whole state or province.
 _COUNTRY_TYPES = frozenset({"country"})
 _STATE_TYPES = frozenset({"state", "multi_state"})
@@ -104,7 +99,7 @@ def _context_country(rule: CoverageRule) -> str | None:
     )
 
 
-def coverage_scopes(rule: CoverageRule, *, jurisdiction_forms: bool = True) -> list[MarketIdentity]:
+def coverage_scopes(rule: CoverageRule) -> list[MarketIdentity]:
     """The places a non-online rule covers, as structured identities.
 
     A rule names its places with listed markets, plus its state for a
@@ -112,7 +107,7 @@ def coverage_scopes(rule: CoverageRule, *, jurisdiction_forms: bool = True) -> l
     that names no place covers its own location's market at the rule's granularity
     (country, state, or the city itself). A named place that cannot be read, or
     names no country, contributes no scope - it never falls back to the location.
-    ``jurisdiction_forms=False`` reads the rule's texts as words (the module docstring).
+    A listed market has the readings ``markets.inclusion_readings`` gives it.
     """
     country = _context_country(rule)
     names_state = rule.coverage_type in _STATE_TYPES and bool(rule.state)
@@ -120,15 +115,9 @@ def coverage_scopes(rule: CoverageRule, *, jurisdiction_forms: bool = True) -> l
     scopes: list[MarketIdentity] = []
     if rule.included_markets or names_state or names_country:
         for text in rule.included_markets:
-            scope = parse_market(
-                text, default_country=country, jurisdiction_forms=jurisdiction_forms
-            )
-            if scope is not None:
-                scopes.append(scope)
+            scopes.extend(inclusion_readings(text, default_country=country))
         if names_state:
-            region, region_country = normalize_region(
-                rule.state, country, jurisdiction_forms=jurisdiction_forms
-            )
+            region, region_country = normalize_region(rule.state, country)
             if region and region_country:
                 scopes.append(
                     MarketIdentity(region=region, country=region_country, label=rule.state)
@@ -157,20 +146,15 @@ def is_excluded(rule: CoverageRule, market: str | None) -> bool:
     Explicit exclusions always win, including over a market they cannot rule out: an
     exclusion removes every market that no known component separates from it (structured
     identity, ``may_overlap``; "York" does not remove "New York"), and a market that
-    cannot be read at all is removed by any exclusion. Both readings apply (the module
-    docstring): "US-TX" removes Texas, and still removes whatever its word reading removed;
-    an ambiguous name removes what either of its places covers ("Niger": the country and
-    Niger State).
+    cannot be read at all is removed by any exclusion. Every reading of the exclusion is
+    compared with every plausible reading of the market (the module docstring).
     """
     country = _context_country(rule)
-    for forms in _READINGS:
-        observed = parse_observed(market, jurisdiction_forms=forms)
-        for text in rule.excluded_markets:
-            for excluded in exclusion_readings(
-                text, default_country=country, jurisdiction_forms=forms
-            ):
-                if may_overlap(observed, excluded):
-                    return True
+    observed = observed_readings(market) or [None]
+    for text in rule.excluded_markets:
+        for excluded in exclusion_readings(text, default_country=country):
+            if any(may_overlap(reading, excluded) for reading in observed):
+                return True
     return False
 
 
@@ -180,8 +164,7 @@ def market_in_coverage(rule: CoverageRule, market: str | None) -> bool:
     Exclusions are evaluated **before** any short-circuit (Project Phase 5D §2, exit
     criterion 5): an ``online_global`` rule and an ``online`` rule admit every market
     except the ones their exclusions remove. A rule without exclusions decides exactly as
-    before. A market is inside a rule's places when either reading puts it there (the
-    module docstring): a jurisdiction form adds what it names ("US-TX" admits Texas).
+    before. A jurisdiction form admits what it names ("US-TX" admits Texas).
     """
     if is_excluded(rule, market):
         return False
@@ -191,11 +174,7 @@ def market_in_coverage(rule: CoverageRule, market: str | None) -> bool:
         return False
     # Radius distance is not evaluated here: an observed market carries no
     # coordinates (see ``is_within_radius``), so the market scope stands in for it.
-    return any(
-        text_within(market, scope, jurisdiction_forms=forms)
-        for forms in _READINGS
-        for scope in coverage_scopes(rule, jurisdiction_forms=forms)
-    )
+    return any(text_within(market, scope) for scope in coverage_scopes(rule))
 
 
 # Evidence weights for geo-relevance resolution.
