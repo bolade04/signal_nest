@@ -405,15 +405,25 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
 
     * a street line: a clear one states nothing, an ambiguous one is ambiguous
       ("Suite 5, 1500 Broadway CT");
-    * a listed subdivision code ("US-TX"), or a town and a code that is not a street-type
-      abbreviation ("Dallas TX", "Sydney NSW"): states that place;
+    * a listed subdivision code, alone or at its end ("US-TX", "Hartford US-CT"), or a town and a
+      code that is not a street-type abbreviation ("Dallas TX", "Sydney NSW"): states that place;
     * an unlisted code form ("DE-BY", "NG-PL"): nothing, as before;
     * a town and a code that is also a street-type abbreviation ("Hartford CT", "Warszawa PL",
       "Kings Ct"): ambiguous, since it may be a street.
+
+    The first part (W21-REV-D1STREET C-6): when the address states a country, the first part's
+    ambiguous reading counts too ("1500 Broadway Hartford CT, USA"); only its ambiguous reading,
+    never an explicit one. When every later part is only a postcode or a unit ("Suite 200",
+    "06103"; a label that is also a code, "FL-12", is not a unit), the address is read as its
+    first part alone, as a comma-free address ("1500 Broadway CT, Suite 200").
     """
     if text is None:
         return BusinessAddressReading(None)
     raw_parts = _written_parts(text)
+    if len(raw_parts) >= 2 and all(_unit_or_postcode(part) for part in raw_parts[1:]):
+        # C-6(b): "1500 Broadway CT, Suite 200" and "1 Asylum Hartford CT, 06103" read as their
+        # first part, so an ambiguous street line stays ambiguous.
+        text, raw_parts = raw_parts[0], raw_parts[:1]
     if len(raw_parts) < 2:
         stated = _parse(text, None, qualify=False, known=None, street_address=True)
         ambiguous = (
@@ -426,27 +436,55 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
         if all(_HAS_DIGIT.search(word) for word in folded.split()):
             continue
         kept.append(part)
-        kind = _street_kind(part)
-        if kind is not None:
-            if kind == STREET_LINE_AMBIGUOUS:
-                ambiguous += _placed(parse_observed(part))
-            continue
-        if folded in CITY_FIRST_NAMES or _area_candidates(folded):
-            continue
-        split = _split_trailing_code(folded)
-        if split is None:
-            continue
-        town, code = split
-        if folded in _FOLDED_SUBDIVISION_CODES:
-            parts += _placed(parse_observed(part))
-        elif len(town) == 2 and _country_code(town):
-            continue
-        elif code in STREET_SUFFIXES:
-            ambiguous += _placed(parse_observed(part))
-        else:
-            parts += _placed(parse_observed(part))
+        stated_here, maybe = _part_reading(part)
+        parts += stated_here
+        ambiguous += maybe
     stated = _parse(", ".join(kept), None, qualify=False, known=None, street_address=True)
+    if stated is not None and stated.country is not None:
+        # C-6 (ambiguous readings only): with a country stated, a first part whose last word may be
+        # a street type or a code ("1500 Broadway Hartford CT, USA") is ambiguous, never nothing.
+        ambiguous = _part_reading(raw_parts[0])[1] + ambiguous
     return BusinessAddressReading(stated, tuple(parts), tuple(ambiguous))
+
+
+def _part_reading(part: str) -> tuple[list[MarketIdentity], list[MarketIdentity]]:
+    """(explicit, ambiguous) readings of one comma part that ends in a code."""
+    folded = _strip_postcode(fold(part))
+    kind = _street_kind(part)
+    if kind is not None:
+        return [], (_placed(parse_observed(part)) if kind == STREET_LINE_AMBIGUOUS else [])
+    if folded in CITY_FIRST_NAMES or _area_candidates(folded):
+        return [], []
+    split = _split_trailing_code(folded)
+    if split is None:
+        return [], []
+    town, code = split
+    if (
+        folded in _FOLDED_SUBDIVISION_CODES
+        or " ".join(folded.split()[-2:]) in _FOLDED_SUBDIVISION_CODES
+    ):
+        return _placed(parse_observed(part)), []
+    if len(town) == 2 and _country_code(town):
+        return [], []
+    if code in STREET_SUFFIXES:
+        return [], _placed(parse_observed(part))
+    return _placed(parse_observed(part)), []
+
+
+def _unit_or_postcode(part: str) -> bool:
+    """A comma part that is only a postcode ("06103") or a unit ("Suite 200", "Apt 4B")."""
+    words = fold(part).split()
+    if not words:
+        return True
+    if all(_HAS_DIGIT.search(word) for word in words):
+        return True
+    # A label that is also a code ("FL-12" Florida road, "NO 5") is not a unit.
+    return (
+        len(words) >= 2
+        and words[0] in _UNIT_LABELS
+        and not _area_candidates(words[0])
+        and all(_HAS_DIGIT.search(word) for word in words[1:])
+    )
 
 
 def _placed(identity: MarketIdentity | None) -> list[MarketIdentity]:

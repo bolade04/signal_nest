@@ -28,6 +28,8 @@ These tests prove:
   not a street line ("Hartford CT", "123 Main St Hartford CT", "1500 Broadway USA");
 * contradicting addresses are still refused (UNRESOLVED), including a subdivision code after a
   street ("1500 Broadway US-CT") and a number after a street name ("Marszalkowska 1 Warszawa PL");
+* the first part of an address with commas counts when it is ambiguous and the address names a
+  country, or when the later parts are only a postcode or a unit ("1500 Broadway CT, Suite 200");
 * in an address with commas, a part after the first that ends in a code is read: "1500
   Broadway, Dallas TX" states US-TX, "1500 Broadway, Hartford CT" is ambiguous (CT may be a
   street type), a postcode alone is left out, and an unlisted code form ("DE-BY") reads as before;
@@ -88,6 +90,7 @@ NAIROBI = _location("Nairobi", "Nairobi", "Kenya")
 WARSAW = _location("Warsaw", "Masovia", "Poland")
 SAO_TOME = _location("Sao Tome", "Agua Grande", "Sao Tome and Principe")
 MUNICH = _location("Munich", "Bavaria", "Germany")
+AL_AIN = _location("Al Ain", "Abu Dhabi", "United Arab Emirates")
 
 #: The defect as measured on main e3571ac8 (lane F1LOC, D1): each was UNRESOLVED for Dallas.
 DEFECT = ["123 Main St", "1 Main St.", "221B Baker St", "1 Market Pl", "3 Kings Ct"]
@@ -278,11 +281,24 @@ AMBIGUOUS = [
     (DALLAS, "1500 Broadway, Hartford CT 06103", "subdivision US-CT"),
     (DALLAS, "1500 Broadway, Hartford CT, 06103", "subdivision US-CT"),
     (DALLAS, "1500 Broadway, Hartford CT, USA", "subdivision US-CT"),
-    (DALLAS, "1500 Broadway, Hartford US-CT", "subdivision US-CT"),
     (DALLAS, "1 Main St, Warszawa PL", "country PL"),
     (DALLAS, "10 Rua X, Sao Tome ST", "country ST"),
     (DALLAS, "Suite 5, 1500 Broadway CT", "subdivision US-CT"),
     (LONDON, "Flat 2, Kings Ct", "country US"),
+    # The first part of an address with commas (W21-REV-D1STREET C-6): with a country stated,
+    # or when the later parts are only a postcode or a unit.
+    *[
+        (DALLAS, a, "subdivision US-CT")
+        for a in [
+            "Hartford CT, USA",
+            "1500 Broadway Hartford CT, USA",
+            "1500 Broadway St Hartford CT, USA",
+            "1500 Broadway Hartford CT, Suite 5",
+            "1500 Broadway CT, Suite 200",
+            "1 Asylum Hartford CT, 06103",
+            "8 Spring Hill Ct, Suite 5",
+        ]
+    ],
 ]
 
 
@@ -420,6 +436,43 @@ def test_a_clarified_address_resolves_or_is_refused_as_its_text_says(
         )
 
 
+#: The first-part rows of AMBIGUOUS above (C-6), for the location their code names.
+FIRST_PART_AGREEING = [
+    "Hartford CT, USA",
+    "1500 Broadway Hartford CT, USA",
+    "1500 Broadway St Hartford CT, USA",
+    "1500 Broadway Hartford CT, Suite 5",
+    "1500 Broadway CT, Suite 200",
+    "1 Asylum Hartford CT, 06103",
+    "8 Spring Hill Ct, Suite 5",
+]
+
+
+@pytest.mark.parametrize("address", FIRST_PART_AGREEING)
+def test_an_ambiguous_first_part_agrees_with_its_own_location(address):
+    resolution = _resolve(HARTFORD, address)
+    assert resolution.code == "US-CT"
+    assert resolution.reason is None
+
+
+@pytest.mark.parametrize(
+    ("location", "code", "address"),
+    [
+        (DALLAS, "US-TX", "3 Kings Ct, Suite 5"),
+        (DALLAS, "US-TX", "123 Main St, Suite 5"),
+        (DALLAS, "US-TX", "123 MAIN ST, USA"),
+        (AL_AIN, "AE", "KHALIFA ST, AL-AIN"),
+        (DALLAS, "US-TX", "1500 Broadway Hartford CT, Dallas, TX"),
+    ],
+)
+def test_a_clear_or_settled_first_part_still_resolves(location, code, address):
+    """A clear first part states nothing; explicit geography elsewhere settles an ambiguous one
+    or rules it out; a first part that is not a street line reads as before (C-6)."""
+    resolution = _resolve(location, address)
+    assert resolution.code == code
+    assert resolution.reason is None
+
+
 def test_only_an_ambiguous_suffix_carries_a_reason():
     """Clear lines, explicit contradictions and unresolvable fields carry no reason; the one
     reason category has exactly one fixed message."""
@@ -482,6 +535,11 @@ CONTRADICTING = [
     (LONDON, "Marszalkowska 1 Warszawa PL", "states country PL"),
     # Numbers with no street name are not a street line (C-4).
     (DALLAS, "12 14 PL", "states country PL"),
+    # A later part ending in an explicit subdivision code is explicit, not ambiguous (C-7).
+    (DALLAS, "1500 Broadway, Hartford US-CT", "states subdivision US-CT"),
+    (DALLAS, "1500 Broadway, Hartford US CT", "states subdivision US-CT"),
+    # A unit label that is also a code is not a unit: "FL-12" is a Florida road (C-6).
+    (DALLAS, "Suite 5, FL-12", "states subdivision US-FL"),
 ]
 
 
