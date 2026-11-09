@@ -23,7 +23,10 @@
 # ---------------------------------------------------------------------------
 # base — the shared, minimal runtime foundation for every stage.
 # ---------------------------------------------------------------------------
-FROM python:3.12-slim AS base
+# DIGEST-PINNED (the multi-platform index of python:3.12-slim, Python 3.12.16 on Debian 13.7, built
+# 2026-11-05) so a registry retag cannot change the bytes under the zlib repair below, which was reviewed
+# against exactly this base.
+FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b AS base
 
 # Fail fast and never buffer stdout/stderr: structured logs must reach the
 # container runtime immediately. Do not write .pyc files (read-only-root safe).
@@ -38,6 +41,18 @@ ENV PYTHONUNBUFFERED=1 \
 # ownership predictable and never collides with a host system account.
 RUN groupadd --gid 10001 app \
     && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin app
+
+# zlib security repair (Debian DSA-6613-1: CVE-2026-76844, CVE-2026-85091, CVE-2026-27171). The pinned base
+# predates the advisory (2026-11-07) and ships zlib1g 1:1.3.dfsg+really1.3.1-1+b1; no python:3.12-slim
+# carrying the fix had been published when this pin was reviewed. This upgrades that ONE package to exactly
+# the version the advisory names, from the base's own trixie-security source: apt verifies the archive's
+# signed InRelease against the image's debian-archive-keyring (nothing here relaxes that), and the build
+# fails unless the installed version is exactly the fixed one. Nothing else is installed or upgraded.
+# Remove this step when the digest above moves to a python:3.12-slim that already carries the fix.
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y --only-upgrade zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1 \
+    && test "$(dpkg-query -W -f='${Version}' zlib1g)" = "1:1.3.dfsg+really1.3.1-1+deb13u1" \
+    && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
 # builder — install locked dependencies into an isolated virtualenv.
