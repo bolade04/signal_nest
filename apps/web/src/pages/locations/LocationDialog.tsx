@@ -77,6 +77,22 @@ function storedBusinessAddress(rule: GeoCoverageOut | undefined, savedStreet: st
   return stored === savedStreet ? null : stored;
 }
 
+/** A stored service-area rule as the Service area tab edits it. */
+function coverageFrom(rule: GeoCoverageOut): GeoCoverageBase {
+  return {
+    coverage_type: rule.coverage_type,
+    business_address: rule.business_address,
+    center_latitude: rule.center_latitude,
+    center_longitude: rule.center_longitude,
+    radius_miles: rule.radius_miles ?? 25,
+    country: rule.country,
+    state: rule.state,
+    included_markets: rule.included_markets ?? [],
+    excluded_markets: rule.excluded_markets ?? [],
+    online_global: rule.online_global,
+  };
+}
+
 export function LocationDialog({ workspaceId, open, onOpenChange, location, readOnly = false }: Props) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -101,6 +117,9 @@ export function LocationDialog({ workspaceId, open, onOpenChange, location, read
     enabled: open && Boolean(location),
     retry: false,
   });
+
+  // The fetched rule the Service area was last populated from (see below).
+  const [syncedCoverage, setSyncedCoverage] = useState<typeof coverageQuery.data>(undefined);
 
   // Reset the form to the dialog's subject whenever it (re)opens or the edited
   // location changes. Adjusted during render (guarded by the previous open state
@@ -128,10 +147,22 @@ export function LocationDialog({ workspaceId, open, onOpenChange, location, read
           longitude: location.longitude ?? null,
           local_competitors: location.local_competitors ?? [],
           local_notes: location.local_notes ?? '',
+          // Not edited here: sent back exactly as loaded, since the location PUT
+          // replaces every field it is not sent with its default.
+          languages: location.languages ?? [],
+          local_phone: location.local_phone ?? null,
+          local_website_page: location.local_website_page ?? null,
+          local_social_links: location.local_social_links ?? {},
+          google_business_profile: location.google_business_profile ?? null,
+          overrides: location.overrides ?? {},
         });
-        // From the rule already cached for this location, if any: a reopening whose
-        // cached rule is unchanged is not synced again below.
-        setBusinessOverride(storedBusinessAddress(coverageQuery.data, location.address ?? ''));
+        // Every opening starts from this location's stored rule: the cached one now, a
+        // fetched one when it arrives (below), the defaults while it has none. Nothing
+        // carries over from a cancelled edit or from another location.
+        const cached = coverageQuery.data;
+        setCoverage(cached ? coverageFrom(cached) : emptyCoverage);
+        setSyncedCoverage(cached);
+        setBusinessOverride(storedBusinessAddress(cached, location.address ?? ''));
       } else {
         setForm(emptyLocation);
         setCoverage(emptyCoverage);
@@ -142,24 +173,17 @@ export function LocationDialog({ workspaceId, open, onOpenChange, location, read
 
   // Populate coverage from the fetched record once it arrives (guarded by the
   // previous data reference so it runs exactly once per fetch).
-  const [syncedCoverage, setSyncedCoverage] = useState<typeof coverageQuery.data>(undefined);
   if (coverageQuery.data && coverageQuery.data !== syncedCoverage) {
     setSyncedCoverage(coverageQuery.data);
-    setCoverage({
-      coverage_type: coverageQuery.data.coverage_type,
-      business_address: coverageQuery.data.business_address,
-      center_latitude: coverageQuery.data.center_latitude,
-      center_longitude: coverageQuery.data.center_longitude,
-      radius_miles: coverageQuery.data.radius_miles ?? 25,
-      country: coverageQuery.data.country,
-      state: coverageQuery.data.state,
-      included_markets: coverageQuery.data.included_markets ?? [],
-      excluded_markets: coverageQuery.data.excluded_markets ?? [],
-      online_global: coverageQuery.data.online_global,
-    });
+    setCoverage(coverageFrom(coverageQuery.data));
     setBusinessOverride(storedBusinessAddress(coverageQuery.data, location?.address ?? ''));
   }
   const businessAddress = businessOverride ?? form.address ?? '';
+  // An existing location's rule is written back only once it is known: loaded, or
+  // answered 404 (none stored). Saving before that would store the defaults over it.
+  const ruleMissing = coverageQuery.error instanceof ApiError && coverageQuery.error.status === 404;
+  const ruleKnown = !location || coverageQuery.data !== undefined || ruleMissing;
+  const ruleUnreadable = Boolean(location) && coverageQuery.isError && !ruleMissing;
 
   const geocodeMutation = useMutation({
     // The dialog's workspace is the active one (Locations renders it inside RequireWorkspace).
@@ -232,6 +256,11 @@ export function LocationDialog({ workspaceId, open, onOpenChange, location, read
         {error ? (
           <div role="alert" className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
             {error}
+          </div>
+        ) : null}
+        {ruleUnreadable && !readOnly ? (
+          <div role="alert" className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            Could not load this location&apos;s service area. Close and reopen the location to try again before saving.
           </div>
         ) : null}
 
@@ -403,7 +432,7 @@ export function LocationDialog({ workspaceId, open, onOpenChange, location, read
               <Button variant="outline" onClick={() => onOpenChange(false)} disabled={save.isPending}>
                 Cancel
               </Button>
-              <Button onClick={() => save.mutate()} disabled={save.isPending || !form.name.trim()}>
+              <Button onClick={() => save.mutate()} disabled={save.isPending || !form.name.trim() || !ruleKnown}>
                 {isEdit ? 'Save changes' : 'Add location'}
               </Button>
             </>

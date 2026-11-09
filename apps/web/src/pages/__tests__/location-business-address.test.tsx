@@ -3,7 +3,7 @@ import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { App } from '@/App';
 import { API_PREFIX } from '@/api/config';
-import type { GeoCoverageBase, GeoCoverageOut } from '@/api/types';
+import type { GeoCoverageBase, GeoCoverageOut, LocationOut } from '@/api/types';
 import { locationModel, orgModel } from '@/test/handlers';
 import { server } from '@/test/server';
 import { renderApp } from '@/test/utils';
@@ -27,6 +27,7 @@ const DALLAS = 'loc-dallas';
 const STREET = '1 Dallas Ave';
 const CORRECTED = '1 Dallas Ave, Dallas, TX';
 const HELP = 'Keep it in the same country and state or province as this location.';
+const UNREADABLE = "Could not load this location's service area. Close and reopen the location to try again before saving.";
 
 /** A stored rule whose business address names another country, with every other field set. */
 const LOADED: GeoCoverageOut = {
@@ -95,10 +96,26 @@ function serveCoverage(initial: Record<string, GeoCoverageOut>): CoverageStore {
 type Screen = ReturnType<typeof renderApp>;
 
 async function openDallas(screen: Screen, button = /^edit & service area$/i, title = /edit location/i) {
+  return openLocation(screen, 0, button, title);
+}
+
+/** Open the `index`-th listed location (fixtures: Dallas, London, Lagos, Nairobi). */
+async function openLocation(
+  screen: Screen,
+  index: number,
+  button = /^edit & service area$/i,
+  title = /edit location/i,
+  listed = 4,
+) {
   await screen.findByText('Dallas');
-  await waitFor(() => expect(screen.getAllByRole('button', { name: button })).toHaveLength(4));
-  await screen.user.click(screen.getAllByRole('button', { name: button })[0]!);
+  await waitFor(() => expect(screen.getAllByRole('button', { name: button })).toHaveLength(listed));
+  await screen.user.click(screen.getAllByRole('button', { name: button })[index]!);
   return screen.findByRole('dialog', { name: title });
+}
+
+async function cancel(screen: Screen, dialog: HTMLElement) {
+  await screen.user.click(within(dialog).getByRole('button', { name: /^cancel$/i }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
 }
 
 async function tab(screen: Screen, dialog: HTMLElement, name: RegExp) {
@@ -123,7 +140,10 @@ async function replace(screen: Screen, field: HTMLElement, value: string) {
 }
 
 async function save(screen: Screen, dialog: HTMLElement, label = /^save changes$/i) {
-  await screen.user.click(within(dialog).getByRole('button', { name: label }));
+  // Save is enabled once the location's stored rule is known (loaded, or answered 404).
+  const button = within(dialog).getByRole('button', { name: label });
+  await waitFor(() => expect(button).toBeEnabled());
+  await screen.user.click(button);
   await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
 }
 
@@ -226,6 +246,14 @@ describe('location dialog: the business address (F-1)', () => {
 
   it('a new location (no stored rule) sends its street address, as the first save always has', async () => {
     const store = serveCoverage({});
+    const created: Record<string, unknown>[] = [];
+    server.use(
+      http.post(P('/workspaces/:ws/locations'), async ({ request }) => {
+        const body = (await request.json()) as Record<string, unknown>;
+        created.push(body);
+        return HttpResponse.json({ ...body, id: 'loc-new', brand_id: 'brand-1', workspace_id: 'ws-1', is_active: true });
+      }),
+    );
     const screen = renderApp(<App />, { route: '/locations' });
     await screen.findByText('Dallas');
     await screen.user.click(screen.getAllByRole('button', { name: /^add location$/i })[0]!);
@@ -235,7 +263,22 @@ describe('location dialog: the business address (F-1)', () => {
     expect(await businessField(screen, dialog)).toHaveValue('500 Elm St, Dallas, TX');
     await save(screen, dialog, /^add location$/i);
 
-    // POST /locations answers id "loc-new" (test/handlers.ts); the new location has no coordinates.
+    // The create body is the dialog's own fields only, as before (none of the six it does not edit).
+    expect(created).toEqual([
+      {
+        name: 'Elm Street shop',
+        address: '500 Elm St, Dallas, TX',
+        city: '',
+        state_province: '',
+        country: '',
+        postal_code: '',
+        timezone: '',
+        currency: '',
+        local_competitors: [],
+        local_notes: '',
+      },
+    ]);
+    // The new location has no coordinates.
     expect(store.puts).toEqual([
       {
         locationId: 'loc-new',
@@ -290,6 +333,160 @@ describe('location dialog: the business address (F-1)', () => {
     expect(store.puts).toEqual([
       { locationId: DALLAS, body: { ...asLoaded(LOADED), business_address: null } },
     ]);
+  });
+});
+
+describe('location dialog: the save preserves untouched fields (F-1)', () => {
+  /** Dallas with every LocationOut field set, including the six the dialog does not edit. */
+  const DALLAS_FULL: LocationOut = {
+    id: DALLAS,
+    brand_id: 'brand-1',
+    workspace_id: 'ws-1',
+    is_active: true,
+    name: 'Dallas',
+    address: STREET,
+    city: 'Dallas',
+    state_province: 'TX',
+    country: 'United States',
+    postal_code: '75201',
+    timezone: 'America/Chicago',
+    currency: 'USD',
+    latitude: 32.7767,
+    longitude: -96.797,
+    local_competitors: ['Rival Dallas'],
+    local_notes: 'Downtown',
+    languages: ['en', 'es'],
+    local_phone: '+1 214 555 0100',
+    local_website_page: 'https://example.com/dallas',
+    local_social_links: { instagram: 'https://instagram.com/example' },
+    google_business_profile: 'https://maps.example.com/?cid=1',
+    overrides: { tone: 'formal' },
+  };
+
+  it('a cancelled Service area edit does not carry into the next opening', async () => {
+    const store = serveCoverage({ [DALLAS]: LOADED });
+    const screen = renderApp(<App />, { route: '/locations' });
+    let dialog = await openDallas(screen);
+    const field = await businessField(screen, dialog);
+    await waitFor(() => expect(field).toHaveValue('Toronto, Ontario, Canada'));
+    await replace(screen, field, 'Cancelled edit');
+    await screen.user.type(within(dialog).getByLabelText(/included markets/i), 'Austin{Enter}');
+    await screen.user.click(within(dialog).getByRole('switch', { name: /serve online/i }));
+    expect(within(dialog).getByText('Austin')).toBeInTheDocument();
+    await cancel(screen, dialog);
+
+    dialog = await openDallas(screen);
+    expect(await businessField(screen, dialog)).toHaveValue('Toronto, Ontario, Canada');
+    expect(within(dialog).queryByText('Austin')).not.toBeInTheDocument();
+    expect(within(dialog).getByText('Fort Worth')).toBeInTheDocument();
+    expect(within(dialog).getByRole('switch', { name: /serve online/i })).toBeChecked();
+    await save(screen, dialog);
+
+    expect(store.puts).toEqual([{ locationId: DALLAS, body: asLoaded(LOADED) }]);
+  });
+
+  it("a location with no stored rule opens with the defaults, never another location's values", async () => {
+    const store = serveCoverage({ [DALLAS]: LOADED }); // London has none: its GET answers 404
+    const screen = renderApp(<App />, { route: '/locations' });
+    let dialog = await openDallas(screen);
+    await tab(screen, dialog, /service area/i);
+    expect(await within(dialog).findByText('Service radius — 40 miles')).toBeInTheDocument();
+    await cancel(screen, dialog);
+
+    dialog = await openLocation(screen, 1); // London: street "1 London Ave", coordinates 0, 0
+    expect(await businessField(screen, dialog)).toHaveValue('1 London Ave');
+    expect(within(dialog).getByText('Service radius — 25 miles')).toBeInTheDocument();
+    expect(within(dialog).queryByText('Houston')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText('Fort Worth')).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('switch', { name: /serve online/i })).not.toBeChecked();
+    await save(screen, dialog);
+
+    expect(store.puts).toEqual([
+      {
+        locationId: 'loc-london',
+        body: {
+          coverage_type: 'radius',
+          radius_miles: 25,
+          included_markets: [],
+          excluded_markets: [],
+          online_global: false,
+          center_latitude: 0,
+          center_longitude: 0,
+          business_address: '1 London Ave',
+        },
+      },
+    ]);
+  });
+
+  it('the location PUT carries the six fields the dialog does not edit, exactly as loaded', async () => {
+    serveCoverage({ [DALLAS]: LOADED });
+    const updates: Record<string, unknown>[] = [];
+    server.use(
+      http.get(P('/workspaces/:ws/locations'), () => HttpResponse.json([DALLAS_FULL])),
+      http.put(P('/workspaces/:ws/locations/:id'), async ({ request }) => {
+        const body = (await request.json()) as Record<string, unknown>;
+        updates.push(body);
+        return HttpResponse.json({ ...DALLAS_FULL, ...body });
+      }),
+    );
+    const screen = renderApp(<App />, { route: '/locations' });
+    const dialog = await openLocation(screen, 0, /^edit & service area$/i, /edit location/i, 1);
+    const name = within(dialog).getByLabelText(/location name/i);
+    await replace(screen, name, 'Dallas Flagship');
+    await save(screen, dialog);
+
+    const { id: _id, brand_id: _brand, workspace_id: _ws, is_active: _active, ...loaded } = DALLAS_FULL;
+    expect(updates).toEqual([{ ...loaded, name: 'Dallas Flagship' }]);
+  });
+
+  it('an existing location saves only once its stored rule has arrived', async () => {
+    const store = serveCoverage({ [DALLAS]: LOADED });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.get(P('/workspaces/:ws/locations/:id/geo-coverage'), async () => {
+        await held;
+        return undefined; // then answered by serveCoverage's handler
+      }),
+    );
+    const screen = renderApp(<App />, { route: '/locations' });
+    const dialog = await openDallas(screen);
+    const button = within(dialog).getByRole('button', { name: /^save changes$/i });
+    expect(button).toBeDisabled();
+    await screen.user.click(button);
+    expect(store.puts).toEqual([]);
+
+    release();
+    await waitFor(() => expect(button).toBeEnabled());
+    await save(screen, dialog);
+    expect(store.puts).toEqual([{ locationId: DALLAS, body: asLoaded(LOADED) }]);
+  });
+
+  it('a stored rule that cannot be read blocks the save until a reopening reads it', async () => {
+    const store = serveCoverage({ [DALLAS]: LOADED });
+    let failures = 0;
+    server.use(
+      http.get(P('/workspaces/:ws/locations/:id/geo-coverage'), () => {
+        if (failures >= 1) return undefined;
+        failures += 1;
+        return HttpResponse.json(
+          { error: { code: 'internal_error', message: 'Temporarily unavailable.', request_id: 'req-test' } },
+          { status: 500 },
+        );
+      }),
+    );
+    const screen = renderApp(<App />, { route: '/locations' });
+    let dialog = await openDallas(screen);
+    expect(await within(dialog).findByText(UNREADABLE)).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /^save changes$/i })).toBeDisabled();
+    await cancel(screen, dialog);
+
+    dialog = await openDallas(screen);
+    await save(screen, dialog);
+    expect(failures).toBe(1);
+    expect(store.puts).toEqual([{ locationId: DALLAS, body: asLoaded(LOADED) }]);
   });
 });
 
