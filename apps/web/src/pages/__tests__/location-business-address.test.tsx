@@ -301,6 +301,8 @@ describe('location dialog: the business address (F-1)', () => {
     const screen = renderApp(<App />, { route: '/locations' });
     const dialog = await openDallas(screen);
     expect(await businessField(screen, dialog)).toHaveValue(STREET);
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: /^save changes$/i })).toBeEnabled());
+    expect(within(dialog).queryByText(UNREADABLE)).not.toBeInTheDocument();
     await save(screen, dialog);
 
     expect(store.puts).toHaveLength(1);
