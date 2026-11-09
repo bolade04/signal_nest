@@ -726,7 +726,7 @@ remain separately authorized improvements. Dark connectors remain gated by Boole
 application authorization, not by SG destination filtering.
 
 ### 26.5 Two-image artifact contract
-Two immutable, digest-pinned images (`api`, `worker`; `apps/api/Dockerfile:94-118`,
+Two immutable, digest-pinned images (`api`, `worker`; `apps/api/Dockerfile:164-195`,
 `.github/workflows/ci.yml:240-260`). API task = API image digest; worker task = worker image
 digest; **migration task = worker image digest** running the bare hardened entrypoint
 `python -m app.db.migrate` (upgrade-and-verify internally). `.github/workflows/ci.yml:276-279`
