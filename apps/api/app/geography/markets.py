@@ -329,30 +329,22 @@ def _written_words(text: str) -> list[str]:
     return words
 
 
-def street_line_kind(text: str | None) -> str | None:
-    """How a business address that is a street line (:func:`_is_street_line`) reads; ``None``
-    when it is not one.
-
-    :data:`STREET_LINE_CLEAR` when only the street can be meant: exactly one street-name word (a
-    leading pre-directional such as "N" is not counted), and the suffix written as a street type
-    ("St", "Ct", not "ST" or "CT") in a line that mixes upper and lower case: "123 Main St",
-    "3 Kings Ct", "100 N Main St", "1200 Pennsylvania Ave SE". Otherwise
-    :data:`STREET_LINE_AMBIGUOUS`: the last words may be a town and a state or country code
-    ("1500 Broadway Hartford CT", "No 3 Ajose Adeogun St", "1500 Broadway CT", "123 MAIN ST").
-    """
-    if text is None:
-        return None
-    parts = [
+def _written_parts(text: str) -> list[str]:
+    """The comma-separated parts of ``text`` as written that name something (the parts
+    :func:`_clean_parts` keeps)."""
+    return [
         raw
         for raw in text.split(",")
         if (part := _strip_postcode(fold(raw))) and part not in _EMPTY_PARTS
     ]
-    if len(parts) != 1:
+
+
+def _street_kind(part: str) -> str | None:
+    """:func:`street_line_kind` for one comma-free part as written."""
+    words = _strip_postcode(fold(part)).split()
+    if not words or not _is_street_line(" ".join(words)):
         return None
-    words = _strip_postcode(fold(parts[0])).split()
-    if not _is_street_line(" ".join(words)):
-        return None
-    written = _written_words(parts[0])
+    written = _written_words(part)
     if [fold(word) for word in written] != words:
         return STREET_LINE_AMBIGUOUS
     if words[-1] in _POST_DIRECTIONALS:
@@ -370,12 +362,95 @@ def street_line_kind(text: str | None) -> str | None:
     return STREET_LINE_CLEAR if len(names) == 1 and as_street_type else STREET_LINE_AMBIGUOUS
 
 
-def ambiguous_street_suffix(text: str | None) -> MarketIdentity | None:
-    """For an ambiguous street line, what its last word names if it is a code (the reading of
-    :func:`parse_observed`: "1500 Broadway Hartford CT" is US-CT); ``None`` for any other text."""
-    if street_line_kind(text) != STREET_LINE_AMBIGUOUS:
+def street_line_kind(text: str | None) -> str | None:
+    """How a business address that is a street line (:func:`_is_street_line`) reads; ``None``
+    when it is not one (or has a comma).
+
+    :data:`STREET_LINE_CLEAR` when only the street can be meant: exactly one street-name word (a
+    leading pre-directional such as "N" is not counted), and the suffix written as a street type
+    ("St", "Ct", not "ST" or "CT") in a line that mixes upper and lower case: "123 Main St",
+    "3 Kings Ct", "100 N Main St", "1200 Pennsylvania Ave SE". Otherwise
+    :data:`STREET_LINE_AMBIGUOUS`: the last words may be a town and a state or country code
+    ("1500 Broadway Hartford CT", "No 3 Ajose Adeogun St", "1500 Broadway CT", "123 MAIN ST").
+    """
+    if text is None:
         return None
-    return parse_observed(text)
+    parts = _written_parts(text)
+    return _street_kind(parts[0]) if len(parts) == 1 else None
+
+
+@dataclass(frozen=True)
+class BusinessAddressReading:
+    """What a business address states (see :func:`read_business_address`).
+
+    ``stated``: the whole address read as :func:`parse_observed` reads it, except that a
+    comma-free street line states nothing and a postcode alone in a later part is left out.
+    ``parts``: what later parts ending in a code state on their own ("..., Dallas TX").
+    ``ambiguous``: the code readings of ambiguous street lines and parts ("1500 Broadway
+    Hartford CT", "..., Hartford CT"), which a contradicting location may not ignore.
+    """
+
+    stated: MarketIdentity | None
+    parts: tuple[MarketIdentity, ...] = ()
+    ambiguous: tuple[MarketIdentity, ...] = ()
+
+
+def read_business_address(text: str | None) -> BusinessAddressReading:
+    """Read a business's own address (a coverage rule's ``business_address``).
+
+    A comma-free address that is an ambiguous street line has an ambiguous reading. In an
+    address with commas, the whole text is read as before (a postcode alone in a later part is
+    left out, so "..., Hartford, CT, 06103, USA" reads Connecticut), and each part after the
+    first is also read on its own when it ends in a code:
+
+    * a street line: a clear one states nothing, an ambiguous one is ambiguous
+      ("Suite 5, 1500 Broadway CT");
+    * a listed subdivision code ("US-TX"), or a town and a code that is not a street-type
+      abbreviation ("Dallas TX", "Sydney NSW"): states that place;
+    * an unlisted code form ("DE-BY", "NG-PL"): nothing, as before;
+    * a town and a code that is also a street-type abbreviation ("Hartford CT", "Warszawa PL",
+      "Kings Ct"): ambiguous, since it may be a street.
+    """
+    if text is None:
+        return BusinessAddressReading(None)
+    raw_parts = _written_parts(text)
+    if len(raw_parts) < 2:
+        stated = _parse(text, None, qualify=False, known=None, street_address=True)
+        ambiguous = (
+            parse_observed(text) if street_line_kind(text) == STREET_LINE_AMBIGUOUS else None
+        )
+        return BusinessAddressReading(stated, (), tuple(_placed(ambiguous)))
+    kept, parts, ambiguous = [raw_parts[0]], [], []
+    for part in raw_parts[1:]:
+        folded = _strip_postcode(fold(part))
+        if all(_HAS_DIGIT.search(word) for word in folded.split()):
+            continue
+        kept.append(part)
+        kind = _street_kind(part)
+        if kind is not None:
+            if kind == STREET_LINE_AMBIGUOUS:
+                ambiguous += _placed(parse_observed(part))
+            continue
+        if folded in CITY_FIRST_NAMES or _area_candidates(folded):
+            continue
+        split = _split_trailing_code(folded)
+        if split is None:
+            continue
+        town, code = split
+        if folded in _FOLDED_SUBDIVISION_CODES:
+            parts += _placed(parse_observed(part))
+        elif len(town) == 2 and _country_code(town):
+            continue
+        elif code in STREET_SUFFIXES:
+            ambiguous += _placed(parse_observed(part))
+        else:
+            parts += _placed(parse_observed(part))
+    stated = _parse(", ".join(kept), None, qualify=False, known=None, street_address=True)
+    return BusinessAddressReading(stated, tuple(parts), tuple(ambiguous))
+
+
+def _placed(identity: MarketIdentity | None) -> list[MarketIdentity]:
+    return [identity] if identity is not None and identity.country is not None else []
 
 
 def _clean_parts(text: str) -> list[str]:
@@ -421,16 +496,16 @@ def parse_observed(
 def parse_business_address(text: str | None) -> MarketIdentity | None:
     """What a business's own address (a coverage rule's ``business_address``) states.
 
-    Read as :func:`parse_observed` reads it, with one difference: a comma-free street line
-    ("123 Main St", "3 Kings Ct", "1 Market Pl"; see :func:`_is_street_line`) states no place
-    for certain, so its street-type abbreviation is not read as a country or subdivision code.
-    When the line is ambiguous (:func:`street_line_kind`), its possible code is given by
-    :func:`ambiguous_street_suffix`, and a contradicting one leaves the location unresolved.
-    Explicit geography still counts: a comma-separated component ("123 Main St, Dallas, TX",
-    "10 Rua X, ST"), a code ("US-CT"), a name, a bare "PL", and a comma-free text that is not a
-    street line ("Hartford CT", "123 Main St Hartford CT").
+    The whole address, read as :func:`parse_observed` reads it, with two differences: a
+    comma-free street line ("123 Main St", "3 Kings Ct", "1 Market Pl"; see
+    :func:`_is_street_line`) states no place for certain, so its street-type abbreviation is not
+    read as a code; and a postcode alone in a later part is left out. What later parts ending in
+    a code state, and the ambiguous readings, are in :func:`read_business_address`. Explicit
+    geography still counts: a comma-separated component ("123 Main St, Dallas, TX", "10 Rua X,
+    ST"), a code ("US-CT"), a name, a bare "PL", and a comma-free text that is not a street
+    line ("Hartford CT", "123 Main St Hartford CT").
     """
-    return _parse(text, None, qualify=False, known=None, street_address=True)
+    return read_business_address(text).stated
 
 
 def _parse(

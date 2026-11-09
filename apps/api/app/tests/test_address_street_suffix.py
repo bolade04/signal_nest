@@ -28,8 +28,11 @@ These tests prove:
   not a street line ("Hartford CT", "123 Main St Hartford CT", "1500 Broadway USA");
 * contradicting addresses are still refused (UNRESOLVED), including a subdivision code after a
   street ("1500 Broadway US-CT") and a number after a street name ("Marszalkowska 1 Warszawa PL");
-* any text that is not a street line reads exactly as an observed market does, and only the
-  business-address reader reads a street line differently (the live Scout readers do not);
+* in an address with commas, a part after the first that ends in a code is read: "1500
+  Broadway, Dallas TX" states US-TX, "1500 Broadway, Hartford CT" is ambiguous (CT may be a
+  street type), a postcode alone is left out, and an unlisted code form ("DE-BY") reads as before;
+* any other text reads exactly as an observed market does, and only the business-address reader
+  reads differently (the live Scout readers do not);
 * lane 5DW2FIX's realistic-address corpus (924 rows) resolves to each row's own location;
 * a stored rule, selected by ``location_id`` as ``jobs/pipeline.py`` selects a run's rule,
   resolves the same on SQLite and PostgreSQL, and another tenant's rule never enters.
@@ -84,6 +87,7 @@ GARKI = _location("Garki", "FCT", "Nigeria")
 NAIROBI = _location("Nairobi", "Nairobi", "Kenya")
 WARSAW = _location("Warsaw", "Masovia", "Poland")
 SAO_TOME = _location("Sao Tome", "Agua Grande", "Sao Tome and Principe")
+MUNICH = _location("Munich", "Bavaria", "Germany")
 
 #: The defect as measured on main e3571ac8 (lane F1LOC, D1): each was UNRESOLVED for Dallas.
 DEFECT = ["123 Main St", "1 Main St.", "221B Baker St", "1 Market Pl", "3 Kings Ct"]
@@ -268,6 +272,17 @@ AMBIGUOUS = [
     (DALLAS, "123 main st", "country ST"),
     (DALLAS, "221B baker st", "country ST"),
     (DALLAS, "100 Martin Luther King Ave SE", "country SE"),
+    # A part after the first that ends in a street-type abbreviation that is also a code (FU-3).
+    (DALLAS, "1500 Broadway, Hartford CT", "subdivision US-CT"),
+    (LONDON, "1500 Broadway, Hartford CT", "country US"),
+    (DALLAS, "1500 Broadway, Hartford CT 06103", "subdivision US-CT"),
+    (DALLAS, "1500 Broadway, Hartford CT, 06103", "subdivision US-CT"),
+    (DALLAS, "1500 Broadway, Hartford CT, USA", "subdivision US-CT"),
+    (DALLAS, "1500 Broadway, Hartford US-CT", "subdivision US-CT"),
+    (DALLAS, "1 Main St, Warszawa PL", "country PL"),
+    (DALLAS, "10 Rua X, Sao Tome ST", "country ST"),
+    (DALLAS, "Suite 5, 1500 Broadway CT", "subdivision US-CT"),
+    (LONDON, "Flat 2, Kings Ct", "country US"),
 ]
 
 
@@ -302,6 +317,11 @@ AMBIGUOUS_CONSISTENT = [
     (WARSAW, "PL", "5 St Marks Pl"),
     (GARKI, "NG-FC", "3 Lake Chad Cres"),
     (TORONTO, "CA-ON", "100 KING ST W"),
+    (HARTFORD, "US-CT", "1500 Broadway, Hartford CT"),
+    (WARSAW, "PL", "1 Main St, Warszawa PL"),
+    (SAO_TOME, "ST", "10 Rua X, Sao Tome ST"),
+    (DALLAS, "US-TX", "Suite 5, 3 Kings Ct"),
+    (MUNICH, "DE", "Marienplatz 1, 80331 Munich, DE-BY"),
 ]
 
 
@@ -331,7 +351,53 @@ CLARIFIED = [
     (HARTFORD, "1500 Broadway, Hartford, CT", "US-CT", "agrees"),
     (DALLAS, "1500 Broadway, Hartford, CT", UNRESOLVED, "states subdivision US-CT"),
     (DALLAS, "1500 Broadway, CT", UNRESOLVED, "states subdivision US-CT"),
+    # With one comma (FU-3): a code that is not a street type is read; "CT" stays ambiguous, so
+    # it agrees with Hartford and leaves Dallas unresolved (AMBIGUOUS above), never "nothing".
+    (DALLAS, "1500 Broadway, Dallas TX", "US-TX", "agrees"),
+    (HARTFORD, "1500 Broadway, Dallas TX", UNRESOLVED, "states subdivision US-TX"),
+    (HARTFORD, "1500 Broadway, Hartford CT", "US-CT", None),
+    (DALLAS, "1500 Broadway, Hartford, CT, 06103, USA", UNRESOLVED, "states subdivision US-CT"),
+    (HARTFORD, "1500 Broadway, Hartford, CT, 06103, USA", "US-CT", "agrees"),
 ]
+
+
+#: Parts after the first, read in context of the whole address (FU-3): explicit geography in a
+#: later part settles what it states, and rules out ambiguous readings in another country.
+LATER_PARTS = [
+    (DALLAS, "123 Main St, Dallas TX", "US-TX", "agrees"),
+    (DALLAS, "3 Kings Ct, US-CT", UNRESOLVED, "states subdivision US-CT"),
+    (LAGOS, "Dallas, US-TX", UNRESOLVED, "states country US"),
+    (SYDNEY, "1 Martin Pl, Sydney NSW 2000", "AU-NSW", "agrees"),
+    (LONDON, "Flat 2, Kings Ct, London, UK", "GB", "agrees"),
+    (DALLAS, "Unit 2, 123 MAIN ST, DALLAS, TX", "US-TX", "agrees"),
+    (DALLAS, "123 MAIN ST, USA", "US-TX", "agrees"),
+    (DALLAS, "Suite 5, 1500 Broadway CT, Dallas, TX", "US-TX", "agrees"),
+]
+
+
+def test_the_whole_address_is_still_read_in_context():
+    """Reading later parts on their own adds evidence; it never replaces the reading of the whole
+    address, so a contradiction found in context ("St. John's" places "CA" in Canada) stays."""
+    address = "St. John's, US-KY, CA"
+    assert parse_business_address(address) == parse_observed(address)
+    resolution = _resolve(DALLAS, address)
+    assert resolution.code == UNRESOLVED
+    assert resolution.reason is None
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "code", "evidence"),
+    LATER_PARTS,
+    ids=[f"{loc.city}:{a}" for loc, a, _, _ in LATER_PARTS],
+)
+def test_a_later_part_ending_in_a_code_is_read_in_context(location, address, code, evidence):
+    resolution = _resolve(location, address)
+    assert resolution.code == code
+    assert resolution.reason is None
+    prefix = "unresolved: " if code == UNRESOLVED else ""
+    assert resolution.evidence[-1] == (
+        f"{prefix}coverage rule 0 business address {address!r} {evidence}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -462,7 +528,8 @@ def test_only_the_business_address_reader_reads_a_street_line_differently(addres
     ),
 )
 def test_a_text_that_is_not_a_street_line_reads_as_an_observed_market(address):
-    """Only a comma-free street line reads differently from ``parse_observed``."""
+    """None of these is a street line or has a postcode alone in a later part, so the whole
+    address reads exactly as ``parse_observed`` reads it."""
     assert parse_business_address(address) == parse_observed(address)
 
 
@@ -549,7 +616,9 @@ def test_the_realistic_corpus_has_the_5dw2fix_size():
 
 def test_the_5dw2fix_realistic_addresses_resolve_to_their_location():
     """Every row's address belongs to its location, so each resolves to the location's own
-    code; and none is a street line, so each reads exactly as an observed market does."""
+    code; and none is a street line or has a postcode alone in a later part, so the whole
+    address reads exactly as an observed market does (a later part such as "Sydney NSW" is also
+    read on its own, and agrees)."""
     wrong = []
     for (city, state, country), address in REALISTIC:
         location = _location(city, state, country)

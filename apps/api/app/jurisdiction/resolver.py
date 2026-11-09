@@ -20,8 +20,9 @@ federations listed in :mod:`app.jurisdiction.subdivisions`, the first-level subd
 * the facts disagree: a coverage rule's ``business_address`` states another country or
   another subdivision than the location's own fields, or the location's captured
   ``jurisdiction_code`` is not what its fields resolve to now;
-* a business address is an ambiguous street line whose last word may be a street type or a
-  code that contradicts the location ("1500 Broadway Hartford CT" for a Texas location). The
+* a business address is an ambiguous street line, or has an ambiguous part after its first
+  ("1500 Broadway, Hartford CT"), whose last word may be a street type or a code that
+  contradicts the location ("1500 Broadway Hartford CT" for a Texas location). The
   answer then carries the reason :data:`ADDRESS_SUFFIX_AMBIGUOUS`, whose fixed clarification is
   in :data:`CLARIFICATIONS` (D1, operator ruling of 2026-11-09). No page or route uses it yet.
 
@@ -45,11 +46,10 @@ from typing import Final, Protocol
 
 from app.geography.markets import (
     MarketIdentity,
-    ambiguous_street_suffix,
     fold,
     normalize_country,
     normalize_region,
-    parse_business_address,
+    read_business_address,
 )
 from app.jurisdiction.codes import UNRESOLVED, is_jurisdiction_code
 from app.jurisdiction.subdivisions import SUBDIVISION_JURISDICTIONS
@@ -229,6 +229,17 @@ def jurisdiction_permits(
     return not allowed_codes or any(code_within(code, entry) for entry in allowed_codes)
 
 
+def _stated_subdivision(stated: MarketIdentity, country: str) -> str | None:
+    """The subdivision code of ``country`` that ``stated``'s region names, if any. A known
+    subdivision is keyed "US-TX"; any other region "NG:lagos" (markets)."""
+    region = stated.region
+    if region is None:
+        return None
+    if region.startswith(f"{country}-"):
+        return region
+    return subdivision_code_of(country, region.split(":", 1)[-1])
+
+
 def _conflict(stated: MarketIdentity | None, country: str, code: str) -> str | None:
     """``"country XX"`` or ``"subdivision XX-YY"`` when ``stated`` names another country, or
     another subdivision of a country that resolves at subdivision level; ``None`` otherwise."""
@@ -236,14 +247,8 @@ def _conflict(stated: MarketIdentity | None, country: str, code: str) -> str | N
         return None
     if stated.country != country:
         return f"country {stated.country}"
-    if "-" in code and stated.region is not None:
-        # A known subdivision is keyed "US-TX"; any other region "NG:lagos" (markets).
-        region = stated.region
-        stated_code = (
-            region
-            if region.startswith(f"{country}-")
-            else subdivision_code_of(country, region.split(":", 1)[-1])
-        )
+    if "-" in code:
+        stated_code = _stated_subdivision(stated, country)
         if stated_code is not None and stated_code != code:
             return f"subdivision {stated_code}"
     return None
@@ -254,22 +259,32 @@ def _address_check(
 ) -> tuple[bool, str | None, str | None]:
     """``(states a country, conflict, reason)`` for a coverage rule's ``business_address``.
 
-    Only what the address states is compared (``parse_business_address``: no country is
+    Only what the address states is compared (``read_business_address``: no country is
     supplied that the text does not name, and a street line's "St", "Pl" or "Ct" is not read as
-    a code). An address naming another country, or another subdivision of a country that
-    resolves at subdivision level, contradicts the location. An ambiguous street line whose
-    last word, read as a code, would contradict it ("1500 Broadway Hartford CT" for Dallas) is a
-    conflict too, with the reason :data:`ADDRESS_SUFFIX_AMBIGUOUS`: it is never read as stating
-    nothing.
+    a code). An address, or a later part of it ("..., Dallas TX"), naming another country or
+    another subdivision of a country that resolves at subdivision level contradicts the
+    location. An ambiguous line or part whose last word, read as a code, would contradict it
+    ("1500 Broadway Hartford CT" or "1500 Broadway, Hartford CT" for Dallas) is a conflict too,
+    with the reason :data:`ADDRESS_SUFFIX_AMBIGUOUS`: it is never read as stating nothing.
+    Explicit geography settles what it states: an explicit subdivision leaves nothing ambiguous,
+    and an explicit country rules out readings in another country ("123 MAIN ST, Dallas, TX"
+    and "123 MAIN ST, USA" agree with Dallas).
     """
-    stated = parse_business_address(address)
-    if stated is not None and stated.country is not None:
+    reading = read_business_address(address)
+    explicit = [s for s in (reading.stated, *reading.parts) if s is not None and s.country]
+    for stated in explicit:
         conflict = _conflict(stated, country, code)
-        return True, (f"states {conflict}" if conflict else None), None
-    conflict = _conflict(ambiguous_street_suffix(address), country, code)
-    if conflict is not None:
-        return True, f"is ambiguous: a street type or {conflict}", ADDRESS_SUFFIX_AMBIGUOUS
-    return False, None, None
+        if conflict is not None:
+            return True, f"states {conflict}", None
+    if not any(_stated_subdivision(stated, country) is not None for stated in explicit):
+        countries = {stated.country for stated in explicit}
+        for possible in reading.ambiguous:
+            if countries and possible.country not in countries:
+                continue
+            conflict = _conflict(possible, country, code)
+            if conflict is not None:
+                return True, f"is ambiguous: a street type or {conflict}", ADDRESS_SUFFIX_AMBIGUOUS
+    return bool(explicit), None, None
 
 
 def resolve_jurisdiction(
