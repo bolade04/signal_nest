@@ -3,8 +3,9 @@
 ``app.db.request_tx.WriteDb`` is the real helper; ``get_db`` is the real dependency, replaced
 only through ``dependency_overrides`` by a copy of production's body over a SQLite file
 (:func:`mirror_get_db`). A separate ``sqlite3`` connection is the committed-state witness.
-Each property is paired with a control route that still uses ``Depends(get_db)``, which shows
-the defect the helper removes, so every assertion is shown to be able to fail:
+Only the first two properties below, the ordering and a failed commit, are paired with a
+control route that still uses ``Depends(get_db)``, which shows the defect the helper removes
+and so shows that those assertions can fail; the others have no ``get_db`` control:
 
 * ordering: the helper commits before ``http.response.start``, and a read made when the
   final body is sent sees the write (the control commits after the body: the read misses);
