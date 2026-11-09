@@ -179,11 +179,13 @@ export function LocationDialog({ workspaceId, open, onOpenChange, location, read
     setBusinessOverride(storedBusinessAddress(coverageQuery.data, location?.address ?? ''));
   }
   const businessAddress = businessOverride ?? form.address ?? '';
-  // An existing location's rule is written back only once it is known: loaded, or
-  // answered 404 (none stored). Saving before that would store the defaults over it.
+  // An existing location's rule is written back only once it is known: a copy is
+  // loaded, or the API answered 404 (none stored). Saving before that would store the
+  // defaults over it. The alert shows exactly when a failed read leaves Save blocked.
   const ruleMissing = coverageQuery.error instanceof ApiError && coverageQuery.error.status === 404;
   const ruleKnown = !location || coverageQuery.data !== undefined || ruleMissing;
-  const ruleUnreadable = Boolean(location) && coverageQuery.isError && !ruleMissing;
+  const ruleUnreadable =
+    Boolean(location) && coverageQuery.isError && !ruleMissing && coverageQuery.data === undefined;
 
   const geocodeMutation = useMutation({
     // The dialog's workspace is the active one (Locations renders it inside RequireWorkspace).

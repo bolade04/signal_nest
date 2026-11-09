@@ -1,4 +1,4 @@
-import { waitFor, within } from '@testing-library/react';
+import { act, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { App } from '@/App';
@@ -487,6 +487,57 @@ describe('location dialog: the save preserves untouched fields (F-1)', () => {
     await save(screen, dialog);
     expect(failures).toBe(1);
     expect(store.puts).toEqual([{ locationId: DALLAS, body: asLoaded(LOADED) }]);
+  });
+
+  it('a loaded copy of the rule may be saved when its refetch fails, with no alert', async () => {
+    const store = serveCoverage({ [DALLAS]: LOADED });
+    const screen = renderApp(<App />, { route: '/locations' });
+    let dialog = await openDallas(screen);
+    await tab(screen, dialog, /service area/i);
+    expect(await within(dialog).findByText('Service radius — 40 miles')).toBeInTheDocument();
+    await cancel(screen, dialog);
+
+    // The reopening's refetch of the cached rule answers 500 once.
+    let failures = 0;
+    server.use(
+      http.get(P('/workspaces/:ws/locations/:id/geo-coverage'), () => {
+        if (failures >= 1) return undefined;
+        failures += 1;
+        return HttpResponse.json(
+          { error: { code: 'internal_error', message: 'Temporarily unavailable.', request_id: 'req-test' } },
+          { status: 500 },
+        );
+      }),
+    );
+    dialog = await openDallas(screen);
+    await waitFor(() => expect(failures).toBe(1));
+    // The failed refetch is processed within these ticks; the alert must never appear.
+    for (let tick = 0; tick < 10; tick += 1) {
+      await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+      expect(within(dialog).queryByText(UNREADABLE)).not.toBeInTheDocument();
+    }
+    expect(within(dialog).getByRole('button', { name: /^save changes$/i })).toBeEnabled();
+    await save(screen, dialog);
+
+    expect(store.puts).toEqual([{ locationId: DALLAS, body: asLoaded(LOADED) }]);
+  });
+
+  it('on a cached reopen, the business address follows the street as last saved', async () => {
+    const store = serveCoverage({ [DALLAS]: { ...LOADED, business_address: STREET } });
+    const screen = renderApp(<App />, { route: '/locations' });
+    let dialog = await openDallas(screen);
+    await tab(screen, dialog, /service area/i);
+    expect(await within(dialog).findByText('Service radius — 40 miles')).toBeInTheDocument();
+    await setStreet(screen, dialog, 'Cancelled Street');
+    await cancel(screen, dialog);
+
+    dialog = await openDallas(screen);
+    await setStreet(screen, dialog, '9 Elm Street');
+    await save(screen, dialog);
+
+    expect(store.puts).toEqual([
+      { locationId: DALLAS, body: { ...asLoaded(LOADED), business_address: '9 Elm Street' } },
+    ]);
   });
 });
 
