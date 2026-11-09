@@ -34,6 +34,8 @@ const P = (path: string) => `*${API_PREFIX}${path}`;
 const DETAIL = P(`/workspaces/${WS}/opportunities/${OPP}`);
 const BRIEFS = P(`/workspaces/${WS}/opportunities/${OPP}/briefs`);
 const DRAFTS = P(`/workspaces/${WS}/briefs/${BRIEF}/drafts`);
+const EDITORS = ['owner', 'admin', 'marketer'] as const;
+const NON_EDITORS = ['reviewer', 'compliance_reviewer', 'viewer'] as const;
 
 /** What the Q-4 limitation must say: no location, recommendations only, no drafts. */
 const RECOMMENDATIONS_ONLY = /recommendations only/i;
@@ -274,11 +276,14 @@ function draftsPage(
   located = false,
 ) {
   asRole(role);
-  world({ located, briefs: [brief(1)] });
+  // The brief's location follows the opportunity's: the capture copies the record's (the
+  // scout's) location onto both.
+  const shown = brief(1, { location_id: located ? 'loc-dallas' : null });
+  world({ located, briefs: [shown] });
   approvedHistory();
   const posts: unknown[] = [];
   server.use(
-    http.get(P(`/workspaces/${WS}/opportunities/${OPP}/briefs/${BRIEF}`), () => HttpResponse.json(brief(1))),
+    http.get(P(`/workspaces/${WS}/opportunities/${OPP}/briefs/${BRIEF}`), () => HttpResponse.json(shown)),
     http.get(DRAFTS, () =>
       HttpResponse.json({ items: [], total: 0, limit: 100, offset: 0 } satisfies CreativeDraftListOut),
     ),
@@ -311,4 +316,136 @@ describe('Item 31 on generate: brief_jurisdiction_missing', () => {
     expect(screen.queryByText(new RegExp(SERVER_MISSING))).toBeNull();
     expect(alert.textContent ?? '').not.toMatch(CODE);
   });
+});
+
+// --------------------------------------------------------------------------------------------
+// F-5 (review W21-REV-5DW3 r3, queued to lane 5D-W4): the phase-C copy, committed. Ruling Q-1
+// (2026-11-08): "A draft inherits its brief’s captured jurisdiction. Editing the location does
+// not alter existing brief, draft or review snapshots. A new brief version is needed to use the
+// changed location’s jurisdiction. Make this relationship clear wherever the customer chooses
+// the brief used for generation." Those places are the brief panel's version choice with "Open
+// drafts" and the generate controls (review r3 §2). The reviewed visibility: the remedy only to
+// members who can create a brief version (copy C-a); the generate-path note only with Generate.
+// --------------------------------------------------------------------------------------------
+const Q1_INHERITS = /jurisdiction recorded when this (?:brief )?version was created/i;
+const Q1_SNAPSHOTS = /editing the location does not change existing briefs, drafts or reviews/i;
+const Q1_REMEDY = /to use a changed location, generate a new (?:brief )?version/i;
+
+describe('F-5: Q-1 where the brief version for drafts is chosen ("Open drafts")', () => {
+  for (const role of [...EDITORS, ...NON_EDITORS]) {
+    const editor = (EDITORS as readonly string[]).includes(role);
+    it(`${role}: drafts keep the version's recorded jurisdiction; the remedy ${editor ? 'is' : 'is not'} offered`, async () => {
+      asRole(role);
+      world({ located: true, briefs: [brief(2), brief(1)] });
+      const screen = renderApp(<App />, { route: `/opportunities/${OPP}` });
+      const panel = await screen.findByRole('region', { name: /recommendation brief/i });
+      const link = await within(panel).findByRole('link', { name: 'Open drafts' });
+      const block = link.parentElement as HTMLElement;
+      expect(block).toHaveTextContent(Q1_INHERITS);
+      expect(block).toHaveTextContent(Q1_SNAPSHOTS);
+      if (editor) expect(block).toHaveTextContent(Q1_REMEDY);
+      else expect(block).not.toHaveTextContent(/to use a changed location/i);
+      expect(block.textContent ?? '').not.toMatch(CODE);
+      // The note goes with the version chosen: "Open drafts" follows the selector.
+      expect(link).toHaveAttribute('href', expect.stringContaining('/creative/brief-2'));
+      const versions = within(panel).getByRole('navigation', { name: /brief versions/i });
+      await screen.user.click(within(versions).getByRole('button', { name: 'Version 1' }));
+      await waitFor(() =>
+        expect(within(panel).getByRole('link', { name: 'Open drafts' })).toHaveAttribute(
+          'href',
+          expect.stringContaining(`/creative/${BRIEF}`),
+        ),
+      );
+      expect(within(panel).getByRole('link', { name: 'Open drafts' }).parentElement).toHaveTextContent(
+        Q1_INHERITS,
+      );
+    });
+  }
+});
+
+describe('F-5: Q-1 on the generate controls', () => {
+  it('is said with Generate to an editor who can generate', async () => {
+    const { screen } = draftsPage('marketer', undefined, true);
+    const generate = await screen.findByRole('button', { name: 'Generate draft' });
+    const section = generate.closest('section') as HTMLElement;
+    expect(section).toHaveTextContent(Q1_INHERITS);
+    expect(section).toHaveTextContent(Q1_SNAPSHOTS);
+    expect(section).toHaveTextContent(Q1_REMEDY);
+    expect(section.textContent ?? '').not.toMatch(CODE);
+  });
+
+  for (const role of NON_EDITORS) {
+    it(`is not said to a ${role}, who is offered no Generate`, async () => {
+      const { screen } = draftsPage(role, undefined, true);
+      await screen.findByText(/No drafts yet/);
+      expect(screen.queryByRole('button', { name: 'Generate draft' })).toBeNull();
+      expect(screen.queryByText(Q1_INHERITS)).toBeNull();
+    });
+  }
+});
+
+describe('F-5: the phase-C refusal messages', () => {
+  it('jurisdiction_unresolved is said once, inline: no toast', async () => {
+    asRole('owner');
+    world({ located: true, briefs: [] });
+    captureRefused('jurisdiction_unresolved', SERVER_UNRESOLVED);
+    const screen = renderApp(<App />, { route: `/opportunities/${OPP}` });
+    await briefPanel(screen);
+    await generateBrief(screen);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/complete or correct/i);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText('No brief was saved')).toBeNull();
+  });
+
+  it('every other capture failure keeps its toast with the server message, and no location message', async () => {
+    asRole('owner');
+    world({ located: true, briefs: [] });
+    captureRefused('brief_withheld', 'The generated brief did not pass the safety screen, so nothing was stored.');
+    const screen = renderApp(<App />, { route: `/opportunities/${OPP}` });
+    const panel = await briefPanel(screen);
+    await generateBrief(screen);
+    expect(await screen.findByText('No brief was saved')).toBeInTheDocument();
+    expect(screen.getByText(/did not pass the safety screen/i)).toBeInTheDocument();
+    expect(within(panel).queryByText(/complete or correct/i)).toBeNull();
+  });
+
+  it('the inline message goes when the editor tries again and another refusal arrives', async () => {
+    asRole('marketer');
+    world({ located: true, briefs: [] });
+    let posts = 0;
+    server.use(
+      http.post(BRIEFS, () => {
+        posts += 1;
+        return posts === 1
+          ? HttpResponse.json({ error: { code: 'jurisdiction_unresolved', message: SERVER_UNRESOLVED } }, { status: 422 })
+          : HttpResponse.json(
+              { error: { code: 'brief_withheld', message: 'The generated brief did not pass the safety screen.' } },
+              { status: 422 },
+            );
+      }),
+    );
+    const screen = renderApp(<App />, { route: `/opportunities/${OPP}` });
+    const panel = await briefPanel(screen);
+    await generateBrief(screen);
+    expect(await within(panel).findByRole('alert')).toHaveTextContent(/complete or correct/i);
+    await generateBrief(screen);
+    expect(await screen.findByText('No brief was saved')).toBeInTheDocument();
+    await waitFor(() => expect(within(panel).queryByText(/complete or correct/i)).toBeNull());
+    expect(posts).toBe(2);
+  });
+
+  for (const [code, status, expected] of [
+    ['brief_not_approved', 422, 'Approve this brief before generating drafts from it.'],
+    ['creative_generation_unconfigured', 503, 'Draft generation is not available right now.'],
+  ] as const) {
+    it(`a generate refused with ${code} keeps its own message, not the jurisdiction one`, async () => {
+      const { screen } = draftsPage('admin', { code, message: `SERVER-TEXT ${code}`, status }, true);
+      await screen.findByText(/No drafts yet/);
+      await screen.user.click(await screen.findByRole('button', { name: 'Generate draft' }));
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent(expected);
+      expect(alert).not.toHaveTextContent(/jurisdiction/i);
+      expect(screen.queryByText(new RegExp(`SERVER-TEXT ${code}`))).toBeNull();
+    });
+  }
 });
