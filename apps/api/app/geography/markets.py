@@ -250,6 +250,48 @@ def _split_trailing_code(folded: str) -> tuple[str, str] | None:
     return None
 
 
+#: Street-type abbreviations that can end a street line ("123 Main St", "3 Kings Ct"): the
+#: common USPS Publication 28 suffixes and the usual Canadian, Australian, UK, Nigerian and
+#: Kenyan forms. St, Pl, Ct, Cl and Gr are also codes (Sao Tome, Poland, Connecticut, Chile,
+#: Greece), which a street line's last word must not be read as (defect D1).
+STREET_SUFFIXES: Final = frozenset(
+    "st ave av rd dr ln blvd bvd ct crt pl cl gr cres cir ter terr tce pde hwy pkwy sq trl esp"
+    " cct gdns".split()
+)
+#: Street types, abbreviated or in full. One among a street line's street words, after the
+#: first, means the street ended earlier: "123 Main St Hartford CT" names a town and a state.
+_STREET_TYPES: Final = STREET_SUFFIXES | frozenset(
+    "street avenue road drive lane boulevard court place close grove crescent circle terrace"
+    " parade highway parkway square trail way esplanade circuit gardens".split()
+)
+#: A post-directional may follow the suffix ("1200 Pennsylvania Ave SE").
+_POST_DIRECTIONALS: Final = frozenset("n s e w ne nw se sw".split())
+
+
+def _is_street_line(folded: str) -> bool:
+    """Is ``folded`` (one comma-free part, folded, trailing postcode dropped) a street line?
+
+    A street line is a house number as the first or second word (after a label such as "No",
+    "Plot" or "Flat"), then street words, then a :data:`STREET_SUFFIXES` abbreviation, and
+    optionally a post-directional: "123 main st", "221b baker st", "no 3 ajose adeogun st",
+    "1200 pennsylvania ave se". The street words must include a name, and no street type may
+    follow the first name word ("1 st paul st" is a street; "123 main st hartford ct" is not).
+    """
+    words = folded.split()
+    if words and words[-1] in _POST_DIRECTIONALS:
+        words = words[:-1]
+    if len(words) < 3 or words[-1] not in STREET_SUFFIXES:
+        return False
+    number = next((i for i, word in enumerate(words[:2]) if _HAS_DIGIT.search(word)), None)
+    if number is None:
+        return False
+    street = words[number + 1 : -1]
+    named = [i for i, word in enumerate(street) if not _HAS_DIGIT.search(word)]
+    if not named:
+        return False
+    return not any(word in _STREET_TYPES for word in street[named[0] + 1 :])
+
+
 def _clean_parts(text: str) -> list[str]:
     parts = []
     for raw in text.split(","):
@@ -290,12 +332,26 @@ def parse_observed(
     return _parse(text, None, qualify=False, known=known)
 
 
+def parse_business_address(text: str | None) -> MarketIdentity | None:
+    """What a business's own address (a coverage rule's ``business_address``) states.
+
+    Read as :func:`parse_observed` reads it, with one difference: a comma-free street line
+    ("123 Main St", "3 Kings Ct", "1 Market Pl"; see :func:`_is_street_line`) states no place,
+    so its street-type abbreviation is never read as a country or subdivision code. Explicit
+    geography still counts: a comma-separated component ("123 Main St, Dallas, TX", "10 Rua X,
+    ST"), a code ("US-CT"), a name, a bare "PL", and a comma-free text that is not a street line
+    ("Hartford CT", "123 Main St Hartford CT").
+    """
+    return _parse(text, None, qualify=False, known=None, street_address=True)
+
+
 def _parse(
     text: str | None,
     country: str | None,
     *,
     qualify: bool,
     known: MarketIdentity | None,
+    street_address: bool = False,
 ) -> MarketIdentity | None:
     if text is None:
         return None
@@ -306,7 +362,11 @@ def _parse(
     if len(parts) == 1:
         token = parts[0]
         split = None
-        if token not in CITY_FIRST_NAMES and not _area_candidates(token):
+        if (
+            token not in CITY_FIRST_NAMES
+            and not _area_candidates(token)
+            and not (street_address and _is_street_line(token))
+        ):
             split = _split_trailing_code(token)
         if split is None:
             return _parse_single(token, country, label, qualify=qualify)

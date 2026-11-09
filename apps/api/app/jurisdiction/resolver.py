@@ -38,7 +38,12 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Final, Protocol
 
-from app.geography.markets import fold, normalize_country, normalize_region, parse_observed
+from app.geography.markets import (
+    fold,
+    normalize_country,
+    normalize_region,
+    parse_business_address,
+)
 from app.jurisdiction.codes import UNRESOLVED, is_jurisdiction_code
 from app.jurisdiction.subdivisions import SUBDIVISION_JURISDICTIONS
 
@@ -195,11 +200,12 @@ def jurisdiction_permits(
 def _address_check(address: str | None, country: str, code: str) -> tuple[bool, str | None]:
     """``(states a country, conflict)`` for a coverage rule's ``business_address``.
 
-    Only what the address states is compared (``parse_observed``: no country is supplied
-    that the text does not name). An address naming another country, or another
-    subdivision of a country that resolves at subdivision level, contradicts the location.
+    Only what the address states is compared (``parse_business_address``: no country is
+    supplied that the text does not name, and a street line's "St", "Pl" or "Ct" is part of
+    the street, not a code). An address naming another country, or another subdivision of a
+    country that resolves at subdivision level, contradicts the location.
     """
-    stated = parse_observed(address)
+    stated = parse_business_address(address)
     if stated is None or stated.country is None:
         return False, None
     if stated.country != country:
