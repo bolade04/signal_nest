@@ -76,6 +76,12 @@ from app.tests._auth2_support import require_postgres
 from app.tests._llm_offline import offline_llm, offline_settings, wire_payload
 from app.tests._llm_reserve_child import MODEL
 from app.tests.test_live_rss_connector import record, target
+from app.tests.test_scout_execution_controls_postgres import (
+    POLL_SECONDS,
+    _expire_lease,
+    _expire_then_heartbeat,
+    _job_row,
+)
 from app.tests.test_scout_pause_postgres import (
     JOIN_SECONDS,
     MARKET,
@@ -363,15 +369,33 @@ def test_pause_resume_run_now_the_old_run_admits_nothing_and_the_new_run_proceed
     _measure("pause_resume_run_now", old_outcome=STOPPED, new_outcome="completed")
 
 
-def test_lease_recovery_after_a_pause_admits_nothing_and_does_not_overwrite_the_pause(
-    world, monkeypatch
-):
-    """The run is parked; the customer pauses; the worker's lease then expires (a crash
-    as far as the store can tell) and another worker recovers and re-claims the job. The
-    recovered attempt's committed claim is refused (paused, fence moved): it skips without
-    a fetch. The original attempt, released afterwards, is refused at its next admission
-    and, having lost its lease, writes nothing; the pause stands."""
-    w = world
+def _recover_until_a_poll_runs(w: World, *, expire) -> int:
+    """Expire the job's lease and poll until a poll runs the job (``poll_once`` returns True).
+    Returns the number of idle polls.
+
+    One poll is not always enough (FU-PAUSE-JOIN): the parked attempt's heartbeat (every
+    ``worker_heartbeat_seconds``) can renew the lease between the expiry write and the
+    recovery's scan, or hold the row while the recovery's ``FOR UPDATE SKIP LOCKED`` passes
+    it. That poll finds nothing to run and returns False, having done nothing; the lease is
+    expired again and the poll re-issued. The deadline fails the test with what it saw."""
+    deadline = time.monotonic() + JOIN_SECONDS
+    idle = 0
+    while True:
+        expire(idle + 1)
+        if _start_worker(w, _runner(w)).join_ok() is True:  # recover + re-claim + skip
+            return idle
+        idle += 1
+        if time.monotonic() > deadline:
+            raise AssertionError(
+                f"lease recovery after the pause: no poll ran the job in {JOIN_SECONDS} s"
+                f" ({idle} polls, all idle); job {_job_row(w)}"
+            )
+        time.sleep(POLL_SECONDS)
+
+
+def _lease_recovery_after_a_pause(w: World, monkeypatch, *, expire=None) -> int:
+    """The scenario below; ``expire(poll)`` writes each expiry (a trigger seam). Returns the
+    idle polls."""
     sources = FirstCallGate(gate=True)
     monkeypatch.setattr(pipeline, "fetch_signals", sources)
     models = ModelCalls(monkeypatch)
@@ -379,14 +403,9 @@ def test_lease_recovery_after_a_pause_admits_nothing_and_does_not_overwrite_the_
         original = _start_worker(w)
         assert sources.started.wait(JOIN_SECONDS)
         _pause(w)
-        with w.factory() as s:
-            s.execute(
-                update(Job)
-                .where(Job.id == w.job_id)
-                .values(lease_expires_at=datetime.now(UTC) - timedelta(hours=1))
-            )
-            s.commit()
-        assert _start_worker(w, _runner(w)).join_ok() is True  # recover + re-claim + skip
+        idle = _recover_until_a_poll_runs(
+            w, expire=expire or (lambda _poll: _expire_lease(w, w.job_id))
+        )
         recovered = _job(w, w.job_id)
         sources.release.set()
         assert original.join_ok() is True
@@ -400,7 +419,42 @@ def test_lease_recovery_after_a_pause_admits_nothing_and_does_not_overwrite_the_
     assert end.job_summary == recovered.result_summary  # not overwritten by the original
     assert len(sources.calls) == 1 and models.calls == []
     assert end.status == PAUSED and end.raw_signals == 0 and end.opportunities == 0
-    _measure("lease_recovery_after_pause", recovered=recovered.result_summary["outcome"])
+    _measure(
+        "lease_recovery_after_pause", recovered=recovered.result_summary["outcome"], idle=idle
+    )
+    return idle
+
+
+def test_lease_recovery_after_a_pause_admits_nothing_and_does_not_overwrite_the_pause(
+    world, monkeypatch
+):
+    """The run is parked; the customer pauses; the worker's lease then expires (a crash
+    as far as the store can tell) and another worker recovers and re-claims the job. The
+    recovered attempt's committed claim is refused (paused, fence moved): it skips without
+    a fetch. The original attempt, released afterwards, is refused at its next admission
+    and, having lost its lease, writes nothing; the pause stands."""
+    _lease_recovery_after_a_pause(world, monkeypatch)
+
+
+def test_lease_recovery_after_a_pause_survives_a_heartbeat_after_the_expiry(world, monkeypatch):
+    """FU-PAUSE-JOIN: the CI failure's trigger, injected. The parked attempt's heartbeat (its
+    own fenced lease renewal, exactly as its heartbeat thread issues it) lands between the
+    first expiry write and the first recovery poll. That poll finds no expired lease and
+    returns False; the recovery expires the lease again and polls again, and the scenario
+    ends exactly as above."""
+    w = world
+    beats: list[dict] = []
+
+    def expire(poll: int) -> None:
+        if poll == 1:
+            beats.append(_expire_then_heartbeat(w))
+        else:
+            _expire_lease(w, w.job_id)
+
+    idle = _lease_recovery_after_a_pause(w, monkeypatch, expire=expire)
+    assert len(beats) == 1 and beats[0]["status"] == JobStatus.RUNNING.value
+    assert beats[0]["expired"] < beats[0]["at"] < beats[0]["renewed"]  # the beat landed
+    assert idle >= 1  # the injected heartbeat cost one idle poll
 
 
 def test_repeated_pauses_concurrent_and_sequential_are_idempotent(world):

@@ -90,6 +90,7 @@ from app.core.enums import Role
 from app.core.errors import NotFoundError, ValidationDomainError
 from app.core.pagination import MAX_PAGE_SIZE, PAGINATION_RESPONSES, paginate
 from app.db.clock import database_now
+from app.db.request_tx import WriteDb
 from app.db.session import get_db
 
 router = APIRouter(tags=["campaign-context"])
@@ -218,7 +219,7 @@ def register_context_entity(
     def _create(
         workspace_id: str,
         body,  # annotation bound below to the concrete schema class
-        db: Session = Depends(get_db),
+        db: Session = WriteDb,
         ctx: TenantContext = Depends(writers),
     ) -> dict:
         brand = get_primary_brand(db, workspace_id)
@@ -253,7 +254,7 @@ def register_context_entity(
         workspace_id: str,
         item_id: str,
         body,  # annotation bound below, as for ``_create``
-        db: Session = Depends(get_db),
+        db: Session = WriteDb,
         ctx: TenantContext = Depends(writers),
     ) -> dict:
         obj = _get_scoped(db, model, workspace_id, item_id)
@@ -285,7 +286,7 @@ def register_context_entity(
     def _delete(
         workspace_id: str,
         item_id: str,
-        db: Session = Depends(get_db),
+        db: Session = WriteDb,
         ctx: TenantContext = Depends(writers),
     ) -> None:
         obj = _get_scoped(db, model, workspace_id, item_id)

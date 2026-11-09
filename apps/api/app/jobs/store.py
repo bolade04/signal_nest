@@ -512,6 +512,13 @@ class DurableJobStore:
         Fenced by ownership, so a stale worker can neither burn an attempt nor
         overwrite the new owner's outcome.
 
+        The fence comes first (W21-REV-INTIND-A O-5): the status the transition is
+        validated against is read under the same ownership predicate the UPDATE
+        carries. A stale attempt therefore raises :class:`JobLeaseLostError`, like
+        every other fenced mutation, even when the job has since moved to a status
+        it may not leave this way (``retry_wait``, a terminal status). Validating the
+        status the stale attempt re-read would raise ``InvalidJobTransition`` instead.
+
         * non-retryable error  -> FAILED (fail fast, no more attempts)
         * retryable, attempts remain -> RETRY_WAIT (backoff, re-enqueued)
         * retryable, attempts exhausted -> DEAD_LETTERED
@@ -521,10 +528,22 @@ class DurableJobStore:
         error_summary = error.safe_summary()
         source = (JobStatus.RUNNING, JobStatus.CANCEL_REQUESTED)
 
+        owned = db.execute(
+            select(Job.status).where(
+                Job.id == job.id,
+                Job.worker_id == worker_id,
+                Job.lease_token == lease_token,
+                Job.status.in_([s.value for s in source]),
+            )
+        ).scalar_one_or_none()
+        if owned is None:
+            raise JobLeaseLostError(job.id)
+        current = JobStatus(owned)
+
         attempts_remain = job.attempt_count < job.max_attempts
 
         if not error.retryable:
-            ensure_transition(JobStatus(job.status), JobStatus.FAILED)
+            ensure_transition(current, JobStatus.FAILED)
             self._fenced_update(
                 db, job, worker_id=worker_id, lease_token=lease_token,
                 allowed_source=source,
@@ -551,7 +570,7 @@ class DurableJobStore:
                 max_seconds=max_seconds,
                 jitter_seed=jitter_seed,
             )
-            ensure_transition(JobStatus(job.status), JobStatus.RETRY_WAIT)
+            ensure_transition(current, JobStatus.RETRY_WAIT)
             self._fenced_update(
                 db, job, worker_id=worker_id, lease_token=lease_token,
                 allowed_source=source,
@@ -575,7 +594,7 @@ class DurableJobStore:
             )
             return job
 
-        ensure_transition(JobStatus(job.status), JobStatus.DEAD_LETTERED)
+        ensure_transition(current, JobStatus.DEAD_LETTERED)
         self._fenced_update(
             db, job, worker_id=worker_id, lease_token=lease_token,
             allowed_source=source,
