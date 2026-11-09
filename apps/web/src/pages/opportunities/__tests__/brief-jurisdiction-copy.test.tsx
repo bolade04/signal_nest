@@ -158,6 +158,33 @@ describe('Q-4: an opportunity with no location', () => {
     expect(within(panel).getByRole('button', { name: /^generate brief$/i })).toBeInTheDocument();
   });
 
+  it('says it to a member who cannot create a brief, before any brief exists', async () => {
+    asRole('viewer');
+    world({ located: false, briefs: [] });
+    const screen = renderApp(<App />, { route: `/opportunities/${OPP}` });
+    const panel = await briefPanel(screen);
+    const note = await within(panel).findByText(RECOMMENDATIONS_ONLY);
+    expect(note).toHaveTextContent(NO_LOCATION);
+    expect(note).toHaveTextContent(NO_DRAFTS);
+    expect(within(panel).queryByRole('button', { name: /generate/i })).toBeNull();
+  });
+
+  it('says it for every version shown, once', async () => {
+    asRole('marketer');
+    world({ located: false, briefs: [brief(2), brief(1)] });
+    const screen = renderApp(<App />, { route: `/opportunities/${OPP}` });
+    const panel = await screen.findByRole('region', { name: /recommendation brief/i });
+    await within(panel).findByText('Summary of version 2.');
+    expect(await within(panel).findAllByText(RECOMMENDATIONS_ONLY)).toHaveLength(1);
+    const versions = within(panel).getByRole('navigation', { name: /brief versions/i });
+    await screen.user.click(within(versions).getByRole('button', { name: 'Version 1' }));
+    await within(panel).findByText('Summary of version 1.');
+    const notes = within(panel).getAllByText(RECOMMENDATIONS_ONLY);
+    expect(notes).toHaveLength(1);
+    expect(openDraftsBlock(panel)).toContainElement(notes[0] ?? null);
+    expect(panel).not.toHaveTextContent(/jurisdiction recorded when/i);
+  });
+
   for (const briefs of [[brief(1)], []]) {
     it(`says nothing of it for an opportunity that has a location (${briefs.length ? 'a brief' : 'no brief'})`, async () => {
       asRole('owner');

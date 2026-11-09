@@ -803,6 +803,21 @@ def _ledger(world: CreativeWorld, ws: str) -> tuple[int, int, int]:
     )
 
 
+def _full_ledger(world: CreativeWorld, ws: str) -> dict[str, int]:
+    """Every row a capture or a generation could write in ``ws``, including ALL of the
+    workspace's audit rows (review W21-REV-5DW3 r4 §4's ledger)."""
+    return {
+        "briefs": world.count(RecommendationBrief, workspace_id=ws),
+        "drafts": world.count(CreativeDraft, workspace_id=ws),
+        "reviews": world.count(ContentReview, workspace_id=ws),
+        "jobs": world.count(Job, workspace_id=ws),
+        "usage events": world.count(LLMUsageEvent, workspace_id=ws),
+        "reservations": world.count(LLMBudgetReservation, workspace_id=ws),
+        "budget periods": world.count(LLMBudgetPeriod, workspace_id=ws),
+        "audit rows": world.count(AuditLog, workspace_id=ws),
+    }
+
+
 def _logged(caplog) -> str:
     return "\n".join(json.dumps(r.__dict__, default=str) for r in caplog.records)
 
@@ -898,6 +913,7 @@ def test_an_unresolved_location_refuses_the_brief_before_any_model_or_budget_use
     world = capture_world
     ws = world.workspace(f"refuse {case[:30]}")
     opp, record = _existing_location_evidence(world, ws, location, addresses, where)
+    before = _full_ledger(world, ws)
     with caplog.at_level(logging.INFO):
         r = capture(world, ws, opp, record)
     assert r.status_code == 422, (case, r.text)
@@ -905,11 +921,13 @@ def test_an_unresolved_location_refuses_the_brief_before_any_model_or_budget_use
     assert error["code"] == "jurisdiction_unresolved"
     # The wording is not pinned (it may be reworded); that it is one fixed answer is, below.
     assert isinstance(error["message"], str) and error["message"].strip()
-    # Nothing was guessed, called, budgeted, audited or stored.
+    # Nothing was guessed, called, budgeted, audited or stored: not one row of any kind, and
+    # not one audit row of the workspace.
     assert model.requests == [] and budget_checks == []
     assert world.count(RecommendationBrief, opportunity_id=opp) == 0
     assert _ledger(world, ws) == (0, 0, 0)
     assert world.count(AuditLog, workspace_id=ws, entity_type="recommendation_brief") == 0
+    assert _full_ledger(world, ws) == before
     # No location text, and no resolver evidence, in the answer or the logs.
     logged = _logged(caplog)
     for text in _LOCATION_TEXT:
@@ -1310,6 +1328,7 @@ INFERENCE_SOURCES = (
     "the workspace's only location",
     "the scout's and the opportunity's location",
     "market text naming a place",
+    "a workspace-level coverage address",
     "all of them",
 )
 
@@ -1317,8 +1336,9 @@ INFERENCE_SOURCES = (
 @pytest.mark.parametrize("source", INFERENCE_SOURCES)
 def test_q4_an_absent_location_is_never_inferred(capture_world, phase5_on, model, source):
     """Q-4: "Do not infer a jurisdiction." The workspace's one location resolves (US-TX), the
-    scout and the opportunity may point at it, and the market text may name it: the record
-    has no location, so the brief's code is NULL all the same."""
+    scout and the opportunity may point at it, the market text may name it, and a
+    workspace-level coverage rule may state its address: the record has no location, so the
+    brief's code is NULL all the same (review r4 RQ2, "every other source naming a place")."""
     world = capture_world
     ws = world.workspace(f"q4 no inference {source[:24]}")
     fields, address, code = MATRIX_LOCATIONS["dallas"]
@@ -1341,6 +1361,16 @@ def test_q4_an_absent_location_is_never_inferred(capture_world, phase5_on, model
                 update(opportunities)
                 .where(opportunities.c.id == opp)
                 .values(resolved_market="Dallas, TX")
+            )
+    if source in ("a workspace-level coverage address", "all of them"):
+        with world.session() as s:
+            s.add(
+                GeoCoverageRule(
+                    organization_id=world.org_of(ws),
+                    workspace_id=ws,
+                    location_id=None,
+                    business_address="500 Main St, Dallas, TX",
+                )
             )
     assert world.row(SignalIntelligenceRecord, record)["location_id"] is None
     r = capture(world, ws, opp, record)
@@ -1397,6 +1427,99 @@ def test_q4_creating_a_brief_back_fills_nothing(capture_world, phase5_on, model)
     assert world.row(RecommendationBrief, located.json()["id"])["jurisdiction_code"] == code
     assert world.row(RecommendationBrief, absent.json()["id"])["jurisdiction_code"] is None
     assert [world.row(RecommendationBrief, b) for b in existing] == before
+
+
+def test_q4_a_second_version_without_a_location_is_null_and_leaves_the_first(
+    capture_world, phase5_on, model
+) -> None:
+    """A new version for an opportunity with no location is NULL again, and the first
+    version's row is unchanged (no back-fill by a later capture either)."""
+    world = capture_world
+    ws = world.workspace("q4 second version")
+    opp, record, _ = evidence(world, ws, location=None)
+    first = capture(world, ws, opp, record)
+    assert first.status_code == 201, first.text
+    v1 = world.row(RecommendationBrief, first.json()["id"])
+    second = capture(world, ws, opp, record)
+    assert second.status_code == 201, second.text
+    v2 = world.row(RecommendationBrief, second.json()["id"])
+    assert (v1["brief_version"], v2["brief_version"]) == (1, 2)
+    assert v2["parent_brief_id"] == v1["id"]
+    assert v1["jurisdiction_code"] is None and v2["jurisdiction_code"] is None
+    assert world.row(RecommendationBrief, v1["id"]) == v1
+
+
+def test_q4_an_absent_capture_is_booked_exactly_as_a_resolved_one(
+    capture_world, phase5_on, model
+) -> None:
+    """Q-4 gives the absent location "a recommendation brief": the same brief, budget, usage
+    and audit rows as a resolved capture writes (each the first capture of its workspace),
+    only its code is NULL."""
+    world = capture_world
+    deltas, codes = {}, {}
+    for kind in ("absent", "resolved"):
+        ws = world.workspace(f"q4 booked {kind}")
+        if kind == "absent":
+            opp, record, _ = evidence(world, ws, location=None)
+        else:
+            fields, address, _code = MATRIX_LOCATIONS["dallas"]
+            opp, record, _ = evidence(world, ws, location=fields, addresses=(address,))
+        before = _full_ledger(world, ws)
+        r = capture(world, ws, opp, record)
+        assert r.status_code == 201, (kind, r.text)
+        after = _full_ledger(world, ws)
+        deltas[kind] = {key: after[key] - before[key] for key in before}
+        codes[kind] = world.row(RecommendationBrief, r.json()["id"])["jurisdiction_code"]
+    assert deltas["absent"] == deltas["resolved"]
+    assert deltas["absent"]["briefs"] == 1 and deltas["absent"]["usage events"] == 1
+    assert codes == {"absent": None, "resolved": "US-TX"}
+    assert len(model.requests) == 2
+
+
+def _point_record_at_a_missing_location(world: CreativeWorld, record_id: str, ghost: str):
+    """Make a record reference a location row that does not exist, bypassing the foreign key
+    as only a fault or a manual repair could (``session_replication_role`` needs the
+    superuser role CI's PostgreSQL service gives its user)."""
+    table = SignalIntelligenceRecord.__table__
+    stmt = update(table).where(table.c.id == record_id).values(location_id=ghost)
+    if world.witness.dialect.name == "postgresql":
+        with world.witness.begin() as conn:
+            conn.exec_driver_sql("SET LOCAL session_replication_role = replica")
+            conn.execute(stmt)
+        return
+    with world.witness.connect() as conn:
+        conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        conn.execute(stmt)
+        conn.commit()
+        conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+
+
+def test_q4_a_dangling_location_reference_is_refused_never_absent(
+    capture_world, phase5_on, model, budget_checks, caplog
+) -> None:
+    """Q-4, implementation reading: "Every non-NULL location_id is an existing location
+    reference." One whose row is gone is a fault, not "no location": refused before any
+    budget or model use, with nothing written (review r4 RQ1)."""
+    world = capture_world
+    ws = world.workspace("q4 dangling reference")
+    opp, record, _ = evidence(world, ws, location=None)
+    ghost = f"gone{uuid.uuid4().hex[:28]}"
+    _point_record_at_a_missing_location(world, record, ghost)
+    try:
+        assert world.row(SignalIntelligenceRecord, record)["location_id"] == ghost
+        before = _full_ledger(world, ws)
+        with caplog.at_level(logging.INFO):
+            r = capture(world, ws, opp, record)
+        assert r.status_code == 422, r.text
+        assert r.json()["error"]["code"] == "jurisdiction_unresolved"
+        assert model.requests == [] and budget_checks == []
+        assert _full_ledger(world, ws) == before
+        assert ghost not in r.text and ghost not in _logged(caplog)
+    finally:
+        # Referential integrity again for the rest of the module's world.
+        table = SignalIntelligenceRecord.__table__
+        with world.witness.begin() as conn:
+            conn.execute(update(table).where(table.c.id == record).values(location_id=None))
 
 
 # --------------------------------------------------------------------------- #
@@ -1490,15 +1613,18 @@ def test_q4_item_31_the_job_refuses_an_absent_location_brief_terminally(
     capture_world, phase5_on, model, how
 ) -> None:
     """The job re-checks item 31 for the absent-location brief: it fails once and for all
-    (VALIDATION, never retried) with no model call, no usage, no draft and no review, and the
-    generation locks are released (a coded brief in the same workspace generates next)."""
+    (VALIDATION; a second drain runs nothing) and writes nothing (the full ledger), with no
+    model call; the generation locks are released (on PostgreSQL no advisory lock and no
+    session idle in a transaction remain, and on both engines a coded brief in the same
+    workspace generates next)."""
     world = capture_world
     ws = world.workspace(f"q4 item 31 job {how}")
     brief_id = _absent_brief(world, ws, how)
     world.decide(brief_id, "approved")
     calls = len(model.requests)
     job_id = _enqueue_generation(world, brief_id)
-    world.drain()
+    before = _full_ledger(world, ws)
+    assert world.drain() == 1
     job = world.job(job_id)
     assert (
         job["status"],
@@ -1506,9 +1632,22 @@ def test_q4_item_31_the_job_refuses_an_absent_location_brief_terminally(
         job["last_error_summary"],
         job["attempt_count"],
     ) == ("failed", "validation", "brief_jurisdiction_missing", 1)
+    assert world.drain() == 0  # terminal: nothing is scheduled again
     assert len(model.requests) == calls
     assert world.count(LLMUsageEvent, job_id=job_id) == 0
     assert world.count(CreativeDraft, brief_id=brief_id) == 0 and _reviews(world, ws) == 0
+    assert _full_ledger(world, ws) == before
+    if world.engine.dialect.name == "postgresql":
+        with world.witness.connect() as conn:
+            held = conn.exec_driver_sql(
+                "SELECT count(*) FROM pg_locks l JOIN pg_database d ON d.oid = l.database "
+                "WHERE l.locktype = 'advisory' AND d.datname = current_database()"
+            ).scalar_one()
+            idle = conn.exec_driver_sql(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() "
+                "AND state IN ('idle in transaction', 'idle in transaction (aborted)')"
+            ).scalar_one()
+        assert (held, idle) == (0, 0)
     other = world.seed_brief(ws, jurisdiction_code="US-TX")
     ran = world.generate(other, ws=ws)
     assert ran.status_code == 202, ran.text
