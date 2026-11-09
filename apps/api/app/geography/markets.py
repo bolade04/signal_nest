@@ -266,16 +266,32 @@ _STREET_TYPES: Final = STREET_SUFFIXES | frozenset(
 )
 #: A post-directional may follow the suffix ("1200 Pennsylvania Ave SE").
 _POST_DIRECTIONALS: Final = frozenset("n s e w ne nw se sw".split())
+#: Words that may stand before the house number ("No 3 Ajose Adeogun St", "Plot 1 Adeola Odeku St",
+#: "Flat 2 10 Downing St", "Level 3 1 Martin Pl"). Any other first word followed by a number is a
+#: street or a box ("Marszalkowska 1 Warszawa PL", "Box 12 Hartford CT"), not a street line.
+_UNIT_LABELS: Final = frozenset(
+    "no nr num number plot flat unit suite ste apt apartment shop house block blk lot bldg"
+    " building office room rm level lvl floor fl".split()
+)
+#: A subdivision code as folded text ("US-CT" -> "us ct"): an explicit code, never a street's last
+#: two words ("1500 Broadway US-CT").
+_FOLDED_SUBDIVISION_CODES: Final = frozenset(
+    f"{country} {code}".lower() for country, codes in SUBDIVISIONS.items() for code in codes
+)
 
 
 def _is_street_line(folded: str) -> bool:
     """Is ``folded`` (one comma-free part, folded, trailing postcode dropped) a street line?
 
-    A street line is a house number as the first or second word (after a label such as "No",
-    "Plot" or "Flat"), then street words, then a :data:`STREET_SUFFIXES` abbreviation, and
-    optionally a post-directional: "123 main st", "221b baker st", "no 3 ajose adeogun st",
-    "1200 pennsylvania ave se". The street words must include a name, and no street type may
-    follow the first name word ("1 st paul st" is a street; "123 main st hartford ct" is not).
+    A street line is a house number as the first word, or as the second after a unit label
+    (:data:`_UNIT_LABELS`: "No", "Plot", "Flat", "Unit", "Suite", "Level", ...), then street
+    words, then a :data:`STREET_SUFFIXES` abbreviation, and optionally a post-directional:
+    "123 main st", "221b baker st", "no 3 ajose adeogun st", "1200 pennsylvania ave se". The
+    street words must include a name; no street type may follow the first street word without a
+    digit ("1 st paul st" is a street; "123 main st hartford ct" is not); and the last two words
+    must not be a subdivision code ("1500 broadway us ct" names Connecticut). A number after
+    any other first word is not a house number ("marszalkowska 1 warszawa pl", "box 12 hartford
+    ct").
     """
     words = folded.split()
     if words and words[-1] in _POST_DIRECTIONALS:
@@ -283,7 +299,9 @@ def _is_street_line(folded: str) -> bool:
     if len(words) < 3 or words[-1] not in STREET_SUFFIXES:
         return False
     number = next((i for i, word in enumerate(words[:2]) if _HAS_DIGIT.search(word)), None)
-    if number is None:
+    if number is None or (number == 1 and words[0] not in _UNIT_LABELS):
+        return False
+    if " ".join(words[-2:]) in _FOLDED_SUBDIVISION_CODES:
         return False
     street = words[number + 1 : -1]
     named = [i for i, word in enumerate(street) if not _HAS_DIGIT.search(word)]

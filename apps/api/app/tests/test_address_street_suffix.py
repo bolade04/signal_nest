@@ -14,14 +14,17 @@ These tests prove:
 
 * the defect cases resolve to the location's own code, and the address states nothing;
 * street-only addresses with the usual suffixes of six countries (US, GB, CA, AU, NG, KE) do too;
+* a house number in second place counts only after a unit label ("No 3 ...", "Level 3 ...");
 * explicit geography still counts: a comma-separated component ("123 Main St, Dallas, TX",
   "10 Rua X, ST"), a code ("US-CT"), a name or alias, a bare "PL", and a comma-free text that is
   not a street line ("Hartford CT", "123 Main St Hartford CT", "1500 Broadway USA");
-* contradicting addresses are still refused (UNRESOLVED);
-* any text that is not a street line reads exactly as an observed market does;
+* contradicting addresses are still refused (UNRESOLVED), including a subdivision code after a
+  street ("1500 Broadway US-CT") and a number after a street name ("Marszalkowska 1 Warszawa PL");
+* any text that is not a street line reads exactly as an observed market does, and only the
+  business-address reader reads a street line differently (the live Scout readers do not);
 * lane 5DW2FIX's realistic-address corpus (924 rows) resolves to each row's own location;
-* a stored rule, selected as ``jobs/pipeline.py`` selects a location's rule, resolves the same on
-  SQLite and PostgreSQL, and another tenant's rule never enters.
+* a stored rule, selected by ``location_id`` as ``jobs/pipeline.py`` selects a run's rule,
+  resolves the same on SQLite and PostgreSQL, and another tenant's rule never enters.
 
 The live scout path (``parse_observed``, ``parse_market`` and the engine) is not changed.
 """
@@ -38,7 +41,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.db.models import Base
 from app.db.seed import CITIES
 from app.geography.geocoder import fixture_geocode
-from app.geography.markets import parse_business_address, parse_observed
+from app.geography.markets import parse_business_address, parse_market, parse_observed
 from app.jurisdiction.codes import UNRESOLVED
 from app.jurisdiction.resolver import resolve_jurisdiction
 from app.locations.models import BusinessLocation, GeoCoverageRule
@@ -163,6 +166,11 @@ STREET_LINES = [
         (NAIROBI, "KE", a)
         for a in ["14 Riverside Dr", "1 Kenyatta Ave", "7 Muthaiga Cl", "10 Kimathi St"]
     ],
+    # A house number after a unit label (W21-REV-D1STREET r1, C-2).
+    (SYDNEY, "AU-NSW", "Level 3 1 Martin Pl"),
+    (DALLAS, "US-TX", "Suite 5 123 Main St"),
+    (LONDON, "GB", "Unit 5 12 Rose Cl"),
+    (DALLAS, "US-TX", "Lot 7 3 Kings Ct"),
 ]
 
 
@@ -202,6 +210,7 @@ AGREEING = [
     (WARSAW, "PL", "Warsaw, PL", ("PL", None)),
     (LONDON, "GB", "10 Downing St UK", ("GB", None)),
     (LONDON, "GB", "10 Downing St, London SW1A 2AA, UK", ("GB", "GB:london")),
+    (HARTFORD, "US-CT", "1500 Broadway US-CT", ("US", "US-CT")),
 ]
 
 
@@ -251,6 +260,18 @@ CONTRADICTING = [
     (LONDON, "123 Main St, Dallas, TX", "states country US"),
     (LAGOS, "12 Awolowo Rd, Abeokuta, Ogun State, Nigeria", "states subdivision NG-OG"),
     (NAIROBI, "1 Kenyatta Ave, Kampala, Uganda", "states country UG"),
+    # A subdivision code after a typeless street is explicit (W21-REV-D1STREET r1, C-1).
+    (DALLAS, "1500 Broadway US-CT", "states subdivision US-CT"),
+    (DALLAS, "1500 Broadway US CT", "states subdivision US-CT"),
+    (DALLAS, "1500 Broadway Hartford US-CT", "states subdivision US-CT"),
+    # A number after a first word that is not a unit label is not a house number (C-2).
+    (DALLAS, "Box 12 Hartford CT", "states subdivision US-CT"),
+    (DALLAS, "Marszalkowska 1 Warszawa PL", "states country PL"),
+    (DALLAS, "Ermou 10 Athens GR", "states country GR"),
+    (DALLAS, "Providencia 1234 Santiago CL", "states country CL"),
+    (LONDON, "Marszalkowska 1 Warszawa PL", "states country PL"),
+    # Numbers with no street name are not a street line (C-4).
+    (DALLAS, "12 14 PL", "states country PL"),
 ]
 
 
@@ -264,6 +285,30 @@ def test_contradicting_addresses_are_still_refused(location, address, conflict):
     assert resolution.evidence[-1] == (
         f"unresolved: coverage rule 0 business address {address!r} {conflict}"
     )
+
+
+#: The live Scout readers' reading of street lines, as measured at main e3571ac8.
+LIVE_READINGS = {
+    "123 Main St": ("123 main", None, "ST"),
+    "1 Market Pl": ("1 market", None, "PL"),
+    "3 Kings Ct": ("3 kings", "US-CT", "US"),
+    "1200 Pennsylvania Ave SE": ("1200 pennsylvania ave", None, "SE"),
+}
+
+
+@pytest.mark.parametrize("address", sorted(LIVE_READINGS))
+def test_only_the_business_address_reader_reads_a_street_line_differently(address):
+    """D1 changes only the business-address reader; any change to the live Scout reader is a
+    separate, measured decision. ``parse_observed`` and ``parse_market`` (with and without a
+    location country) still read these street lines as at main."""
+    stated = parse_business_address(address)
+    assert (stated.country, stated.region) == (None, None)
+    for live in (
+        parse_observed(address),
+        parse_market(address),
+        parse_market(address, default_country="US"),
+    ):
+        assert (live.city, live.region, live.country) == LIVE_READINGS[address]
 
 
 @pytest.mark.parametrize(
@@ -457,20 +502,18 @@ def _world(engine) -> Iterator[sessionmaker]:
 
 
 def _stored_resolution(maker: sessionmaker, key: str):
-    """The location and its own rules, selected as ``jobs/pipeline.py`` selects a location's
-    rule (``GeoCoverageRule.location_id``), inside the location's own tenant."""
+    """The location and its rules, selected by ``GeoCoverageRule.location_id`` alone, as
+    ``jobs/pipeline.py`` selects a run's rule; then every selected rule's tenant is asserted to be
+    the location's own."""
     t = TENANTS[key]
     with maker() as s:
         location = s.get(BusinessLocation, f"loc-{key}")
         assert (location.organization_id, location.workspace_id) == (t["org"], t["ws"])
         rules = s.scalars(
-            select(GeoCoverageRule).where(
-                GeoCoverageRule.location_id == location.id,
-                GeoCoverageRule.organization_id == t["org"],
-                GeoCoverageRule.workspace_id == t["ws"],
-            )
+            select(GeoCoverageRule).where(GeoCoverageRule.location_id == location.id)
         ).all()
         assert [r.id for r in rules] == [f"geo-{key}"]
+        assert all((r.organization_id, r.workspace_id) == (t["org"], t["ws"]) for r in rules)
         return resolve_jurisdiction(location, rules), [r.business_address for r in rules]
 
 
