@@ -1,6 +1,9 @@
+import { useQuery } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
 import { useState } from 'react';
 import { ApiError } from '@/api/client';
+import * as api from '@/api/endpoints';
+import { queryKeys } from '@/api/queryKeys';
 import type { CreativeChannel, CreativeDraftOut } from '@/api/types';
 import { useAuth } from '@/auth/AuthContext';
 import { ErrorState } from '@/components/common/states';
@@ -71,6 +74,19 @@ const DRAFT_JURISDICTION_NOTE =
   'location does not change existing briefs, drafts or reviews. To use a changed location, ' +
   'generate a new brief version from the opportunity first.';
 
+/**
+ * Operator ruling Q-4 (2026-11-08), said on the drafts page (review r4 C-1): a brief whose
+ * opportunity has no location has no jurisdiction, and item 31 refuses drafts from it. Shown to
+ * every member when the brief this page already loaded has `location_id` null (the record's
+ * location at capture, so exactly the Q-4 case); for an editor it takes the place of the Q-1
+ * note and of the approve-first note, and the empty state no longer invites generation. An
+ * unknown brief (not loaded, or no `opportunity` parameter) is not "no location".
+ */
+const NO_LOCATION_NOTE =
+  'This brief’s opportunity has no location (for example, it came from a workspace-wide ' +
+  'scout), so the brief gives recommendations only. Drafts can’t be generated from it, because ' +
+  'a draft needs the jurisdiction of a location.';
+
 function requestFailureMessage(error: unknown): string {
   switch (errorCode(error)) {
     case 'brief_not_approved':
@@ -123,6 +139,15 @@ function DraftsInner({
   });
   const briefApproved = briefHistory.data?.items[0]?.decision === 'approved';
   const canGenerate = isEditor && generationConfigured && briefApproved;
+  // Q-4: the brief the page already loaded for its summary (BriefDraftsPage), read from its
+  // cache entry without a request of its own.
+  const brief = useQuery({
+    queryKey: queryKeys.opportunityBrief(workspaceId, opportunityId ?? '', briefId),
+    queryFn: ({ signal }) =>
+      api.getOpportunityBrief(workspaceId, opportunityId ?? '', briefId, signal),
+    enabled: false,
+  });
+  const noLocation = Boolean(opportunityId) && brief.data?.location_id === null;
   const generateUnavailable: string | null = !isEditor
     ? null
     : !generationConfigured
@@ -131,7 +156,7 @@ function DraftsInner({
         ? 'Open this brief from its opportunity to generate drafts.'
         : briefHistory.isPending
           ? null
-          : !briefApproved
+          : !briefApproved && !noLocation
             ? 'Approve this brief before generating drafts from it.'
             : null;
 
@@ -184,6 +209,12 @@ function DraftsInner({
     <section aria-labelledby="drafts-heading" className="space-y-4">
       <DraftsHeading />
 
+      {noLocation && (
+        <p role="note" className="text-sm text-muted-foreground">
+          {NO_LOCATION_NOTE}
+        </p>
+      )}
+
       {generateUnavailable && (
         <p role="note" className="text-sm text-muted-foreground">
           {generateUnavailable}
@@ -192,7 +223,7 @@ function DraftsInner({
 
       {canGenerate && (
         <div className="space-y-2">
-          <p className="text-xs text-muted-foreground">{DRAFT_JURISDICTION_NOTE}</p>
+          {noLocation ? null : <p className="text-xs text-muted-foreground">{DRAFT_JURISDICTION_NOTE}</p>}
           <DraftEditor selected={selected} busy={generating} onGenerate={onGenerate} />
           {generating && (
             <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -225,7 +256,7 @@ function DraftsInner({
         </div>
       ) : items.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          No drafts yet.{canGenerate ? ' Generate one from this brief.' : ''}
+          No drafts yet.{canGenerate && !noLocation ? ' Generate one from this brief.' : ''}
         </p>
       ) : (
         <div className="grid gap-4 md:grid-cols-[minmax(0,14rem)_1fr]">
