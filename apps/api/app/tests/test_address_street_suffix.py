@@ -9,11 +9,19 @@ named a place it does not name: "123 Main St" was Sao Tome (ST), "1 Market Pl" P
 
 The resolver now reads the address with
 :func:`app.geography.markets.parse_business_address`: a comma-free street line (a house number,
-street words and a street-type abbreviation, optionally a post-directional) states no place.
+street words and a street-type abbreviation, optionally a post-directional) states no place for
+certain. Under the operator's ruling of 2026-11-09 on W21-REV-D1STREET r1 C-3, ambiguous address
+text is never read as stating nothing: a street line whose last words may also be a town and a
+state or country code is "ambiguous", and if that code contradicts the location the answer is
+UNRESOLVED with the reason ``address_suffix_ambiguous`` and a fixed clarification.
 These tests prove:
 
 * the defect cases resolve to the location's own code, and the address states nothing;
-* street-only addresses with the usual suffixes of six countries (US, GB, CA, AU, NG, KE) do too;
+* clear street-only addresses with the usual suffixes of six countries (US, GB, CA, AU, NG, KE)
+  do too;
+* ambiguous street lines ("1500 Broadway Hartford CT", "No 3 Ajose Adeogun St", "1500 Broadway
+  CT", "123 MAIN ST") are UNRESOLVED with the clarification when their code contradicts, resolve
+  when it agrees, and their clarified forms resolve or are refused as their text says;
 * a house number in second place counts only after a unit label ("No 3 ...", "Level 3 ...");
 * explicit geography still counts: a comma-separated component ("123 Main St, Dallas, TX",
   "10 Rua X, ST"), a code ("US-CT"), a name or alias, a bare "PL", and a comma-free text that is
@@ -43,7 +51,12 @@ from app.db.seed import CITIES
 from app.geography.geocoder import fixture_geocode
 from app.geography.markets import parse_business_address, parse_market, parse_observed
 from app.jurisdiction.codes import UNRESOLVED
-from app.jurisdiction.resolver import resolve_jurisdiction
+from app.jurisdiction.resolver import (
+    ADDRESS_SUFFIX_AMBIGUOUS,
+    CLARIFICATIONS,
+    jurisdiction_permits,
+    resolve_jurisdiction,
+)
 from app.locations.models import BusinessLocation, GeoCoverageRule
 from app.tests._auth2_support import pg_database, require_postgres
 
@@ -96,9 +109,10 @@ def test_a_street_line_states_no_place(address):
     assert (stated.country, stated.region) == (None, None)
 
 
-#: Street-only addresses with the usual suffixes of the six countries, each for a location there.
-#: Covers the colliding abbreviations (St, Pl, Ct, Cl, Gr), a label before the house number
-#: ("No", "Plot", "Flat"), "St" for Saint, a unit after "#", and post-directionals.
+#: Clear street-only addresses with the usual suffixes of the six countries, each for a location
+#: there: one street-name word, the suffix written as a street type. Covers the colliding
+#: abbreviations (St, Pl, Ct, Cl, Gr), a label before the house number ("No", "Plot", "Flat"),
+#: a unit after "#", a pre-directional and post-directionals.
 STREET_LINES = [
     *[
         (DALLAS, "US-TX", a)
@@ -106,15 +120,13 @@ STREET_LINES = [
             *DEFECT,
             "3 Kings Ct #5",
             "No 3 Kings Ct",
-            "1 St Paul St",
-            "5 St Marks Pl",
+            "100 N Main St",
             "1200 Pennsylvania Ave SE",
             "100 Main St NE",
             "500 Elm Blvd",
             "9 Oak Ln",
             "12 Harbor Dr",
             "7 High Rd",
-            "8 Spring Hill Ct",
         ]
     ],
     *[
@@ -153,8 +165,6 @@ STREET_LINES = [
     *[
         (LAGOS, "NG-LA", a)
         for a in [
-            "No 3 Ajose Adeogun St",
-            "Plot 1 Adeola Odeku St",
             "12 Awolowo Rd",
             "5 Mambilla Cl",
             "2 Glover Ct",
@@ -225,6 +235,140 @@ def test_explicit_geography_in_an_address_still_counts(location, code, address, 
     assert resolution.evidence[-1] == f"coverage rule 0 business address {address!r} agrees"
     found = parse_business_address(address)
     assert (found.country, found.region) == stated
+
+
+# --------------------------------------------------------------------------- #
+# Ambiguous street lines (operator ruling of 2026-11-09 on W21-REV-D1STREET r1 C-3)
+# --------------------------------------------------------------------------- #
+
+#: Street lines whose last words may also be a town and a code, and whose code contradicts the
+#: location: two or more street-name words, or a suffix not written as a street type (upper
+#: case in a mixed-case line, or a line in one case), or a post-directional after two names.
+AMBIGUOUS = [
+    (DALLAS, "1 St Paul St", "country ST"),
+    (DALLAS, "5 St Marks Pl", "country PL"),
+    (DALLAS, "8 Spring Hill Ct", "subdivision US-CT"),
+    (LAGOS, "No 3 Ajose Adeogun St", "country ST"),
+    (LAGOS, "Plot 1 Adeola Odeku St", "country ST"),
+    (DALLAS, "1500 Broadway Hartford CT", "subdivision US-CT"),
+    (LONDON, "1500 Broadway Hartford CT", "country US"),
+    (LAGOS, "1500 Broadway Hartford CT", "country US"),
+    (DALLAS, "1500 N Broadway Hartford CT", "subdivision US-CT"),
+    (DALLAS, "1500 Broadway CT", "subdivision US-CT"),
+    (DALLAS, "1500 Broadway PL", "country PL"),
+    (DALLAS, "06103 Hartford CT", "subdivision US-CT"),
+    (DALLAS, "00-001 Warszawa PL", "country PL"),
+    (DALLAS, "1234 Providencia Santiago CL", "country CL"),
+    (DALLAS, "10 Ermou Athens GR", "country GR"),
+    (DALLAS, "1 Rua X Sao Tome ST", "country ST"),
+    (DALLAS, "1500 Broadway\nHartford CT", "subdivision US-CT"),
+    (DALLAS, "1500 Broadway; CT", "subdivision US-CT"),
+    (DALLAS, "3 Kings CT", "subdivision US-CT"),
+    (DALLAS, "123 MAIN ST", "country ST"),
+    (DALLAS, "123 main st", "country ST"),
+    (DALLAS, "221B baker st", "country ST"),
+    (DALLAS, "100 Martin Luther King Ave SE", "country SE"),
+]
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "conflict"), AMBIGUOUS, ids=[repr(a) for _, a, _ in AMBIGUOUS]
+)
+def test_an_ambiguous_street_line_that_may_contradict_is_unresolved_with_a_clarification(
+    location, address, conflict
+):
+    resolution = _resolve(location, address)
+    assert resolution.code == UNRESOLVED
+    assert resolution.is_resolved is False
+    assert resolution.reason == ADDRESS_SUFFIX_AMBIGUOUS
+    assert resolution.evidence[-1] == (
+        f"unresolved: coverage rule 0 business address {address!r} is ambiguous: "
+        f"a street type or {conflict}"
+    )
+    assert jurisdiction_permits(resolution) is False
+    # The clarification is fixed: no address text, no evidence.
+    message = CLARIFICATIONS[resolution.reason]
+    assert address not in message and conflict not in message
+
+
+#: The same kind of line, for a location its code agrees with, or with no code reading at all.
+AMBIGUOUS_CONSISTENT = [
+    (HARTFORD, "US-CT", "1500 Broadway Hartford CT"),
+    (HARTFORD, "US-CT", "3 Kings CT"),
+    (HARTFORD, "US-CT", "8 Spring Hill Ct"),
+    (SAO_TOME, "ST", "No 3 Ajose Adeogun St"),
+    (SAO_TOME, "ST", "123 MAIN ST"),
+    (WARSAW, "PL", "00-001 Warszawa PL"),
+    (WARSAW, "PL", "5 St Marks Pl"),
+    (GARKI, "NG-FC", "3 Lake Chad Cres"),
+    (TORONTO, "CA-ON", "100 KING ST W"),
+]
+
+
+@pytest.mark.parametrize(
+    ("location", "code", "address"),
+    AMBIGUOUS_CONSISTENT,
+    ids=[f"{c}:{a}" for _, c, a in AMBIGUOUS_CONSISTENT],
+)
+def test_an_ambiguous_street_line_that_cannot_contradict_resolves(location, code, address):
+    resolution = _resolve(location, address)
+    assert resolution.code == code
+    assert resolution.reason is None
+    assert _states_nothing(resolution), resolution.evidence
+
+
+#: The supported clarifications: the street type or direction in full (the line then states
+#: nothing), or the town and state or country after a comma (then explicit geography).
+CLARIFIED = [
+    (DALLAS, "1500 Broadway Hartford Court", "US-TX", None),
+    (DALLAS, "1500 Broadway Court", "US-TX", None),
+    (DALLAS, "8 Spring Hill Court", "US-TX", None),
+    (DALLAS, "1 St Paul Street", "US-TX", None),
+    (DALLAS, "123 MAIN STREET", "US-TX", None),
+    (DALLAS, "100 Martin Luther King Ave Southeast", "US-TX", None),
+    (LAGOS, "No 3 Ajose Adeogun Street", "NG-LA", None),
+    (LAGOS, "No 3 Ajose Adeogun St, Lagos, Nigeria", "NG-LA", "agrees"),
+    (HARTFORD, "1500 Broadway, Hartford, CT", "US-CT", "agrees"),
+    (DALLAS, "1500 Broadway, Hartford, CT", UNRESOLVED, "states subdivision US-CT"),
+    (DALLAS, "1500 Broadway, CT", UNRESOLVED, "states subdivision US-CT"),
+]
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "code", "evidence"),
+    CLARIFIED,
+    ids=[f"{loc.city}:{a}" for loc, a, _, _ in CLARIFIED],
+)
+def test_a_clarified_address_resolves_or_is_refused_as_its_text_says(
+    location, address, code, evidence
+):
+    resolution = _resolve(location, address)
+    assert resolution.code == code
+    assert resolution.reason is None
+    if evidence is None:
+        assert _states_nothing(resolution), resolution.evidence
+    else:
+        prefix = "unresolved: " if code == UNRESOLVED else ""
+        assert resolution.evidence[-1] == (
+            f"{prefix}coverage rule 0 business address {address!r} {evidence}"
+        )
+
+
+def test_only_an_ambiguous_suffix_carries_a_reason():
+    """Clear lines, explicit contradictions and unresolvable fields carry no reason; the one
+    reason category has exactly one fixed message."""
+    assert set(CLARIFICATIONS) == {ADDRESS_SUFFIX_AMBIGUOUS}
+    assert CLARIFICATIONS[ADDRESS_SUFFIX_AMBIGUOUS] == (
+        "We couldn't tell whether the end of the business address is a street type or a "
+        "state or country. Write the street type or direction in full (for example "
+        "'Street', 'Court' or 'Southeast'), or add the city and state or country after a "
+        "comma (for example '1500 Broadway, Hartford, CT')."
+    )
+    assert _resolve(DALLAS, "123 Main St").reason is None
+    assert _resolve(DALLAS, "Toronto, Ontario, Canada").reason is None
+    assert _resolve(DALLAS, "1500 Broadway US-CT").reason is None
+    assert resolve_jurisdiction(_location("Dallas", None, "US")).reason is None
+    assert resolve_jurisdiction(None).reason is None
 
 
 def test_sao_tome_written_alone_reads_as_on_main():

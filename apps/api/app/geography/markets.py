@@ -310,6 +310,74 @@ def _is_street_line(folded: str) -> bool:
     return not any(word in _STREET_TYPES for word in street[named[0] + 1 :])
 
 
+#: How a business address that is a street line reads (D1, operator ruling of 2026-11-09 on
+#: W21-REV-D1STREET r1 C-3): clearly a street, so its last word is not a code; or ambiguous,
+#: because its last words may also be a town and a state or country code.
+STREET_LINE_CLEAR: Final = "clear"
+STREET_LINE_AMBIGUOUS: Final = "ambiguous"
+
+
+def _written_words(text: str) -> list[str]:
+    """``text``'s words as written (case kept), split as :func:`fold` splits them, without the
+    trailing digit-bearing words :func:`_strip_postcode` drops."""
+    decomposed = unicodedata.normalize("NFKD", text)
+    stripped = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    stripped = re.sub(r"[.'’`´]", "", stripped.replace("&", " and "))
+    words = re.sub(r"[\W_]+", " ", stripped).split()
+    while len(words) > 1 and _HAS_DIGIT.search(words[-1]):
+        words.pop()
+    return words
+
+
+def street_line_kind(text: str | None) -> str | None:
+    """How a business address that is a street line (:func:`_is_street_line`) reads; ``None``
+    when it is not one.
+
+    :data:`STREET_LINE_CLEAR` when only the street can be meant: exactly one street-name word (a
+    leading pre-directional such as "N" is not counted), and the suffix written as a street type
+    ("St", "Ct", not "ST" or "CT") in a line that mixes upper and lower case: "123 Main St",
+    "3 Kings Ct", "100 N Main St", "1200 Pennsylvania Ave SE". Otherwise
+    :data:`STREET_LINE_AMBIGUOUS`: the last words may be a town and a state or country code
+    ("1500 Broadway Hartford CT", "No 3 Ajose Adeogun St", "1500 Broadway CT", "123 MAIN ST").
+    """
+    if text is None:
+        return None
+    parts = [
+        raw
+        for raw in text.split(",")
+        if (part := _strip_postcode(fold(raw))) and part not in _EMPTY_PARTS
+    ]
+    if len(parts) != 1:
+        return None
+    words = _strip_postcode(fold(parts[0])).split()
+    if not _is_street_line(" ".join(words)):
+        return None
+    written = _written_words(parts[0])
+    if [fold(word) for word in written] != words:
+        return STREET_LINE_AMBIGUOUS
+    if words[-1] in _POST_DIRECTIONALS:
+        words, written = words[:-1], written[:-1]
+    number = next(i for i, word in enumerate(words[:2]) if _HAS_DIGIT.search(word))
+    names = [word for word in words[number + 1 : -1] if not _HAS_DIGIT.search(word)]
+    if len(names) > 1 and names[0] in _POST_DIRECTIONALS:
+        names = names[1:]
+    letters = "".join(word for word in written if not _HAS_DIGIT.search(word))
+    as_street_type = (
+        not written[-1].isupper()
+        and any(ch.isupper() for ch in letters)
+        and any(ch.islower() for ch in letters)
+    )
+    return STREET_LINE_CLEAR if len(names) == 1 and as_street_type else STREET_LINE_AMBIGUOUS
+
+
+def ambiguous_street_suffix(text: str | None) -> MarketIdentity | None:
+    """For an ambiguous street line, what its last word names if it is a code (the reading of
+    :func:`parse_observed`: "1500 Broadway Hartford CT" is US-CT); ``None`` for any other text."""
+    if street_line_kind(text) != STREET_LINE_AMBIGUOUS:
+        return None
+    return parse_observed(text)
+
+
 def _clean_parts(text: str) -> list[str]:
     parts = []
     for raw in text.split(","):
@@ -354,11 +422,13 @@ def parse_business_address(text: str | None) -> MarketIdentity | None:
     """What a business's own address (a coverage rule's ``business_address``) states.
 
     Read as :func:`parse_observed` reads it, with one difference: a comma-free street line
-    ("123 Main St", "3 Kings Ct", "1 Market Pl"; see :func:`_is_street_line`) states no place,
-    so its street-type abbreviation is never read as a country or subdivision code. Explicit
-    geography still counts: a comma-separated component ("123 Main St, Dallas, TX", "10 Rua X,
-    ST"), a code ("US-CT"), a name, a bare "PL", and a comma-free text that is not a street line
-    ("Hartford CT", "123 Main St Hartford CT").
+    ("123 Main St", "3 Kings Ct", "1 Market Pl"; see :func:`_is_street_line`) states no place
+    for certain, so its street-type abbreviation is not read as a country or subdivision code.
+    When the line is ambiguous (:func:`street_line_kind`), its possible code is given by
+    :func:`ambiguous_street_suffix`, and a contradicting one leaves the location unresolved.
+    Explicit geography still counts: a comma-separated component ("123 Main St, Dallas, TX",
+    "10 Rua X, ST"), a code ("US-CT"), a name, a bare "PL", and a comma-free text that is not a
+    street line ("Hartford CT", "123 Main St Hartford CT").
     """
     return _parse(text, None, qualify=False, known=None, street_address=True)
 
