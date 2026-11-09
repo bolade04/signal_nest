@@ -265,11 +265,13 @@ describe('Q-4: a capture refused for an existing location (jurisdiction_unresolv
 // --------------------------------------------------------------------------------------------
 const SERVER_MISSING = 'SERVER-TEXT no jurisdiction';
 
-function approvedHistory() {
+/** The brief's decision history: approved by a reviewer, or no decision yet. */
+function approvedHistory(approved = true) {
   server.use(
     http.get(P(`/workspaces/${WS}/opportunities/${OPP}/briefs/${BRIEF}/approvals`), () =>
       HttpResponse.json({
-        items: [
+        items: approved
+          ? [
           {
             id: 'appr-1',
             workspace_id: WS,
@@ -288,8 +290,9 @@ function approvedHistory() {
             is_simulated: true,
             created_at: '2026-11-01T09:00:00Z',
           },
-        ],
-        total: 1,
+            ]
+          : [],
+        total: approved ? 1 : 0,
         limit: 20,
         offset: 0,
       } satisfies ApprovalHistoryOut),
@@ -297,20 +300,28 @@ function approvedHistory() {
   );
 }
 
+/**
+ * The drafts page of brief 1. Its `location_id` follows the opportunity's, as the capture
+ * copies the record's (the scout's) location onto both; `approved` is its decision history, and
+ * `readable` whether the page can read the brief at all.
+ */
 function draftsPage(
   role: string,
   refusal?: { code: string; message: string; status?: number },
   located = false,
+  { approved = true, readable = true }: { approved?: boolean; readable?: boolean } = {},
 ) {
   asRole(role);
-  // The brief's location follows the opportunity's: the capture copies the record's (the
-  // scout's) location onto both.
   const shown = brief(1, { location_id: located ? 'loc-dallas' : null });
   world({ located, briefs: [shown] });
-  approvedHistory();
+  approvedHistory(approved);
   const posts: unknown[] = [];
   server.use(
-    http.get(P(`/workspaces/${WS}/opportunities/${OPP}/briefs/${BRIEF}`), () => HttpResponse.json(shown)),
+    http.get(P(`/workspaces/${WS}/opportunities/${OPP}/briefs/${BRIEF}`), () =>
+      readable
+        ? HttpResponse.json(shown)
+        : HttpResponse.json({ error: { code: 'not_found', message: 'Brief not found.' } }, { status: 404 }),
+    ),
     http.get(DRAFTS, () =>
       HttpResponse.json({ items: [], total: 0, limit: 100, offset: 0 } satisfies CreativeDraftListOut),
     ),
@@ -475,4 +486,71 @@ describe('F-5: the phase-C refusal messages', () => {
       expect(screen.queryByText(new RegExp(`SERVER-TEXT ${code}`))).toBeNull();
     });
   }
+});
+
+// --------------------------------------------------------------------------------------------
+// Q-4 on the drafts page (review W21-REV-5DW3 r4: condition C-1, and F-2's R-1 and R-2
+// inverted, with a located control). The page knows a brief has no location from the brief it
+// already loaded (its `location_id`, the record's location at capture). Ruling Q-4: "explain the
+// limitation clearly in the UI"; the limitation is said, and nothing on the page says or
+// implies that drafts can come from such a brief.
+// --------------------------------------------------------------------------------------------
+const APPROVE_FIRST = /approve this brief before generating drafts/i;
+const INVITATION = /generate one from this brief/i;
+
+describe('Q-4: the drafts page of a brief with no location', () => {
+  it('an approved brief, an editor: recommendations only; no Q-1 note and no invitation', async () => {
+    const { screen } = draftsPage('marketer');
+    const note = await screen.findByText(RECOMMENDATIONS_ONLY);
+    expect(note).toHaveTextContent(NO_LOCATION);
+    expect(note).toHaveTextContent(NO_DRAFTS);
+    expect(note.textContent ?? '').not.toMatch(CODE);
+    // The brief's decision history has been read (the editor's controls are up).
+    await screen.findByRole('button', { name: 'Generate draft' });
+    expect(screen.queryByText(Q1_INHERITS)).toBeNull();
+    expect(screen.getByText(/No drafts yet/)).not.toHaveTextContent(INVITATION);
+    expect(screen.queryByText(APPROVE_FIRST)).toBeNull();
+  });
+
+  it('a brief not yet approved, an editor: the note, not "approve this brief first"', async () => {
+    const { screen } = draftsPage('admin', undefined, false, { approved: false });
+    const note = await screen.findByText(RECOMMENDATIONS_ONLY);
+    expect(note).toHaveTextContent(NO_DRAFTS);
+    await screen.findByText(/No drafts yet/);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText(APPROVE_FIRST)).toBeNull();
+    expect(screen.queryByText(Q1_INHERITS)).toBeNull();
+    expect(screen.getByText(/No drafts yet/)).not.toHaveTextContent(INVITATION);
+  });
+
+  for (const role of NON_EDITORS) {
+    it(`a ${role}: the note is said to every member`, async () => {
+      const { screen } = draftsPage(role);
+      const note = await screen.findByText(RECOMMENDATIONS_ONLY);
+      expect(note).toHaveTextContent(NO_LOCATION);
+      expect(screen.queryByRole('button', { name: 'Generate draft' })).toBeNull();
+    });
+  }
+
+  it('a brief with a location (the control): the Q-1 note and the invitation; no Q-4 note', async () => {
+    const { screen } = draftsPage('marketer', undefined, true);
+    await screen.findByRole('button', { name: 'Generate draft' });
+    expect(screen.getByText(Q1_INHERITS)).toBeInTheDocument();
+    expect(screen.getByText(/No drafts yet/)).toHaveTextContent(INVITATION);
+    expect(screen.queryByText(RECOMMENDATIONS_ONLY)).toBeNull();
+  });
+
+  it('a brief with a location, not yet approved (the control): approve it first; no Q-4 note', async () => {
+    const { screen } = draftsPage('marketer', undefined, true, { approved: false });
+    expect(await screen.findByText(APPROVE_FIRST)).toBeInTheDocument();
+    expect(screen.queryByText(RECOMMENDATIONS_ONLY)).toBeNull();
+  });
+
+  it('a brief the page cannot read: no Q-4 note (unknown is not "no location")', async () => {
+    const { screen } = draftsPage('marketer', undefined, false, { readable: false });
+    await screen.findByRole('button', { name: 'Generate draft' });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText(RECOMMENDATIONS_ONLY)).toBeNull();
+    expect(screen.getByText(Q1_INHERITS)).toBeInTheDocument();
+  });
 });
