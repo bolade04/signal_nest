@@ -202,7 +202,7 @@ def test_both_base_images_are_digest_pinned(directives):
 def test_final_base_digest_is_the_reviewed_distroless(code):
     assert (
         "gcr.io/distroless/python3-debian13@sha256:"
-        "dcb4e83bc06eccbee7b626d8cc1c6177f5c3a549235e70ac6e7f8cc98f4264a1"
+        "5bac3c3ab33426c460db63504cd1a267b3326b9f804d21c63359492858d1beda"
     ) in code
 
 

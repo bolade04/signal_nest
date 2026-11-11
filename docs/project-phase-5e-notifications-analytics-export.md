@@ -19,6 +19,8 @@ produced D24 PM and its integration cycle D25 AM. There is no earlier closeout o
 kind. This header block is a **derived** summary of §5; §5 is operative and any change
 must be propagated here in the same edit.
 
+**Status update (2026-11-07, W21 tracking pass, at `main` `3564c6d0`; the status above is kept as written):** contracts only, under the operator's W21 programme instruction of 2026-11-01 (see the status update in `docs/project-phase-5-plan.md`). Merged: the 5E contracts within the CF-3 freeze (#298 `285f3672`: the notifications, notification-preferences and exports tables, the `content_export_enabled` flag and its capability, the export and analytics role policies, the notification emitter Protocol and the query keys). Not built: 5E-W1 (audited manual export and the retention design), 5E-W2 (status analytics), 5E-W3 (in-app notifications and the shell replacement), 5E-W4 (the adversarial battery), I-5E, R-5E, R-final and the Phase 5 closeout. No export, notification or analytics service, route or page exists, and the notification bell is still the placeholder. `content_export_enabled` defaults to false (`apps/api/app/core/config.py:557`). 5E's entry gate, I-5D and R-5D, is not met. Merged does not mean activated, deployed or closed out.
+
 ## 1. Objective
 
 Close the Guided Action loop's tail: in-app notifications, derived read-only status

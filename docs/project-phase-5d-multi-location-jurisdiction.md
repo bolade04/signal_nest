@@ -13,6 +13,8 @@ wave **R-5D** on D19 AM (after the I-5D integration cycle at D18 PM). 5D builds 
 before 5E, and **remains an activation precondition for 5C and for Phase 5D
 itself** — nothing can activate before the round completes (master plan §10).
 
+**Status update (2026-11-07, W21 tracking pass, at `main` `3564c6d0`; the status above is kept as written):** partly built, under the operator's W21 programme instruction of 2026-11-01 (see the status update in `docs/project-phase-5-plan.md`). Merged: the 5D contracts within the CF-3 freeze (#298 `285f3672`: the `campaign_locations` table, the `jurisdiction_code` columns, and closed campaign mode and status vocabularies, which are live) and the 5D-W2 seam, the fail-closed jurisdiction resolver and the coverage exclusion order (#299 `fe06b228`; the exclusion order is live). Not built: 5D-W1 (the dedicated campaigns router and `campaign_locations` writes; campaigns are still served by the generic context factory), 5D-W3 (jurisdiction capture on briefs, drafts and reviews, and the campaign UI), 5D-W4 (the adversarial battery), I-5D and R-5D. Nothing writes `jurisdiction_code`, and the resolver has no production caller. 5D adds no flag; the Phase 5 flags it feeds stay off. Merged does not mean activated, deployed or closed out.
+
 ## 1. Objective
 
 Harden the campaign contract so campaign scoping is safe to be load-bearing, and

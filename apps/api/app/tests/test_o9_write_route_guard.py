@@ -13,14 +13,18 @@ one of:
   that the endpoint calls);
 * in :data:`READ_ONLY`: a non-GET route that writes nothing;
 * in :data:`PENDING`: not yet converted, with the reason. The list only shrinks: an entry
-  whose route is on ``WriteDb`` fails the guard until it is removed.
+  whose route is on ``WriteDb`` fails the guard until it is removed. It is empty since O9
+  Tier 2 put the 27 campaign-context write routes on ``WriteDb``.
 
 Every listed route must be served and must use ``get_db``, so no entry outlives its route. A
 new write route (including one an open PR adds) that uses plain ``Depends(get_db)`` fails here
 until it declares ``db: Session = WriteDb`` or is listed with a reason.
 
-GET routes are not checked: the O9 audit (``P6-W21-O9-01/AUDIT.md`` §2) read every GET
-endpoint and the helpers it calls, and none writes.
+GET routes are not checked. The O9 audit (``P6-W21-O9-01/AUDIT.md`` §2) read the 58 GET
+endpoints served at its base (102393fa) and the helpers they call: none writes. The 9 GET
+routes added since (the Project Phase 5A brief, 5B approval and 5C creative-draft reads) were
+re-read for O9 Tier 2, endpoint, dependencies and called helpers (``P6-W21-O9T2-01``): none
+writes either. A GET route added after that has not been read.
 """
 
 from __future__ import annotations
@@ -106,39 +110,22 @@ READ_ONLY: dict[tuple[str, str], str] = {
     ("POST", f"{API}/geocode"): "geocoder cache only; get_db only through the tenant context",
 }
 
-_TIER_2 = "blocked on #292 (O9 Tier 2)"
-_CTX = f"{API}/workspaces/{{workspace_id}}"
-
 #: Not yet on ``WriteDb``. Shrinks only: remove an entry when its route is converted.
-PENDING: dict[tuple[str, str], str] = {
-    ("POST", f"{_CTX}/products"): _TIER_2,
-    ("PATCH", f"{_CTX}/products/{{item_id}}"): _TIER_2,
-    ("DELETE", f"{_CTX}/products/{{item_id}}"): _TIER_2,
-    ("POST", f"{_CTX}/audiences"): _TIER_2,
-    ("PATCH", f"{_CTX}/audiences/{{item_id}}"): _TIER_2,
-    ("DELETE", f"{_CTX}/audiences/{{item_id}}"): _TIER_2,
-    ("POST", f"{_CTX}/competitors"): _TIER_2,
-    ("PATCH", f"{_CTX}/competitors/{{item_id}}"): _TIER_2,
-    ("DELETE", f"{_CTX}/competitors/{{item_id}}"): _TIER_2,
-    ("POST", f"{_CTX}/brand-voice"): _TIER_2,
-    ("PATCH", f"{_CTX}/brand-voice/{{item_id}}"): _TIER_2,
-    ("DELETE", f"{_CTX}/brand-voice/{{item_id}}"): _TIER_2,
-    ("POST", f"{_CTX}/offers"): _TIER_2,
-    ("PATCH", f"{_CTX}/offers/{{item_id}}"): _TIER_2,
-    ("DELETE", f"{_CTX}/offers/{{item_id}}"): _TIER_2,
-    ("POST", f"{_CTX}/claims"): _TIER_2,
-    ("PATCH", f"{_CTX}/claims/{{item_id}}"): _TIER_2,
-    ("DELETE", f"{_CTX}/claims/{{item_id}}"): _TIER_2,
-    ("POST", f"{_CTX}/source-preferences"): _TIER_2,
-    ("PATCH", f"{_CTX}/source-preferences/{{item_id}}"): _TIER_2,
-    ("DELETE", f"{_CTX}/source-preferences/{{item_id}}"): _TIER_2,
-    ("POST", f"{_CTX}/channel-preferences"): _TIER_2,
-    ("PATCH", f"{_CTX}/channel-preferences/{{item_id}}"): _TIER_2,
-    ("DELETE", f"{_CTX}/channel-preferences/{{item_id}}"): _TIER_2,
-    ("POST", f"{_CTX}/campaigns"): _TIER_2,
-    ("PATCH", f"{_CTX}/campaigns/{{item_id}}"): _TIER_2,
-    ("DELETE", f"{_CTX}/campaigns/{{item_id}}"): _TIER_2,
-}
+PENDING: dict[tuple[str, str], str] = {}
+
+#: The campaign-context collections (``campaign_context/routes.py``, ``_ENTITIES``): each
+#: serves a POST, a PATCH and a DELETE, all on ``WriteDb`` since O9 Tier 2.
+_CONTEXT_COLLECTIONS = (
+    "products",
+    "audiences",
+    "competitors",
+    "brand-voice",
+    "offers",
+    "claims",
+    "source-preferences",
+    "channel-preferences",
+    "campaigns",
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -264,20 +251,33 @@ def test_guard_g_every_served_write_route_commits_before_its_response():
     assert found == [], "\n".join(found)
 
 
-def test_pending_is_exactly_the_27_campaign_context_routes_blocked_on_292():
-    assert len(PENDING) == 27
-    assert set(PENDING.values()) == {"blocked on #292 (O9 Tier 2)"}
+def test_every_campaign_context_write_route_is_on_write_db_and_pending_is_empty():
+    """O9 Tier 2: the 27 campaign-context write routes (9 collections x POST, PATCH, DELETE)
+    are served on ``WriteDb``, as is every other non-GET route of that module, and nothing is
+    pending."""
+    assert PENDING == {}
     routes = {r.key: r for r in served_routes(app)}
-    modules = {routes[key].endpoint.__module__ for key in PENDING}
-    assert modules == {"app.campaign_context.routes"}
-    # Every campaign-context write route is pending: none is on WriteDb yet, none is missed.
-    context_writes = {
+    ctx = f"{API}/workspaces/{{workspace_id}}"
+    expected = set()
+    for path in _CONTEXT_COLLECTIONS:
+        expected |= {
+            ("POST", f"{ctx}/{path}"),
+            ("PATCH", f"{ctx}/{path}/{{item_id}}"),
+            ("DELETE", f"{ctx}/{path}/{{item_id}}"),
+        }
+    assert len(expected) == 27
+    assert expected <= set(routes), sorted(expected - set(routes))
+    module_writes = {
         key
         for key, r in routes.items()
-        if r.endpoint.__module__ == "app.campaign_context.routes"
-        and r.method not in _READ_METHODS
+        if r.endpoint.__module__ == "app.campaign_context.routes" and r.method not in _READ_METHODS
     }
-    assert context_writes == set(PENDING)
+    off = sorted(
+        key
+        for key in expected | module_writes
+        if not (routes[key].uses_get_db and routes[key].on_write_db) or routes[key].misscoped_helper
+    )
+    assert off == [], off
 
 
 def test_the_listed_routes_match_the_audit_counts():

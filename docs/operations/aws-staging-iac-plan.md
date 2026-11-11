@@ -294,7 +294,7 @@ are committed here:
   run `ahead` (startup-safe) against the newer additive schema; new replicas run `compatible`
   — except across the AUTH4 boundary: no coexistence (deployment.md).
   A replica against an un-advanced schema reports `pending` and fails fast.
-- **Alembic single head `8005724d811a`** (19 revisions) is the current baseline; the migration task advances
+- **Alembic single head `c3f8e1a6d2b9`** (26 revisions) is the current baseline; the migration task advances
   the schema, never a replica. Rollback favors additive-first forward-compat, and never goes
   below `AUTH4_ROLLBACK_FLOOR` (deployment.md); an explicit
   `downgrade` is a deliberate single-actor action with an explicit target revision.
@@ -726,7 +726,7 @@ remain separately authorized improvements. Dark connectors remain gated by Boole
 application authorization, not by SG destination filtering.
 
 ### 26.5 Two-image artifact contract
-Two immutable, digest-pinned images (`api`, `worker`; `apps/api/Dockerfile:94-118`,
+Two immutable, digest-pinned images (`api`, `worker`; `apps/api/Dockerfile:164-195`,
 `.github/workflows/ci.yml:240-260`). API task = API image digest; worker task = worker image
 digest; **migration task = worker image digest** running the bare hardened entrypoint
 `python -m app.db.migrate` (upgrade-and-verify internally). `.github/workflows/ci.yml:276-279`
