@@ -18,6 +18,33 @@ the CF-2 soft retirement) removes it from every review from then on, whichever c
 the library. The scouting pipeline's claim check (``app.jobs.pipeline``) runs on third-party
 discussion text and passes no library at all, so no library entry — active or retired — can
 reach it.
+
+**Jurisdiction-restricted entries (Project Phase 5D, 5D-W1; exit criterion 6).** An entry whose
+``jurisdiction_codes`` lists codes applies only where those codes say, as decided by the
+shared jurisdiction gate :func:`app.jurisdiction.resolver.jurisdiction_permits` (the gate every
+jurisdiction consumer shares; never a substring). Which way an unknown answer falls depends on
+what the entry does, so the review can only become stricter (fail closed):
+
+* an entry that **permits** (``approved``) applies only where the draft's jurisdiction is a
+  code inside one of the entry's codes (the gate's ``allowed`` limb);
+* an entry that **restricts** (a blocking kind, or ``required_disclaimer``) applies unless the
+  draft's jurisdiction is a code known to lie outside every one of the entry's codes (the
+  gate's ``excluded`` limb: a code that may overlap one of them, or an entry value that is
+  not a code, cannot be ruled out);
+* a draft with **no jurisdiction** (``None``: none was captured, the state of every draft until
+  lane 5D-W3 captures one) or an ``UNRESOLVED`` or malformed one therefore gets every
+  restricted entry that restricts and none that permits.
+
+An entry with ``NULL`` or an empty list applies everywhere, as before.
+
+**Reachable codes only (operator ruling Q-2, 2026-11-08).** An entry may carry only a code the
+shared resolver can produce, or a country that contains such codes
+(:func:`jurisdiction_code_refusal`, read through the resolver's own readers, never a copy of
+their tables): ``ClaimIn`` refuses any other on create and update, so ``US-PR`` is refused and
+``PR`` accepted. A stored value no draft can carry (one written before the rule, or by hand) is
+read as **unreadable** (:func:`jurisdiction_restriction`): a restricting entry then applies to
+every draft and an approved one clears nothing for it, the same fail-closed reading as any
+unreadable value. A restriction is never silently dropped.
 """
 
 from __future__ import annotations
@@ -28,6 +55,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from app.core.enums import ClaimRisk
+from app.jurisdiction.codes import is_jurisdiction_code
+from app.jurisdiction.resolver import country_code_of, jurisdiction_permits, subdivision_code_of
+from app.jurisdiction.subdivisions import SUBDIVISION_JURISDICTIONS
 from app.llm.untrusted import normalise
 
 # Industries requiring stricter controls.
@@ -191,19 +221,114 @@ def is_approved_kind(kind: str | None) -> bool:
 
 @dataclass(frozen=True)
 class LibraryEntry:
-    """One claims-library entry as the engine reads it (a plain projection of the row)."""
+    """One claims-library entry as the engine reads it (a plain projection of the row).
+
+    ``jurisdiction_codes`` is the entry's restriction as :func:`jurisdiction_restriction`
+    reads the stored column: ``None`` applies everywhere."""
 
     id: str
     text: str
     kind: str
     retired_at: datetime | None = None
+    jurisdiction_codes: tuple[str, ...] | None = None
 
 
-def active_entries(entries: Iterable[LibraryEntry]) -> list[LibraryEntry]:
-    """The entries a review applies: every entry that is not retired (CF-2 soft retirement).
+def jurisdiction_code_refusal(code: object) -> str | None:
+    """Why a claims-library entry may not carry ``code``, or ``None`` when it may (operator
+    ruling Q-2: "Refuse new or edited claims-library codes that the supported jurisdiction
+    resolver cannot produce").
 
-    A retired entry blocks nothing, requires nothing and approves nothing."""
-    return [e for e in entries if e.retired_at is None]
+    An entry may carry exactly the codes that appear in a resolution's ``codes``
+    (:func:`app.jurisdiction.resolver.resolve_jurisdiction`):
+
+    * a country code the resolver reads as itself
+      (:func:`~app.jurisdiction.resolver.country_code_of`, its reader of a location's country
+      field): every ISO 3166-1 code it knows, ``PR`` and ``GB`` included. A country that
+      resolves by first-level subdivision (the item-33 list,
+      :data:`~app.jurisdiction.subdivisions.SUBDIVISION_JURISDICTIONS`: US, CA, AU, NG) is
+      accepted too, as the country that contains its subdivision-level drafts (ruling B-3);
+    * a subdivision code the resolver reads as itself
+      (:func:`~app.jurisdiction.resolver.subdivision_code_of`), which exists only for a country
+      on that list and only for a subdivision in its table: ``US-TX``, ``NG-LA``.
+
+    So ``US-PR`` is refused (Puerto Rico has its own country code, ``PR``, and is not in the
+    US table), as are ``US-ZZ``, ``GB-ENG`` (GB resolves as a whole country) and any country
+    code the resolver does not know. The definitions are the resolver's own: this composes its
+    public readers and its subdivision list and copies no table, so a change to them changes
+    this rule with them. It lives here, not in ``app.jurisdiction`` (lane 5D-W2's, merged),
+    because the claims library is its only caller. The answer names only codes, so a 422 may
+    carry it."""
+    if not isinstance(code, str) or not is_jurisdiction_code(code):
+        return "it is not a jurisdiction code"
+    country, _, part = code.partition("-")
+    if country_code_of(country) != country:
+        return f"{country} is not an ISO 3166-1 country code"
+    if not part:
+        return None
+    if country not in SUBDIVISION_JURISDICTIONS:
+        return f"{country} applies as a whole country, so use {country}"
+    if subdivision_code_of(country, code) != code:
+        own = f" ({part} has its own country code, so use {part})"
+        return f"{part} is not a state or province of {country}" + (
+            own if country_code_of(part) == part else ""
+        )
+    return None
+
+
+def is_reachable_jurisdiction_code(code: object) -> bool:
+    """Whether a claims-library entry may carry ``code`` (:func:`jurisdiction_code_refusal`)."""
+    return jurisdiction_code_refusal(code) is None
+
+
+def jurisdiction_restriction(stored: object) -> tuple[str, ...] | None:
+    """An entry's jurisdiction restriction from its stored ``jurisdiction_codes`` value.
+
+    ``None`` (applies everywhere) for ``NULL`` or an empty list, the column's meaning (CF-3).
+    Otherwise the listed values. A value no draft can carry becomes ``""``: one that is not a
+    string, one outside the grammar, or (Q-2) a well-formed code the resolver cannot produce
+    (:func:`is_reachable_jurisdiction_code`: ``US-PR``, ``US-ZZ``, ``GB-ENG``, written before
+    the rule or by hand). A stored value that is not a list becomes ``("",)``. ``""`` names
+    nothing readable: no jurisdiction lies inside it and none can be ruled out of it, so a
+    restricting entry applies to every draft and an approved one clears nothing for it (fail
+    closed both ways). A restriction is never silently dropped."""
+    if stored is None:
+        return None
+    if isinstance(stored, list | tuple):
+        if not stored:
+            return None
+        return tuple(code if is_reachable_jurisdiction_code(code) else "" for code in stored)
+    return ("",)
+
+
+def _restricts(kind: str | None) -> bool:
+    """Whether an entry of ``kind`` can only make a draft's review stricter."""
+    return is_blocking_kind(kind) or is_disclaimer_kind(kind)
+
+
+def applies_in_jurisdiction(entry: LibraryEntry, jurisdiction: str | None) -> bool:
+    """Whether ``entry`` applies to a draft of ``jurisdiction`` (fail closed; module docstring)."""
+    restriction = jurisdiction_restriction(entry.jurisdiction_codes)
+    if restriction is None:
+        return True
+    if _restricts(entry.kind):
+        return not jurisdiction_permits(jurisdiction, excluded=restriction)
+    return jurisdiction_permits(jurisdiction, allowed=restriction)
+
+
+def active_entries(
+    entries: Iterable[LibraryEntry], *, jurisdiction: str | None = None
+) -> list[LibraryEntry]:
+    """The entries a review applies: every entry that is not retired (CF-2 soft retirement)
+    and applies in the draft's ``jurisdiction`` (:func:`applies_in_jurisdiction`; ``None``, the
+    default, is a draft with no captured jurisdiction).
+
+    A retired entry blocks nothing, requires nothing and approves nothing; nor does a
+    jurisdiction-restricted entry where it does not apply."""
+    return [
+        e
+        for e in entries
+        if e.retired_at is None and applies_in_jurisdiction(e, jurisdiction)
+    ]
 
 
 def _unique(texts: Iterable[str]) -> list[str]:
@@ -248,6 +373,8 @@ def review_against_library(
     industry: str | None,
     entries: Iterable[LibraryEntry],
     extra_disclaimers: Sequence[str] = (),
+    *,
+    jurisdiction: str | None = None,
 ) -> LibraryReview:
     """Review generated ``text`` against the workspace's claims library (Phase 5C §2).
 
@@ -256,9 +383,10 @@ def review_against_library(
     makes the result ``blocked``); the hit entries' ids are returned. Required disclaimers
     are the active ``required_disclaimer`` entries (canonical form) plus
     ``extra_disclaimers`` (the offer calendar's), each resolved when the text contains it.
-    Retired entries are ignored (:func:`active_entries`).
+    Retired entries, and jurisdiction-restricted entries that do not apply in the draft's
+    ``jurisdiction``, are ignored (:func:`active_entries`).
     """
-    active = active_entries(entries)
+    active = active_entries(entries, jurisdiction=jurisdiction)
     folded = fold(text)
     blocked = [e for e in active if is_blocking_kind(e.kind) and fold(e.text)]
     safety = check_claim_safety(folded, industry, blocked_claims=[fold(e.text) for e in blocked])

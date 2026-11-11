@@ -201,7 +201,7 @@ creates no role or policy.**
 - **Migrations** run as a **controlled one-time ECS task** using the **approved image**
   (`python -m app.db.migrate`); replicas never migrate (`docs/operations/deployment.md`,
   `docs/operations/migrations.md`).
-- **Single Alembic head** verified before/after: `c3f8e1a6d2b9` (26 revisions).
+- **Single Alembic head** verified before/after: `d5f616c0ec97` (27 revisions).
 - A **migration backup / recovery checkpoint** (snapshot) is taken before applying
   migrations.
 - **Forward and rollback** procedures follow the additive-first policy

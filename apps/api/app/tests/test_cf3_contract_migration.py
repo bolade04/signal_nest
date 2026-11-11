@@ -3,8 +3,10 @@
 Through the real Alembic CLI on a throwaway SQLite database (as CI validates migrations), with
 the plumbing of ``test_cf1_contract_migration``:
 
-* the head is single and follows CF-2's ``a7d2e9f4c1b8``; ``upgrade head`` then ``alembic
-  check`` reports no drift (Phase 5 plan §6.2.0);
+* this revision follows CF-2's ``a7d2e9f4c1b8`` and is followed by the single head, 5D-W1's
+  campaign-location data repair ``d5f616c0ec97`` (data only; tested in
+  ``test_campaign_locations_repair``), so the cases below upgrade to THIS revision explicitly;
+  ``upgrade head`` then ``alembic check`` reports no drift (Phase 5 plan §6.2.0);
 * **the migrated CHECKs equal their Python authorities, in both directions** — campaign mode
   and status (``CampaignMode`` / ``CampaignStatus``), export format (``ExportFormat``), the
   notification event code on both tables (``NotificationEventCode``) and the capability set
@@ -61,11 +63,14 @@ from app.tests.test_cf1_contract_migration import (
 )
 
 API_DIR = Path(__file__).resolve().parents[2]
-HEAD = "c3f8e1a6d2b9"
+#: This revision (W21 CF-3).
+CF3 = "c3f8e1a6d2b9"
+#: The code head (5D-W1's campaign-location data repair, Amendment D-1), which follows it.
+HEAD = "d5f616c0ec97"
 CF2 = "a7d2e9f4c1b8"
 OVERRIDES = "workspace_capability_overrides"
 NEW_TABLES = {"campaign_locations", "exports", "notifications", "notification_preferences"}
-MIGRATION = next((API_DIR / "alembic" / "versions").glob(f"*-{HEAD}_*.py"))
+MIGRATION = next((API_DIR / "alembic" / "versions").glob(f"*-{CF3}_*.py"))
 
 #: The jurisdiction CHECK of every table that carries a jurisdiction column.
 JURISDICTION_CHECKS = {
@@ -129,9 +134,9 @@ def _fk_sql(db_path: Path, statement: str, params: tuple = ()) -> None:
 @pytest.fixture()
 def migrated(tmp_path) -> Path:
     db_path = tmp_path / "cf3.db"
-    result = _alembic(db_path, "upgrade", "head")
+    result = _alembic(db_path, "upgrade", CF3)
     assert result.returncode == 0, result.stderr
-    assert _version(db_path) == [HEAD]
+    assert _version(db_path) == [CF3]
     return db_path
 
 
@@ -144,10 +149,12 @@ def test_the_head_is_single_and_follows_cf2() -> None:
 
     script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
     assert [r.revision for r in script.get_revisions("heads")] == [HEAD]
-    assert script.get_revision(HEAD).down_revision == CF2
+    assert script.get_revision(HEAD).down_revision == CF3
+    assert script.get_revision(CF3).down_revision == CF2
 
 
 def test_upgrade_leaves_no_model_drift(migrated: Path) -> None:
+    assert _alembic(migrated, "upgrade", "head").returncode == 0  # check needs the head
     result = _alembic(migrated, "check")
     assert result.returncode == 0, result.stdout + result.stderr
     assert NEW_TABLES <= _tables(migrated)
@@ -404,7 +411,7 @@ def test_the_backfill_migrates_only_own_workspace_ids_and_reports_the_rest(
     db_path = at_cf2_with_campaigns
     before = dict(_sql(db_path, "SELECT id, location_ids FROM campaigns"))
 
-    up = _alembic(db_path, "upgrade", "head")
+    up = _alembic(db_path, "upgrade", CF3)
 
     assert up.returncode == 0, up.stderr
     pairs = set(_sql(
@@ -430,6 +437,7 @@ def test_the_backfill_migrates_only_own_workspace_ids_and_reports_the_rest(
     assert "3 membership(s) inserted, 4 reference(s) dropped" in out
     # The JSON arrays are retained untouched (read for one more release, O-8).
     assert dict(_sql(db_path, "SELECT id, location_ids FROM campaigns")) == before
+    assert _alembic(db_path, "upgrade", "head").returncode == 0  # check needs the head
     assert _alembic(db_path, "check").returncode == 0
 
 
@@ -438,7 +446,7 @@ def test_the_campaign_vocabularies_are_normalised_and_every_rewrite_reported(
 ) -> None:
     db_path = at_cf2_with_campaigns
 
-    up = _alembic(db_path, "upgrade", "head")
+    up = _alembic(db_path, "upgrade", CF3)
 
     assert up.returncode == 0, up.stderr
     stored = {r[0]: (r[1], r[2]) for r in _sql(db_path, "SELECT id, mode, status FROM campaigns")}
@@ -497,7 +505,7 @@ def _migration_module():
 
 def test_the_backfill_is_idempotent(at_cf2_with_campaigns: Path) -> None:
     db_path = at_cf2_with_campaigns
-    assert _alembic(db_path, "upgrade", "head").returncode == 0
+    assert _alembic(db_path, "upgrade", CF3).returncode == 0
     rows_before = sorted(_sql(db_path, "SELECT * FROM campaign_locations"))
     migration = _migration_module()
     engine = create_engine(f"sqlite:///{db_path}")
@@ -522,7 +530,7 @@ def _refused(db_path: Path, message: str) -> None:
     assert message in refused.stdout + refused.stderr, refused.stdout + refused.stderr
     assert "Nothing was changed." in refused.stdout + refused.stderr
     # Nothing changed: same revision, same tables, the new columns and CHECKs kept.
-    assert _version(db_path) == [HEAD]
+    assert _version(db_path) == [CF3]
     assert _tables(db_path) == tables_before
     assert "jurisdiction_code" in _columns(db_path, "business_locations")
     assert {"ck_campaign_mode", "ck_campaign_status"} <= set(_checks(db_path, "campaigns"))

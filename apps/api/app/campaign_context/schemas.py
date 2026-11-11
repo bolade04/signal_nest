@@ -5,7 +5,9 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, create_model, field_validator
 
+from app.claims.engine import jurisdiction_code_refusal
 from app.core.enums import CampaignMode, CampaignStatus
+from app.jurisdiction.codes import is_jurisdiction_code
 
 #: Upper bound on a campaign's ``location_ids`` / an offer's ``eligible_location_ids``.
 #: Every listed id is checked against the workspace's locations in one query (P6-PLAT-8),
@@ -85,6 +87,40 @@ class ClaimIn(BaseModel):
     category: str | None = None
     risk_level: str = "low"
     notes: str | None = None
+    #: Jurisdiction-conditioned claim rules (Project Phase 5D §2, 5D-W1): the jurisdictions the
+    #: entry applies in; empty (the default) means every jurisdiction, the meaning of every
+    #: entry written before the field existed. Each value must be a jurisdiction code in the
+    #: frozen grammar (:mod:`app.jurisdiction.codes`) **and** one the shared resolver can
+    #: produce, or a country containing such codes (operator ruling Q-2:
+    #: :func:`app.claims.engine.jurisdiction_code_refusal`), else 422 naming the code. The
+    #: validator below applies to create, update (``ClaimPatch`` keeps it) and the onboarding
+    #: claims input alike. Published as a plain string list. The claims review reads it
+    #: through :func:`app.claims.engine.active_entries`.
+    jurisdiction_codes: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Jurisdiction codes the entry applies in: an ISO 3166-1 alpha-2 country code (GB, "
+            "PR, US), or a state or province code of the United States, Canada, Australia or "
+            "Nigeria (US-TX, NG-LA). Empty means every jurisdiction."
+        ),
+    )
+
+    @field_validator("jurisdiction_codes")
+    @classmethod
+    def _jurisdiction_codes(cls, v: list[str]) -> list[str]:
+        if not all(is_jurisdiction_code(code) for code in v):
+            raise ValueError(
+                "must list jurisdiction codes: an upper-case ISO 3166-1 alpha-2 country code, "
+                "optionally '-' and a subdivision part of 1-3 letters or digits (GB, US-TX)"
+            )
+        refused = [
+            f"{code} is not a jurisdiction a claim can apply in: {reason}"
+            for code in dict.fromkeys(v)
+            if (reason := jurisdiction_code_refusal(code)) is not None
+        ]
+        if refused:
+            raise ValueError("; ".join(refused))
+        return v
 
 
 class SourcePrefIn(BaseModel):
@@ -114,6 +150,26 @@ class CampaignIn(BaseModel):
     @classmethod
     def _unique_locations(cls, v: list[str]) -> list[str]:
         return _unique_location_ids(v)
+
+
+class CampaignOut(BaseModel):
+    """A campaign as the dedicated campaigns router answers it (Project Phase 5D, 5D-W1).
+
+    Projected: the row's tenant columns ``organization_id`` and ``workspace_id`` are not
+    echoed (Phase 5D plan §2; exit criterion 2; live change 8(c)). ``location_ids`` is the
+    campaign's membership as the ``campaign_locations`` join table holds it, in location-id
+    order; the request's order is not kept (a membership is a set).
+    """
+
+    id: str
+    brand_id: str
+    name: str
+    goal: str | None
+    mode: CampaignMode
+    location_ids: list[str]
+    status: CampaignStatus
+    created_at: datetime
+    updated_at: datetime
 
 
 # --------------------------------------------------------------------------- #

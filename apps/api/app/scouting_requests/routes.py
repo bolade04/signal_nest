@@ -16,6 +16,7 @@ from app.audit.actions import AuditAction
 from app.audit.service import record_audit
 from app.auth.dependencies import TenantContext, get_tenant_context, require_role
 from app.brands.service import get_primary_brand
+from app.campaign_context.models import Campaign
 from app.capabilities.registry import Capability
 from app.capabilities.resolver import CapabilityResolution
 from app.core.config import get_settings
@@ -225,6 +226,14 @@ def create_scout_request(
         ensure_location_active(db, location.id)
         if not resolved_market:
             resolved_market = f"{location.city}, {location.state_province or location.country}"
+    # Project Phase 5D §2 / exit criterion 3 (live change 8(a)): the campaign is validated
+    # against the request's workspace exactly as brief capture does it (briefs/service.py),
+    # closing the audit's asymmetry (the location was checked, the campaign was stored as
+    # sent). A campaign of another workspace answers the same 404 as a missing one.
+    if body.campaign_id is not None:
+        campaign = db.get(Campaign, body.campaign_id)
+        if campaign is None or campaign.workspace_id != workspace_id:
+            raise NotFoundError("Campaign not found in this workspace.")
 
     request = ScoutRequest(
         organization_id=ctx.organization.id,

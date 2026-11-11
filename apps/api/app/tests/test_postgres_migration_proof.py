@@ -58,13 +58,16 @@ from app.db.base import Base
 from app.tests._auth2_support import pg_database, require_postgres
 
 API_DIR = Path(__file__).resolve().parents[2]
-#: The code head (Project Phase 5 CF-3, W21: campaign hardening and ``campaign_locations``,
+#: The code head (Project Phase 5D 5D-W1, W21 Amendment D-1: the campaign-location data repair;
+#: data only, so the schema at head is CF-3's).
+HEAD = "d5f616c0ec97"
+#: One below head (Project Phase 5 CF-3, W21: campaign hardening and ``campaign_locations``,
 #: the jurisdiction columns, ``exports``, ``notifications`` / ``notification_preferences``,
 #: the ``deleted_at`` retention markers, and the widened capability-override CHECK).
-HEAD = "c3f8e1a6d2b9"
-#: One below head (Project Phase 5 CF-2, W21: adds ``creative_drafts``, ``content_reviews``,
+BELOW_HEAD = "c3f8e1a6d2b9"
+#: Two below head (Project Phase 5 CF-2, W21: adds ``creative_drafts``, ``content_reviews``,
 #: ``approvals.draft_id``, ``claims_library.retired_at`` and widens two CHECKs).
-BELOW_HEAD = "a7d2e9f4c1b8"
+CF2 = "a7d2e9f4c1b8"
 #: Two below head (Project Phase 5 CF-1, W21: adds ``recommendation_briefs`` and
 #: ``approvals`` and widens the capability-override CHECK).
 CF1 = "f3a9c1e7b2d5"
@@ -295,12 +298,24 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     assert {"jurisdiction_code", "deleted_at"} <= _columns(pg_url, "creative_drafts")
     assert "jurisdiction_code" in _columns(pg_url, "business_locations")
 
-    # One guarded step down undoes exactly the head revision; the spent token does not
-    # authorize the next step.
+    # One guarded step down undoes exactly the head revision: 5D-W1's data-only repair, so no
+    # table or column goes; the spent token does not authorize the next step, and the base
+    # token minted at head is refused from the moved source.
     base_token_at_head = _confirmation(pg_url, "base")
     step_token = _confirmation(pg_url, "-1")
+    schema_at_head = {t: _columns(pg_url, t) for t in _tables(pg_url)}
     _alembic(pg_url, "-x", f"confirm={step_token}", "downgrade", "-1")
     assert _version(pg_url) == [BELOW_HEAD]
+    assert {t: _columns(pg_url, t) for t in _tables(pg_url)} == schema_at_head
+    spent = _run(["-x", f"confirm={step_token}", "downgrade", "-1"], pg_url)
+    assert spent.returncode != 0 and _version(pg_url) == [BELOW_HEAD]
+    stale = _run(["-x", f"confirm={base_token_at_head}", "downgrade", "base"], pg_url)
+    assert stale.returncode != 0 and _version(pg_url) == [BELOW_HEAD]
+
+    # The next guarded step undoes exactly CF-3.
+    cf3_token = _confirmation(pg_url, "-1")
+    _alembic(pg_url, "-x", f"confirm={cf3_token}", "downgrade", "-1")
+    assert _version(pg_url) == [CF2]
     assert not cf3_tables & _tables(pg_url)
     for table in ("business_locations", "geo_coverage_rules", "recommendation_briefs",
                   "creative_drafts", "content_reviews"):
@@ -327,11 +342,8 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     assert "llm_usage_events" in _tables(pg_url)
     assert "explanation_source" in _columns(pg_url, "opportunities")
     assert "auth_sessions" in _tables(pg_url)
-    spent = _run(["-x", f"confirm={step_token}", "downgrade", "-1"], pg_url)
-    assert spent.returncode != 0 and _version(pg_url) == [BELOW_HEAD]
-    # The base token minted at head is likewise refused from the moved source.
-    stale = _run(["-x", f"confirm={base_token_at_head}", "downgrade", "base"], pg_url)
-    assert stale.returncode != 0 and _version(pg_url) == [BELOW_HEAD]
+    spent = _run(["-x", f"confirm={cf3_token}", "downgrade", "-1"], pg_url)
+    assert spent.returncode != 0 and _version(pg_url) == [CF2]
 
     # Base under the guard: minted at the live revision, every table destroyed.
     token = _confirmation(pg_url, "base")

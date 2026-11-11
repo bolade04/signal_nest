@@ -1509,6 +1509,70 @@
         "title": "CampaignMode",
         "type": "string"
       },
+      "CampaignOut": {
+        "description": "A campaign as the dedicated campaigns router answers it (Project Phase 5D, 5D-W1).\n\nProjected: the row's tenant columns ``organization_id`` and ``workspace_id`` are not\nechoed (Phase 5D plan \u00a72; exit criterion 2; live change 8(c)). ``location_ids`` is the\ncampaign's membership as the ``campaign_locations`` join table holds it, in location-id\norder; the request's order is not kept (a membership is a set).",
+        "properties": {
+          "brand_id": {
+            "title": "Brand Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "goal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goal"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "location_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Location Ids",
+            "type": "array"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/CampaignMode"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CampaignStatus"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "brand_id",
+          "name",
+          "goal",
+          "mode",
+          "location_ids",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "CampaignOut",
+        "type": "object"
+      },
       "CampaignPatch": {
         "properties": {
           "goal": {
@@ -2073,6 +2137,14 @@
             ],
             "title": "Category"
           },
+          "jurisdiction_codes": {
+            "description": "Jurisdiction codes the entry applies in: an ISO 3166-1 alpha-2 country code (GB, PR, US), or a state or province code of the United States, Canada, Australia or Nigeria (US-TX, NG-LA). Empty means every jurisdiction.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Jurisdiction Codes",
+            "type": "array"
+          },
           "kind": {
             "default": "approved",
             "title": "Kind",
@@ -2118,6 +2190,14 @@
               }
             ],
             "title": "Category"
+          },
+          "jurisdiction_codes": {
+            "description": "Jurisdiction codes the entry applies in: an ISO 3166-1 alpha-2 country code (GB, PR, US), or a state or province code of the United States, Canada, Australia or Nigeria (US-TX, NG-LA). Empty means every jurisdiction.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Jurisdiction Codes",
+            "type": "array"
           },
           "kind": {
             "title": "Kind",
@@ -13954,6 +14034,7 @@
     },
     "/api/v1/workspaces/{workspace_id}/campaigns": {
       "get": {
+        "description": "The workspace's campaigns, oldest first, each with its location memberships.",
         "operationId": "list_campaigns_api_v1_workspaces__workspace_id__campaigns_get",
         "parameters": [
           {
@@ -14023,8 +14104,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "additionalProperties": true,
-                    "type": "object"
+                    "$ref": "#/components/schemas/CampaignOut"
                   },
                   "title": "Response List Campaigns Api V1 Workspaces  Workspace Id  Campaigns Get",
                   "type": "array"
@@ -14065,6 +14145,7 @@
         ]
       },
       "post": {
+        "description": "Create a campaign. Every location in ``location_ids`` must be an active location of this\nworkspace (else ``404``, or ``422`` for a deactivated one); the memberships are written in\nthe same transaction.",
         "operationId": "create_campaigns_api_v1_workspaces__workspace_id__campaigns_post",
         "parameters": [
           {
@@ -14108,9 +14189,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Create Campaigns Api V1 Workspaces  Workspace Id  Campaigns Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/CampaignOut"
                 }
               }
             },
@@ -14136,6 +14215,7 @@
     },
     "/api/v1/workspaces/{workspace_id}/campaigns/{item_id}": {
       "delete": {
+        "description": "Delete a campaign and its location memberships.",
         "operationId": "delete_campaigns_api_v1_workspaces__workspace_id__campaigns__item_id__delete",
         "parameters": [
           {
@@ -14194,7 +14274,75 @@
           "campaigns"
         ]
       },
+      "get": {
+        "description": "One campaign of this workspace; a campaign of any other workspace is not found.",
+        "operationId": "get_campaign_api_v1_workspaces__workspace_id__campaigns__item_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Campaign",
+        "tags": [
+          "campaign-context",
+          "campaigns"
+        ]
+      },
       "patch": {
+        "description": "Change only the fields sent. A sent ``location_ids`` replaces the campaign's memberships\nwhole: locations it adds are validated as on create (a deactivated location already a\nmember may stay), and memberships it omits are removed, in the same transaction.",
         "operationId": "update_campaigns_api_v1_workspaces__workspace_id__campaigns__item_id__patch",
         "parameters": [
           {
@@ -14247,9 +14395,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Update Campaigns Api V1 Workspaces  Workspace Id  Campaigns  Item Id  Patch",
-                  "type": "object"
+                  "$ref": "#/components/schemas/CampaignOut"
                 }
               }
             },

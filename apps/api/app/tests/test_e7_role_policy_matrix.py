@@ -419,6 +419,15 @@ E7_POLICY: tuple[Policy, ...] = (
     # P6-UI-006: the workspace-effective scheduling reflection is member-gated like the
     # schedule read it describes (feedback's reflection, above, is editor-gated).
     _row("GET", f"{_W}/scheduling-capability", "workspace", ALL_ROLES, MEMBER_WS, OK_200),
+    # Project Phase 5D (5D-W1): one campaign, read by every member like the campaign list.
+    _row(
+        "GET",
+        f"{_W}/campaigns/{{item_id}}",
+        "workspace",
+        ALL_ROLES,
+        MEMBER_WS,
+        _handler_404("Item not found in this workspace."),
+    ),
     # Phase 5C (W21 lane P5C): drafts are read by every member, like the brief they come
     # from (so the approving reviewer can read them); dark until the capability resolves
     # enabled. The availability reflection is member-gated like those reads.
@@ -670,7 +679,8 @@ class TestPolicyTableCompleteness:
             # the creative-capability reflection). Recomputed from the served routes.
             # +2 W21 P5C draft decisions (POST and GET .../drafts/{draft_id}/approvals).
             "role_gated": 65,
-            MEMBER_WS: 31,
+            # +1 Project Phase 5D (5D-W1): GET /workspaces/{workspace_id}/campaigns/{item_id}.
+            MEMBER_WS: 32,
             MEMBER_ORG: 1,
             "operator": OPERATOR_ROUTE_COUNT,
             "authenticated": len(AUTHENTICATED_ONLY) + 2,
@@ -689,8 +699,8 @@ class TestPolicyTableCompleteness:
             WS_EXACT: 9,
             ORG_EXACT: 9,
             # 25 at N; +3 Phase 5A (brief reads, brief-capability); +3 W21 P5C (draft reads,
-            # creative-capability).
-            MEMBER_WS: 31,
+            # creative-capability); +1 Project Phase 5D 5D-W1 (one campaign).
+            MEMBER_WS: 32,
             MEMBER_ORG: 1,
             MEMBER_HANDLER: 2,
         }
@@ -732,7 +742,9 @@ class TestPolicyTableCompleteness:
         # one RANK_FLOOR row and three MEMBER_WS rows above, all customer operations.
         # 138 -> 140 (W21 P5C draft decisions): POST and GET
         # /workspaces/{workspace_id}/drafts/{draft_id}/approvals, two WS_EXACT rows above.
-        assert len(served) == 140
+        # 140 -> 141 (Project Phase 5D, 5D-W1): GET /workspaces/{workspace_id}/campaigns/{item_id},
+        # a MEMBER_WS row above.
+        assert len(served) == 141
 
     def test_one_row_per_route(self):
         keys = [p.key for p in E7_POLICY]
@@ -740,7 +752,8 @@ class TestPolicyTableCompleteness:
 
     def test_rows_are_machine_readable_and_partition_the_roles(self):
         rows = json.loads(json.dumps([asdict(p) for p in E7_POLICY]))
-        assert len(rows) == 99  # 93 on the I-5AB + CF-2 base; +6 W21 P5C (the draft routes)
+        # 93 on the I-5AB + CF-2 base; +6 W21 P5C (the draft routes); +1 5D-W1 (one campaign).
+        assert len(rows) == 100
         for row in rows:
             assert set(row) == {"method", "path", "scope", "allowed", "denied", "category", "probe"}
             assert set(row["allowed"]) | set(row["denied"]) == set(ALL_ROLES)

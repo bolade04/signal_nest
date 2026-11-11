@@ -20,10 +20,10 @@ with the plumbing of ``test_cf1_contract_migration``:
   ``claims_library.retired_at`` gone, both CHECKs narrowed, every other index and row kept)
   and ``upgrade`` restores it.
 
-The CHECK-equality and insert tests run at the code head (CF-3's ``c3f8e1a6d2b9``, which adds a
-jurisdiction CHECK to both tables and widens the capability vocabulary); the downgrade tests
-start from ``a7d2e9f4c1b8`` itself (CF-3's own downgrade is pinned by
-``test_cf3_contract_migration``).
+The CHECK-equality and insert tests run at the code head (``d5f616c0ec97``, 5D-W1's data-only
+campaign-location repair, whose schema is CF-3's ``c3f8e1a6d2b9``: CF-3 adds a jurisdiction
+CHECK to both tables and widens the capability vocabulary); the downgrade tests start from
+``a7d2e9f4c1b8`` itself (CF-3's own downgrade is pinned by ``test_cf3_contract_migration``).
 """
 
 from __future__ import annotations
@@ -57,8 +57,10 @@ from app.tests.test_cf1_contract_migration import (
 API_DIR = Path(__file__).resolve().parents[2]
 #: This revision (W21 CF-2).
 CF2 = "a7d2e9f4c1b8"
-#: The code head (W21 CF-3), which follows CF-2.
-HEAD = "c3f8e1a6d2b9"
+#: W21 CF-3, which follows CF-2.
+CF3 = "c3f8e1a6d2b9"
+#: The code head (5D-W1's campaign-location data repair, Amendment D-1), which follows CF-3.
+HEAD = "d5f616c0ec97"
 CF1 = "f3a9c1e7b2d5"
 OVERRIDES = "workspace_capability_overrides"
 NEW_TABLES = {"creative_drafts", "content_reviews"}
@@ -117,7 +119,8 @@ def test_the_head_is_single_and_follows_cf1() -> None:
 
     script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
     assert [r.revision for r in script.get_revisions("heads")] == [HEAD]
-    assert script.get_revision(HEAD).down_revision == CF2
+    assert script.get_revision(HEAD).down_revision == CF3
+    assert script.get_revision(CF3).down_revision == CF2
     assert script.get_revision(CF2).down_revision == CF1
 
 

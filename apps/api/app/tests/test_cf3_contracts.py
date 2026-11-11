@@ -282,4 +282,8 @@ def test_campaign_mode_and_status_are_validated_at_the_schema_layer(env) -> None
     assert bad.status_code == 422, bad.text
     good = env.client.patch(patch, headers=env.auth(ALICE), json={"status": "paused"})
     assert good.status_code == 200 and good.json()["status"] == "paused"
-    assert ORG_A == row["organization_id"]  # the response projection is 5D-W1's, unchanged
+    # Since 5D-W1 the campaign answer is projected: no tenant columns (live change 8(c)).
+    assert "organization_id" not in row and "workspace_id" not in row
+    (stored,) = env.rows(Campaign, Campaign.__table__.c.id == row["id"])
+    assert (stored["organization_id"], stored["workspace_id"]) == (ORG_A, WS_A)
+    assert env.client.get(patch, headers=env.auth(ALICE)).json()["status"] == "paused"

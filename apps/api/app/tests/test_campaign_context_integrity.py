@@ -44,6 +44,7 @@ from app.campaign_context.models import (
     AudienceProfile,
     BrandVoiceProfile,
     Campaign,
+    CampaignLocation,
     ChannelPreference,
     ClaimsLibraryEntry,
     CompetitorProfile,
@@ -409,8 +410,13 @@ class TestLocationListOnCreate:
         body = {**base, list_field: [second, world.loc_a1]}
         r = world.a("POST", f"/workspaces/{world.ws_a1}/{path}", body)
         assert r.status_code == 201, r.text
-        assert r.json()[list_field] == [second, world.loc_a1]
-        assert world.row(model, r.json()["id"])[list_field] == [second, world.loc_a1]
+        expected = [second, world.loc_a1]
+        if path == "campaigns":
+            # Project Phase 5D (5D-W1): a campaign's membership is the campaign_locations join
+            # table, a set; it is answered, and mirrored into the JSON, in location-id order.
+            expected = sorted(expected)
+        assert r.json()[list_field] == expected
+        assert world.row(model, r.json()["id"])[list_field] == expected
 
     def test_empty_list_is_accepted(self, world, path, model, list_field, base):
         r = world.a("POST", f"/workspaces/{world.ws_a1}/{path}", {**base, list_field: []})
@@ -597,22 +603,33 @@ class TestLegacyRowsAreReportedNotRewritten:
         ]
 
     def test_a_rename_does_not_touch_a_legacy_list_but_resending_it_is_refused(self, world: World):
-        (row_id,) = _write_direct(
+        # Since 5D-W1 a campaign's membership is the campaign_locations join table. A legacy row
+        # holds what the CF-3 back-fill migrated from its list: the own-workspace id only (the
+        # other organization's id was dropped and reported), written here as the back-fill would.
+        scope = _a1_scope(world)
+        campaign = Campaign(
+            name="Legacy to repair", location_ids=[world.loc_a1, world.loc_b], **scope
+        )
+        (row_id,) = _write_direct(world, campaign)
+        _write_direct(
             world,
-            Campaign(
-                name="Legacy to repair",
-                location_ids=[world.loc_a1, world.loc_b],
-                **_a1_scope(world),
+            CampaignLocation(
+                organization_id=scope["organization_id"],
+                workspace_id=scope["workspace_id"],
+                campaign_id=row_id,
+                location_id=world.loc_a1,
             ),
         )
         url = f"/workspaces/{world.ws_a1}/campaigns/{row_id}"
         renamed = world.a("PATCH", url, {"name": "Legacy renamed"})
         assert renamed.status_code == 200
-        assert renamed.json()["location_ids"] == [world.loc_a1, world.loc_b]
+        assert renamed.json()["location_ids"] == [world.loc_a1]
+        assert world.row(Campaign, row_id)["location_ids"] == [world.loc_a1, world.loc_b]
         resent = world.a("PATCH", url, {"location_ids": [world.loc_a1, world.loc_b]})
         assert _error(resent) == LOCATION_404
         fixed = world.a("PATCH", url, {"location_ids": [world.loc_a1]})
         assert fixed.status_code == 200 and fixed.json()["location_ids"] == [world.loc_a1]
+        assert world.row(Campaign, row_id)["location_ids"] == [world.loc_a1]
 
     def test_command_exit_codes_and_json_report(
         self, world: World, legacy, tmp_path, monkeypatch, capsys
@@ -797,4 +814,6 @@ def test_every_collection_has_a_patch_route():
     paths = app.openapi()["paths"]
     for path in COLLECTION_IDS:
         op = paths[f"{API}/workspaces/{{workspace_id}}/{path}/{{item_id}}"]
-        assert set(op) == {"patch", "delete"}, path
+        # Campaigns also serve GET one (Project Phase 5D, 5D-W1, dedicated campaigns router).
+        expected = {"get", "patch", "delete"} if path == "campaigns" else {"patch", "delete"}
+        assert set(op) == expected, path
