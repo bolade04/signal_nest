@@ -1023,7 +1023,9 @@ def _address_agrees(parts: list[tuple[str, str]], label: str) -> MarketIdentity 
     code's subdivision when every other part agrees with it and at least one names its area: the
     code's own state ("US-AL, Alabama, Montgomery", "US-AL, Montgomery, State of Alabama",
     "Abia State, NG-AB, Nigeria"), an agreeing country, or another form of the same code. A part
-    that names no area is a town or a street. Any part naming another area keeps it unplaceable."""
+    that names no area is a town or a street. Any part naming another area keeps it unplaceable.
+    When no part names an area, the code agrees if at most one other part is a word without a
+    digit: a town ("US-AL, 1 Main St, Montgomery"; C-6, W21-REV-5DW2FIX r3d)."""
     forms = [_form(folded, raw, head_of_two=False, observed=True) for folded, raw in parts]
     code = next((form for form in forms if form is not None and form.strict), None)
     if code is None:
@@ -1042,6 +1044,11 @@ def _address_agrees(parts: list[tuple[str, str]], label: str) -> MarketIdentity 
         if not any(_agree(code, _Form(c, r, strict=False)) for c, r in areas):
             return None
         confirmed = True
+    if not confirmed:
+        # C-6 (r3d): no part names an area. As FU-E reads "US-AL, Montgomery", one town and any
+        # streets or units agree ("US-AL, 1 Main St, Montgomery"); two words may hide an area.
+        words = [folded for (folded, _), form in zip(parts, forms, strict=True) if form is not code]
+        confirmed = sum(1 for word in words if not _HAS_DIGIT.search(word)) <= 1
     return _identity(None, code.region, code.country, label) if confirmed else None
 
 

@@ -1446,3 +1446,62 @@ def test_pcn_only_the_business_address_reads_the_agreement():
     for text in ("US-AL, Alabama, Montgomery", "Abia State, NG-AB, Nigeria"):
         for reading in (*exclusion_readings(text), *observed_readings(text), parse_market(text)):
             assert (reading.region or "").endswith("?"), (text, reading)
+
+
+# --------------------------------------------------------------------------- #
+# C-6 and C-7 (W21-REV-5DW2FIX r3d)
+# --------------------------------------------------------------------------- #
+
+C6_OWN = [
+    (MONTGOMERY_LOCATION, "US-AL, 1 Main St, Montgomery", "US-AL"),
+    (MONTGOMERY_LOCATION, "US-AL, Montgomery, 1 Main St", "US-AL"),
+    (MONTGOMERY_LOCATION, "us-al, 1 main st, montgomery", "US-AL"),
+    (MONTGOMERY_LOCATION, "US AL, MONTGOMERY, 1 MAIN ST", "US-AL"),
+    (TORONTO_LOCATION, "CA-ON, 100 King St W, Toronto", "CA-ON"),
+    (IKEJA_LOCATION, "NG-LA, 1 Allen Ave, Ikeja", "NG-LA"),
+    (SYDNEY_LOCATION, "AU-NSW, Sydney, 1 Martin Pl", "AU-NSW"),
+]
+
+
+@pytest.mark.parametrize(("location", "address", "code"), C6_OWN)
+def test_c6_a_code_then_a_street_and_a_town_is_that_place(location, address, code):
+    """C-6: "US-AL, 1 Main St, Montgomery" and "US-AL, Montgomery, 1 Main St" are the business's
+    own address, as "US-AL, Montgomery" is (FU-E): a street carries a number, so the one word
+    without a digit is the town. They were refused (218 own rows of the review's probe)."""
+    result = _resolve(location, address)
+    assert result.code == code, address
+    assert result.evidence[-1].endswith("agrees"), result.evidence
+
+
+@pytest.mark.parametrize(
+    "address", ["US-AL, 1 Main St, Montgomery", "US-AL, Montgomery, 1 Main St"]
+)
+def test_c6_the_same_forms_for_a_location_elsewhere_are_refused(address):
+    dallas = _resolve(DALLAS_LOCATION, address)
+    assert dallas.code == UNRESOLVED
+    assert dallas.evidence[-1].endswith("states subdivision US-AL"), dallas.evidence
+    toronto = _resolve(TORONTO_LOCATION, address)
+    assert toronto.code == UNRESOLVED
+    assert toronto.evidence[-1].endswith("states country US"), toronto.evidence
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "code"),
+    [
+        (IKEJA_LOCATION, "NG-LA, NG-OG, Lagos State", "NG-OG"),
+        (UMUAHIA_LOCATION, "NG-AB, NG-AD, Abia", "NG-AD"),
+        (UMUAHIA_LOCATION, "NG-AB, NG-AD, Abia State", "NG-AD"),
+        (UMUAHIA_LOCATION, "Abia, NG-AB, NG-AD", "NG-AB"),
+        (DALLAS_LOCATION, "US-TX, US-OK, Texas", "US-OK"),
+        (DALLAS_LOCATION, "1 Main St, US-TX, US-OK, Texas", "US-OK"),
+    ],
+)
+def test_c7_a_second_code_for_another_subdivision_keeps_the_address_refused(
+    location, address, code
+):
+    """C-7: the agreement reading passes over only the code it reads. A second listed code for
+    another subdivision is another area, so the address stays refused for the first code's own
+    location, in words (the review's mutant RA-E accepted 1,270 such contradictions)."""
+    result = _resolve(location, address)
+    assert result.code == UNRESOLVED, address
+    assert result.evidence[-1].endswith(UNPLACED.format(code)), result.evidence
