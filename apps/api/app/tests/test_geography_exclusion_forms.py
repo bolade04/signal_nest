@@ -1286,27 +1286,163 @@ def test_i2_only_the_business_address_reads_the_state_after_the_code():
     assert (stated.city, stated.region, stated.country) == (None, "US-TX", "US")
 
 
+def test_i2_a_town_before_the_code_is_the_town():
+    """The I-2 reading takes the code, its own state's name and the country at the end; a town
+    before them is the town, even one named like another state, as on the current release and D1
+    ("Washington, US-DC, District of Columbia, United States" for Washington, DC)."""
+    dc = _location("Washington", "District of Columbia", "United States")
+    for address in (
+        "Washington, US-DC, District of Columbia, United States",
+        "1 Main St, Washington, US-DC, District of Columbia, USA",
+    ):
+        assert _resolve(dc, address).code == "US-DC", address
+
+
+# --------------------------------------------------------------------------- #
+# C-5 (W21-REV-5DW2FIX r3c): a Nigerian code before its own state's suffixed or bare name
+# --------------------------------------------------------------------------- #
+
+ABUJA_LOCATION = _location("Abuja", "Federal Capital Territory", "Nigeria")
+MINNA_LOCATION = _location("Minna", "Niger", "Nigeria")
+IKEJA_LOCATION = _location("Ikeja", "Lagos", "Nigeria")
+KANO_LOCATION = _location("Kano", "Kano", "Nigeria")
+#: (own location, code, suffixed name, bare name): the review's four forms are built from them.
+C5_STATES = [
+    (IKEJA_LOCATION, "NG-LA", "Lagos State", "Lagos"),
+    (KANO_LOCATION, "NG-KN", "Kano State", "Kano"),
+    (ABUJA_LOCATION, "NG-FC", "Federal Capital Territory", "FCT"),
+    (MINNA_LOCATION, "NG-NI", "Niger State", "Niger"),
+]
+
+
+def _ng_forms(code: str, suffixed: str, bare: str) -> list[str]:
+    return [
+        f"{code}, {suffixed}, Nigeria",
+        f"{code}, {suffixed}, NG",
+        f"1 Allen Ave, {code}, {suffixed}, Nigeria",
+        f"{code}, {bare}, Nigeria",
+    ]
+
+
+@pytest.mark.parametrize(("location", "code", "suffixed", "bare"), C5_STATES)
+def test_c5_a_nigerian_code_before_its_own_states_name_is_that_state(
+    location, code, suffixed, bare
+):
+    """C-5: "NG-LA, Lagos State, Nigeria", "..., NG", with a street before, and "NG-LA, Lagos,
+    Nigeria" are the business's own address in Lagos State. They were refused as an unplaceable
+    "NG-LA?" (111 own rows of the review's 37 states x 3 suffixed forms, and "NG-NI, Niger,
+    Nigeria"); each now agrees. This inverts the pins of r3b's two remaining rows."""
+    for address in _ng_forms(code, suffixed, bare):
+        result = _resolve(location, address)
+        assert result.code == code, address
+        assert result.evidence[-1].endswith("agrees"), result.evidence
+
+
+@pytest.mark.parametrize(("location", "code", "suffixed", "bare"), C5_STATES)
+def test_c5_the_same_forms_for_another_states_location_are_refused(location, code, suffixed, bare):
+    other = KANO_LOCATION if code != "NG-KN" else IKEJA_LOCATION
+    for address in _ng_forms(code, suffixed, bare):
+        result = _resolve(other, address)
+        assert result.code == UNRESOLVED, address
+        assert result.evidence[-1].endswith(f"states subdivision {code}"), result.evidence
+
+
+def test_c5_niger_after_ng_ni_is_the_state_and_never_the_country_niger():
+    """The name after NG-NI ("Niger") is Niger State, Nigeria: own Minna resolves; Lagos and a
+    location in the country Niger are refused."""
+    assert _resolve(MINNA_LOCATION, "NG-NI, Niger, Nigeria").code == "NG-NI"
+    lagos = _resolve(IKEJA_LOCATION, "NG-NI, Niger, Nigeria")
+    assert lagos.evidence[-1].endswith("states subdivision NG-NI"), lagos.evidence
+    niamey = _resolve(_location("Niamey", "Niamey", "Niger"), "NG-NI, Niger, Nigeria")
+    assert niamey.code == UNRESOLVED
+    assert niamey.evidence[-1].endswith("states country NG"), niamey.evidence
+
+
+def test_c5_another_states_name_after_a_nigerian_code_is_still_refused():
+    for address in (
+        "NG-LA, Ogun State, Nigeria",
+        "NG-LA, Kano, Nigeria",
+        "NG-LA, Lagos State, Kenya",
+    ):
+        result = _resolve(IKEJA_LOCATION, address)
+        assert result.code == UNRESOLVED, address
+        assert result.evidence[-1].endswith(UNPLACED.format("NG-LA")), result.evidence
+
+
+def test_c5_a_suffixed_state_before_its_bare_name_keeps_the_word_reading():
+    """Only a listed code is read before the state's name (the strict-code guard of the I-2
+    reading): a suffixed state then its bare name is read as words, as ``parse_observed`` does."""
+    for text in (
+        "Lagos State, Lagos, Nigeria",
+        "Niger State, Niger, Nigeria",
+        "Kano State, Kano, NG",
+    ):
+        stated = markets.read_business_address(text).stated
+        assert _ident(stated) == _ident(parse_observed(text)), text
+
+
+# --------------------------------------------------------------------------- #
+# P-CN (the coordinator's convergence probe): every other part agrees with the code
+# --------------------------------------------------------------------------- #
+
+MONTGOMERY_LOCATION = _location("Montgomery", "Alabama", "United States")
+UMUAHIA_LOCATION = _location("Umuahia", "Abia", "Nigeria")
+PCN_OWN = [
+    (MONTGOMERY_LOCATION, "US-AL, Alabama, Montgomery", "US-AL"),
+    (MONTGOMERY_LOCATION, "1 Main St, US-AL, Alabama, Montgomery 36104", "US-AL"),
+    (MONTGOMERY_LOCATION, "US-AL, Montgomery, State of Alabama", "US-AL"),
+    (MONTGOMERY_LOCATION, "us al, state of alabama, montgomery", "US-AL"),
+    (TORONTO_LOCATION, "CA-ON, Toronto, Province of Ontario", "CA-ON"),
+    (UMUAHIA_LOCATION, "NG-AB, Abia State, Umuahia", "NG-AB"),
+    (UMUAHIA_LOCATION, "Abia State, NG-AB, Nigeria", "NG-AB"),
+    (UMUAHIA_LOCATION, "Umuahia, Abia State, NG-AB, NG", "NG-AB"),
+    (UMUAHIA_LOCATION, "NG-AB, Umuahia, Abia", "NG-AB"),
+]
+
+
+@pytest.mark.parametrize(("location", "address", "code"), PCN_OWN)
+def test_pcn_a_code_that_every_other_part_agrees_with_is_that_place(location, address, code):
+    """P-CN: an address whose listed code the qualifier rules left unplaceable is the code's
+    subdivision when every other part agrees with it (its own state's name, "State of ...",
+    "Province of ...", an agreeing country, or a town or street) and one part names its area."""
+    result = _resolve(location, address)
+    assert result.code == code, address
+    assert result.evidence[-1].endswith("agrees"), result.evidence
+
+
 @pytest.mark.parametrize(
-    ("location", "address", "code", "why"),
+    ("location", "address", "code"),
     [
-        (
-            _location("Abuja", "Federal Capital Territory", "Nigeria"),
-            "NG-FC, Federal Capital Territory, Nigeria",
-            "NG-FC",
-            "the suffixed name is itself a form, so two forms stand before the country",
-        ),
-        (
-            _location("Minna", "Niger", "Nigeria"),
-            "NG-NI, Niger, Nigeria",
-            "NG-NI",
-            "Niger is also a country, so it is neither a town nor read as the state's own name",
-        ),
+        (DALLAS_LOCATION, "US-AL, Alabama, Montgomery", "US-AL"),
+        (DALLAS_LOCATION, "US-AL, Montgomery, State of Alabama", "US-AL"),
+        (KANO_LOCATION, "Abia State, NG-AB, Nigeria", "NG-AB"),
     ],
 )
-def test_i2_leaves_two_of_the_reviews_84_own_rows_unresolved(location, address, code, why):
-    """The 2 of the review's 84 own rows the I-2 reading does not resolve (r3b §5), pinned as they
-    are: refused for their own location, with words. Written town first they resolve."""
+def test_pcn_the_same_forms_for_another_location_are_refused(location, address, code):
     result = _resolve(location, address)
-    assert result.code == UNRESOLVED, why
-    assert result.evidence[-1].endswith(UNPLACED.format(code)), (why, result.evidence)
-    assert _resolve(location, f"{location.city}, {code}, Nigeria").code == code
+    assert result.code == UNRESOLVED, address
+    assert result.evidence[-1].endswith(f"states subdivision {code}"), result.evidence
+
+
+@pytest.mark.parametrize(
+    ("address", "evidence"),
+    [
+        ("US-AL, Texas, Montgomery", UNPLACED.format("US-AL")),
+        ("US-AL, Montgomery, State of Texas", UNPLACED.format("US-AL")),
+        ("US-AL, Montgomery, Bavaria", UNPLACED.format("US-AL")),
+        ("US-AL, Alabama, Montgomery, Canada", "states country CA"),
+    ],
+)
+def test_pcn_another_area_or_no_confirmation_keeps_the_code_unplaceable(address, evidence):
+    """Any part naming another area keeps the address refused, and so does an address where no
+    part but the code names the area ("Bavaria" is no area the tables know, so it could be a town:
+    nothing confirms the code)."""
+    result = _resolve(MONTGOMERY_LOCATION, address)
+    assert result.code == UNRESOLVED, address
+    assert result.evidence[-1].endswith(evidence), result.evidence
+
+
+def test_pcn_only_the_business_address_reads_the_agreement():
+    for text in ("US-AL, Alabama, Montgomery", "Abia State, NG-AB, Nigeria"):
+        for reading in (*exclusion_readings(text), *observed_readings(text), parse_market(text)):
+            assert (reading.region or "").endswith("?"), (text, reading)

@@ -980,6 +980,12 @@ def _form_reading(
     # The head of "X, country" or the region of "city, X, country": the qualifier after it
     # must name the same country ("US-TX, USA", "Lagos State, Nigeria", "KE, Kenya").
     if n >= 3 and forms[-3] is not None:
+        both = _agree(forms[-3], form)
+        if address and both is not None and forms[-3].strict:
+            # C-5 (r3c): "NG-LA, Lagos State, Nigeria" is Lagos State when the code and the
+            # suffixed name agree and so does the country after them.
+            if any(_agree(both, _Form(c, r, strict=False)) for c, r in _area_candidates(words[-1])):
+                return _identity(None, both.region, both.country, label)
         return _unplaceable(label, form, forms[-3])
     for country, region in _area_candidates(words[-1]):
         both = _agree(form, _Form(country, region, strict=False))
@@ -1001,7 +1007,42 @@ def _a_town(folded: str, form: _Form) -> bool:
 
 def _names_area(folded: str, form: _Form) -> bool:
     """Does ``folded`` name ``form``'s own subdivision ("texas" for US-TX; r1 I-2, r3b)?"""
-    return (form.country, form.region) in _area_candidates(folded)
+    if (form.country, form.region) in _area_candidates(folded):
+        return True
+    # C-5 (r3c): the code's own Nigerian state named bare, even when also a country
+    # ("NG-NI, Niger, Nigeria").
+    return any(region == form.region for _, region in _homonym_areas(folded))
+
+
+#: "State of Texas", "Province of Ontario": the area named after the prefix (P-CN).
+_AREA_PREFIX: Final = re.compile(r"^(?:state|province) of ")
+
+
+def _address_agrees(parts: list[tuple[str, str]], label: str) -> MarketIdentity | None:
+    """P-CN: a business address whose listed code the qualifier rules left unplaceable is that
+    code's subdivision when every other part agrees with it and at least one names its area: the
+    code's own state ("US-AL, Alabama, Montgomery", "US-AL, Montgomery, State of Alabama",
+    "Abia State, NG-AB, Nigeria"), an agreeing country, or another form of the same code. A part
+    that names no area is a town or a street. Any part naming another area keeps it unplaceable."""
+    forms = [_form(folded, raw, head_of_two=False, observed=True) for folded, raw in parts]
+    code = next((form for form in forms if form is not None and form.strict), None)
+    if code is None:
+        return None
+    confirmed = False
+    for (folded, _), form in zip(parts, forms, strict=True):
+        if form is code:
+            continue
+        if form is not None:
+            areas = [(form.country, form.region)]
+        else:
+            name = _AREA_PREFIX.sub("", folded)
+            areas = _area_candidates(name) + _homonym_areas(name)
+            if not areas:
+                continue
+        if not any(_agree(code, _Form(c, r, strict=False)) for c, r in areas):
+            return None
+        confirmed = True
+    return _identity(None, code.region, code.country, label) if confirmed else None
 
 
 # --- every reading, for exclusion checks (operator rulings X-1 to X-5, 2026-11-08) -------
@@ -1299,6 +1340,8 @@ def _parse(
         return None
     if forms:
         reading = _form_reading(cleaned, label, observed=not qualify, address=street_address)
+        if street_address and reading is not None and (reading.region or "").endswith("?"):
+            reading = _address_agrees(cleaned, label) or reading
         if reading is not None:
             return reading
     parts = [folded for folded, _ in cleaned]
