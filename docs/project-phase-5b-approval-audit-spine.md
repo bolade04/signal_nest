@@ -10,6 +10,8 @@ it can cite R3's verdict and the post-merge SHA; the **operator continue-window 
 D9 AM**, charged its own half-day; CF-2 is authored D9 PM only after the recorded
 continue decision.
 
+**Status update (2026-11-07, W21 tracking pass, at `main` `3564c6d0`; the status above is kept as written):** implemented under the operator's W21 programme instruction of 2026-11-01 and merged, dark, under the operator's separate standing merge authorization of 2026-11-04 (see the status update in `docs/project-phase-5-plan.md`): the CF-1 contracts (#282 `702a584a`), the 5B build, approvals and the audit spine (#290 `d2bace42`), the 5B-W4 adversarial battery (#295 `68ed393f`) and the I-5B integration together with I-5A (#293 `ed4d4a68`). The approval endpoints are gated by the briefs' capability, `Capability.RECOMMENDATION_BRIEFS` (`apps/api/app/approvals/routes.py:96-99`), and `recommendation_briefs_enabled` defaults to false (`apps/api/app/core/config.py:523`). Activation waits on the master plan's §10 gates. Merged does not mean activated, deployed or closed out.
+
 ## 1. Objective
 
 Make "a customer's authorized reviewer approved this" a **provable statement**:
