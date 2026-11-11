@@ -28,14 +28,18 @@ These tests prove:
   not a street line ("Hartford CT", "123 Main St Hartford CT", "1500 Broadway USA");
 * contradicting addresses are still refused (UNRESOLVED), including a subdivision code after a
   street ("1500 Broadway US-CT") and a number after a street name ("Marszalkowska 1 Warszawa PL");
-* the first part of an address with commas counts when it is ambiguous and the address names a
-  country, or when the later parts are only a postcode or a unit ("1500 Broadway CT, Suite 200");
+* the first part of an address with commas counts when it is ambiguous, whatever the later parts
+  state ("1500 Broadway Hartford CT, USA"; "123 MAIN ST, DALLAS", FU-R1), and the address is read
+  as its first part when the later parts are only a postcode or a unit ("1500 Broadway CT, Suite
+  200");
 * in an address with commas, a part after the first that ends in a code is read: "1500
   Broadway, Dallas TX" states US-TX, "1500 Broadway, Hartford CT" is ambiguous (CT may be a
   street type), a postcode alone is left out, and an unlisted code form ("DE-BY") reads as before;
 * any other text reads exactly as an observed market does, and only the business-address reader
   reads differently (the live Scout readers do not);
-* lane 5DW2FIX's realistic-address corpus (924 rows) resolves to each row's own location;
+* lane 5DW2FIX's realistic-address corpus (924 rows) resolves to each row's own location, except
+  "KHALIFA ST, AL-AIN", whose "ST" may be Sao Tome and which names no country, so it asks for
+  clarification (FU-R1);
 * a stored rule, selected by ``location_id`` as ``jobs/pipeline.py`` selects a run's rule,
   resolves the same on SQLite and PostgreSQL, and another tenant's rule never enters.
 
@@ -91,6 +95,7 @@ WARSAW = _location("Warsaw", "Masovia", "Poland")
 SAO_TOME = _location("Sao Tome", "Agua Grande", "Sao Tome and Principe")
 MUNICH = _location("Munich", "Bavaria", "Germany")
 AL_AIN = _location("Al Ain", "Abu Dhabi", "United Arab Emirates")
+MALIBU = _location("Malibu", "CA", "United States")
 
 #: The defect as measured on main e3571ac8 (lane F1LOC, D1): each was UNRESOLVED for Dallas.
 DEFECT = ["123 Main St", "1 Main St.", "221B Baker St", "1 Market Pl", "3 Kings Ct"]
@@ -299,6 +304,23 @@ AMBIGUOUS = [
             "8 Spring Hill Ct, Suite 5",
         ]
     ],
+    # The first part, whatever the later parts state (FU-R1): a town alone ("..., DALLAS") neither
+    # settles the first part's code reading nor rules it out.
+    (DALLAS, "123 MAIN ST, DALLAS", "country ST"),
+    (HARTFORD, "123 MAIN ST, DALLAS", "country ST"),
+    (HARTFORD, "123 MAIN ST, HARTFORD", "country ST"),
+    (DALLAS, "1500 Broadway Hartford CT, Hartford", "subdivision US-CT"),
+    (LONDON, "1500 Broadway Hartford CT, Hartford", "country US"),
+    (DALLAS, "Hartford CT, Hartford", "subdivision US-CT"),
+    (DALLAS, "1500 Broadway Hartford CT, Suite 5, Hartford", "subdivision US-CT"),
+    (DALLAS, "8 Spring Hill Ct, Dallas", "subdivision US-CT"),
+    (DALLAS, "1500 Broadway PL, Warszawa", "country PL"),
+    # ... also when the address is the location's own but names no country or state that rules the
+    # code reading out (FU-R1's cost; the country after a comma resolves them, see below).
+    (LONDON, "10 DOWNING ST, LONDON SW1A 2AA", "country ST"),
+    (MALIBU, "5945 MAIN ST, MALIBU, CA 90265", "country ST"),
+    (AL_AIN, "KHALIFA ST, AL-AIN", "country ST"),
+    (LAGOS, "No 3 Ajose Adeogun St, Victoria Island, Lagos", "country ST"),
 ]
 
 
@@ -338,6 +360,11 @@ AMBIGUOUS_CONSISTENT = [
     (SAO_TOME, "ST", "10 Rua X, Sao Tome ST"),
     (DALLAS, "US-TX", "Suite 5, 3 Kings Ct"),
     (MUNICH, "DE", "Marienplatz 1, 80331 Munich, DE-BY"),
+    # FU-R1: the first part's code reading is the location's own area.
+    (HARTFORD, "US-CT", "1500 Broadway Hartford CT, Hartford"),
+    (HARTFORD, "US-CT", "Hartford CT, Hartford"),
+    (SAO_TOME, "ST", "123 MAIN ST, SAO TOME"),
+    (WARSAW, "PL", "1 MARKET PL, WARSZAWA"),
 ]
 
 
@@ -461,16 +488,43 @@ def test_an_ambiguous_first_part_agrees_with_its_own_location(address):
         (DALLAS, "US-TX", "3 Kings Ct, Suite 5"),
         (DALLAS, "US-TX", "123 Main St, Suite 5"),
         (DALLAS, "US-TX", "123 MAIN ST, USA"),
-        (AL_AIN, "AE", "KHALIFA ST, AL-AIN"),
+        (AL_AIN, "AE", "KHALIFA ST, AL-AIN, UAE"),
         (DALLAS, "US-TX", "1500 Broadway Hartford CT, Dallas, TX"),
+        # The supported clarifications of FU-R1's rows.
+        (DALLAS, "US-TX", "123 MAIN ST, DALLAS, TX"),
+        (DALLAS, "US-TX", "123 MAIN ST, DALLAS, USA"),
+        (DALLAS, "US-TX", "123 MAIN STREET, DALLAS"),
+        (DALLAS, "US-TX", "123 Main St, Dallas"),
+        (LONDON, "GB", "10 DOWNING ST, LONDON SW1A 2AA, UK"),
+        (MALIBU, "US-CA", "5945 MAIN ST, MALIBU, CA 90265, USA"),
     ],
 )
 def test_a_clear_or_settled_first_part_still_resolves(location, code, address):
     """A clear first part states nothing; explicit geography elsewhere settles an ambiguous one
-    or rules it out; a first part that is not a street line reads as before (C-6)."""
+    or rules it out (C-6, FU-R1); a first part that is not a street line reads as before."""
     resolution = _resolve(location, address)
     assert resolution.code == code
     assert resolution.reason is None
+
+
+@pytest.mark.parametrize(
+    ("address", "conflict"),
+    [
+        ("Hartford CT, Suite 5", "states subdivision US-CT"),
+        ("US-CT, Suite 200", "states subdivision US-CT"),
+        ("Warsaw PL, Apt 4", "states country PL"),
+    ],
+)
+def test_an_address_whose_later_parts_are_only_units_reads_as_its_first_part(address, conflict):
+    """C-6(b): when every later part is only a unit or a postcode, the address is read as its first
+    part alone, as a comma-free address, so an explicit code there is still read, not lost behind
+    the unit ("Hartford CT, Suite 5" reads as "Hartford CT")."""
+    resolution = _resolve(DALLAS, address)
+    assert resolution.code == UNRESOLVED
+    assert resolution.reason is None
+    assert resolution.evidence[-1] == (
+        f"unresolved: coverage rule 0 business address {address!r} {conflict}"
+    )
 
 
 def test_only_an_ambiguous_suffix_carries_a_reason():
@@ -540,6 +594,9 @@ CONTRADICTING = [
     (DALLAS, "1500 Broadway, Hartford US CT", "states subdivision US-CT"),
     # A unit label that is also a code is not a unit: "FL-12" is a Florida road (C-6).
     (DALLAS, "Suite 5, FL-12", "states subdivision US-FL"),
+    # Explicit geography after an ambiguous first part is still read (FU-R1).
+    (DALLAS, "123 MAIN ST, HARTFORD, CT", "states subdivision US-CT"),
+    (DALLAS, "1500 Broadway Hartford CT, Hartford, CT", "states subdivision US-CT"),
 ]
 
 
@@ -666,6 +723,10 @@ def _realistic_addresses() -> list[tuple[tuple[str, str, str], str]]:
 
 REALISTIC = _realistic_addresses()
 
+#: The realistic row that asks for clarification since FU-R1: an upper-case street name whose "ST"
+#: may be Sao Tome, with no country or state after it to rule that reading out.
+REALISTIC_CLARIFY = {"KHALIFA ST, AL-AIN"}
+
 
 def test_the_realistic_corpus_has_the_5dw2fix_size():
     assert len(REALISTIC) == 924
@@ -674,19 +735,26 @@ def test_the_realistic_corpus_has_the_5dw2fix_size():
 
 def test_the_5dw2fix_realistic_addresses_resolve_to_their_location():
     """Every row's address belongs to its location, so each resolves to the location's own
-    code; and none is a street line or has a postcode alone in a later part, so the whole
-    address reads exactly as an observed market does (a later part such as "Sydney NSW" is also
-    read on its own, and agrees)."""
+    code, except the one row of :data:`REALISTIC_CLARIFY`, which asks for clarification (FU-R1);
+    and none is a street line or has a postcode alone in a later part, so the whole address reads
+    exactly as an observed market does (a later part such as "Sydney NSW" is also read on its own,
+    and agrees)."""
     wrong = []
     for (city, state, country), address in REALISTIC:
         location = _location(city, state, country)
         own = resolve_jurisdiction(location).code
-        got = _resolve(location, address).code
-        if own == UNRESOLVED or got != own:
-            wrong.append((location, address, own, got))
+        resolution = _resolve(location, address)
+        expected = (
+            (UNRESOLVED, ADDRESS_SUFFIX_AMBIGUOUS) if address in REALISTIC_CLARIFY else (own, None)
+        )
+        if own == UNRESOLVED or (resolution.code, resolution.reason) != expected:
+            wrong.append((location, address, own, resolution.code, resolution.reason))
         if parse_business_address(address) != parse_observed(address):
             wrong.append((location, address, "reads differently"))
     assert wrong == []
+    assert [address for _, address in REALISTIC if address in REALISTIC_CLARIFY] == [
+        "KHALIFA ST, AL-AIN"
+    ]
 
 
 # --------------------------------------------------------------------------- #

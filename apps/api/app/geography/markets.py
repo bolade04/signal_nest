@@ -411,11 +411,12 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
     * a town and a code that is also a street-type abbreviation ("Hartford CT", "Warszawa PL",
       "Kings Ct"): ambiguous, since it may be a street.
 
-    The first part (W21-REV-D1STREET C-6): when the address states a country, the first part's
-    ambiguous reading counts too ("1500 Broadway Hartford CT, USA"); only its ambiguous reading,
-    never an explicit one. When every later part is only a postcode or a unit ("Suite 200",
-    "06103"; a label that is also a code, "FL-12", is not a unit), the address is read as its
-    first part alone, as a comma-free address ("1500 Broadway CT, Suite 200").
+    The first part (W21-REV-D1STREET C-6 and FU-R1): its ambiguous reading counts too, whatever the
+    later parts state ("1500 Broadway Hartford CT, USA", "123 MAIN ST, DALLAS", "KHALIFA ST,
+    AL-AIN"); only its ambiguous reading, never an explicit one. When every later part is only a
+    postcode or a unit ("Suite 200", "06103"; a label that is also a code, "FL-12", is not a unit),
+    the address is read as its first part alone, as a comma-free address ("1500 Broadway CT, Suite
+    200").
     """
     if text is None:
         return BusinessAddressReading(None)
@@ -440,10 +441,11 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
         parts += stated_here
         ambiguous += maybe
     stated = _parse(", ".join(kept), None, qualify=False, known=None, street_address=True)
-    if stated is not None and stated.country is not None:
-        # C-6 (ambiguous readings only): with a country stated, a first part whose last word may be
-        # a street type or a code ("1500 Broadway Hartford CT, USA") is ambiguous, never nothing.
-        ambiguous = _part_reading(raw_parts[0])[1] + ambiguous
+    # C-6 and FU-R1 (ambiguous readings only): a first part whose last word may be a street type or
+    # a code ("1500 Broadway Hartford CT, USA", "123 MAIN ST, DALLAS") is ambiguous, never nothing,
+    # whatever the later parts state. Explicit geography in the address settles that reading or
+    # rules it out (``_address_check``); a town alone ("..., DALLAS") does neither.
+    ambiguous = _part_reading(raw_parts[0])[1] + ambiguous
     return BusinessAddressReading(stated, tuple(parts), tuple(ambiguous))
 
 

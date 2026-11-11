@@ -20,11 +20,12 @@ federations listed in :mod:`app.jurisdiction.subdivisions`, the first-level subd
 * the facts disagree: a coverage rule's ``business_address`` states another country or
   another subdivision than the location's own fields, or the location's captured
   ``jurisdiction_code`` is not what its fields resolve to now;
-* a business address is an ambiguous street line, or has an ambiguous part after its first
-  ("1500 Broadway, Hartford CT"), whose last word may be a street type or a code that
-  contradicts the location ("1500 Broadway Hartford CT" for a Texas location). The
-  answer then carries the reason :data:`ADDRESS_SUFFIX_AMBIGUOUS`, whose fixed clarification is
-  in :data:`CLARIFICATIONS` (D1, operator ruling of 2026-11-09). No page or route uses it yet.
+* a business address is an ambiguous street line, or has an ambiguous part ("1500 Broadway,
+  Hartford CT", "123 MAIN ST, DALLAS"), whose last word may be a street type or a code that
+  contradicts the location ("1500 Broadway Hartford CT" for a Texas location), and no explicit
+  geography in the address settles that reading or rules it out. The answer then carries the
+  reason :data:`ADDRESS_SUFFIX_AMBIGUOUS`, whose fixed clarification is in
+  :data:`CLARIFICATIONS` (D1, operator ruling of 2026-11-09). No page or route uses it yet.
 
 A city alone never resolves, known or unknown: a bare city says nothing about which
 country it is in (``app.geography.markets`` reads a bare "London" the same way). Every
