@@ -19,7 +19,17 @@ federations listed in :mod:`app.jurisdiction.subdivisions`, the first-level subd
   or one it cannot read (a United States location without a state);
 * the facts disagree: a coverage rule's ``business_address`` states another country or
   another subdivision than the location's own fields, or the location's captured
-  ``jurisdiction_code`` is not what its fields resolve to now.
+  ``jurisdiction_code`` is not what its fields resolve to now;
+* a business address is an ambiguous street line, or has an ambiguous part ("1500 Broadway,
+  Hartford CT", "123 MAIN ST, DALLAS"), whose last word may be a street type or a code that
+  contradicts the location ("1500 Broadway Hartford CT" for a Texas location), and no explicit
+  geography in the address settles that reading or rules it out. The answer then carries the
+  reason :data:`ADDRESS_SUFFIX_AMBIGUOUS`, whose fixed clarification is in
+  :data:`CLARIFICATIONS` (D1, operator ruling of 2026-11-09). No page or route uses it yet;
+* a business address names a place by a code of two or more areas that place knowledge leaves
+  undecided ("Dallas, GA": Georgia or Gabon), and every reading contradicts the location: a
+  refusal for explicit text, the same clarification for an ambiguous street line or part
+  ("1 SPRING HILL ST NE": Nebraska or Niger). A reading in the location's own area agrees.
 
 A city alone never resolves, known or unknown: a bare city says nothing about which
 country it is in (``app.geography.markets`` reads a bare "London" the same way). Every
@@ -34,11 +44,18 @@ inside ``US-N``, and ``GB`` is not inside ``GB-ENG``. Free-text market matching 
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final, Protocol
 
-from app.geography.markets import fold, normalize_country, normalize_region, parse_observed
+from app.geography.markets import (
+    MarketIdentity,
+    fold,
+    normalize_country,
+    normalize_region,
+    read_business_address,
+)
 from app.jurisdiction.codes import UNRESOLVED, is_jurisdiction_code
 from app.jurisdiction.subdivisions import SUBDIVISION_JURISDICTIONS
 
@@ -96,22 +113,47 @@ class JurisdictionResolution:
     ``code`` is a jurisdiction code or :data:`UNRESOLVED`. ``codes`` are the jurisdictions
     whose rules apply at the location, most specific first (``("US-TX", "US")``,
     ``("GB",)``); empty when unresolved. ``evidence`` says how the answer was reached, or
-    why there is none.
+    why there is none. ``reason`` is a reason category for an UNRESOLVED answer the customer
+    can act on (:data:`ADDRESS_SUFFIX_AMBIGUOUS`; its message is in :data:`CLARIFICATIONS`),
+    and ``None`` otherwise.
     """
 
     code: str
     codes: tuple[str, ...]
     confidence: float
     evidence: tuple[str, ...]
+    reason: str | None = None
 
     @property
     def is_resolved(self) -> bool:
         return self.code != UNRESOLVED and is_jurisdiction_code(self.code)
 
 
-def _unresolved(evidence: list[str], reason: str) -> JurisdictionResolution:
+#: Reason category: a business address ends in a word that may be a street type or a state or
+#: country code, and as a code it contradicts the location (D1, operator ruling 2026-11-09).
+ADDRESS_SUFFIX_AMBIGUOUS: Final = "address_suffix_ambiguous"
+
+#: The fixed, customer-safe clarification for each reason category. It never contains the
+#: address or other customer text, nor the resolver's evidence.
+CLARIFICATIONS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        ADDRESS_SUFFIX_AMBIGUOUS: (
+            "We couldn't tell whether the end of the business address is a street type or a "
+            "state or country. Write the street type or direction in full (for example "
+            "'Street', 'Court' or 'Southeast'), or add the city and state or country after a "
+            "comma (for example '1500 Broadway, Hartford, CT')."
+        ),
+    }
+)
+
+
+def _unresolved(evidence: list[str], why: str, reason: str | None = None) -> JurisdictionResolution:
     return JurisdictionResolution(
-        code=UNRESOLVED, codes=(), confidence=0.0, evidence=(*evidence, f"unresolved: {reason}")
+        code=UNRESOLVED,
+        codes=(),
+        confidence=0.0,
+        evidence=(*evidence, f"unresolved: {why}"),
+        reason=reason,
     )
 
 
@@ -192,29 +234,92 @@ def jurisdiction_permits(
     return not allowed_codes or any(code_within(code, entry) for entry in allowed_codes)
 
 
-def _address_check(address: str | None, country: str, code: str) -> tuple[bool, str | None]:
-    """``(states a country, conflict)`` for a coverage rule's ``business_address``.
+def _stated_subdivision(stated: MarketIdentity, country: str) -> str | None:
+    """The subdivision code of ``country`` that ``stated``'s region names, if any. A known
+    subdivision is keyed "US-TX"; any other region "NG:lagos" (markets)."""
+    region = stated.region
+    if region is None:
+        return None
+    if region.startswith(f"{country}-"):
+        return region
+    return subdivision_code_of(country, region.split(":", 1)[-1])
 
-    Only what the address states is compared (``parse_observed``: no country is supplied
-    that the text does not name). An address naming another country, or another
-    subdivision of a country that resolves at subdivision level, contradicts the location.
-    """
-    stated = parse_observed(address)
+
+def _conflict(stated: MarketIdentity | None, country: str, code: str) -> str | None:
+    """``"country XX"`` or ``"subdivision XX-YY"`` when ``stated`` names another country, or
+    another subdivision of a country that resolves at subdivision level; ``None`` otherwise."""
     if stated is None or stated.country is None:
-        return False, None
+        return None
     if stated.country != country:
-        return True, f"states country {stated.country}"
-    if "-" in code and stated.region is not None:
-        # A known subdivision is keyed "US-TX"; any other region "NG:lagos" (markets).
-        region = stated.region
-        stated_code = (
-            region
-            if region.startswith(f"{country}-")
-            else subdivision_code_of(country, region.split(":", 1)[-1])
-        )
+        return f"country {stated.country}"
+    if "-" in code:
+        stated_code = _stated_subdivision(stated, country)
         if stated_code is not None and stated_code != code:
-            return True, f"states subdivision {stated_code}"
-    return True, None
+            return f"subdivision {stated_code}"
+    return None
+
+
+def _address_check(
+    address: str | None, country: str, code: str
+) -> tuple[bool, str | None, str | None]:
+    """``(states a country, conflict, reason)`` for a coverage rule's ``business_address``.
+
+    Only what the address states is compared (``read_business_address``: no country is
+    supplied that the text does not name, and a street line's "St", "Pl" or "Ct" is not read as
+    a code). An address, or a later part of it ("..., Dallas TX"), naming another country or
+    another subdivision of a country that resolves at subdivision level contradicts the
+    location. An ambiguous line or part whose last word, read as a code, would contradict it
+    ("1500 Broadway Hartford CT" or "1500 Broadway, Hartford CT" for Dallas) is a conflict too,
+    with the reason :data:`ADDRESS_SUFFIX_AMBIGUOUS`: it is never read as stating nothing.
+    Explicit geography settles what it states: an explicit subdivision leaves nothing ambiguous,
+    and an explicit country rules out readings in another country ("123 MAIN ST, Dallas, TX"
+    and "123 MAIN ST, USA" agree with Dallas).
+
+    A group of readings of a code that names two or more areas (W21-REV-D1STREET r2 C-8)
+    contradicts the location when every reading does: explicit text is refused ("Dallas, GA" for
+    London "states country GA or subdivision US-GA"), and a stated country cannot excuse it; an
+    ambiguous line or part gets :data:`ADDRESS_SUFFIX_AMBIGUOUS` after a stated country has ruled
+    out its readings elsewhere, since its street reading remains. A reading in the location's own
+    area agrees.
+    """
+    reading = read_business_address(address)
+    explicit = [s for s in (reading.stated, *reading.parts) if s is not None and s.country]
+    for stated in explicit:
+        conflict = _conflict(stated, country, code)
+        if conflict is not None:
+            return True, f"states {conflict}", None
+    for group in reading.alternatives:
+        # Every reading is a place: a stated country cannot excuse them ("Dallas GA, Canada").
+        found = _group_conflicts(group, (), country, code)
+        if found and all(found):
+            return True, "states " + " or ".join(found), None
+    if not any(_stated_subdivision(stated, country) is not None for stated in explicit):
+        countries = {stated.country for stated in explicit}
+        for possible in reading.ambiguous:
+            if countries and possible.country not in countries:
+                continue
+            conflict = _conflict(possible, country, code)
+            if conflict is not None:
+                return True, f"is ambiguous: a street type or {conflict}", ADDRESS_SUFFIX_AMBIGUOUS
+        for group in reading.ambiguous_alternatives:
+            found = _group_conflicts(group, countries, country, code)
+            if found and all(found):
+                either = " or ".join(found)
+                return True, f"is ambiguous: a street type or {either}", ADDRESS_SUFFIX_AMBIGUOUS
+    return bool(explicit), None, None
+
+
+def _group_conflicts(
+    group: Sequence[MarketIdentity], countries: Iterable[str | None], country: str, code: str
+) -> list[str | None]:
+    """C-8: each reading's conflict (or ``None``), after ruling out readings in another country
+    than an explicitly stated one (for an ambiguous line or part, whose street reading remains)."""
+    stated = set(countries)
+    return [
+        _conflict(possible, country, code)
+        for possible in group
+        if not stated or possible.country in stated
+    ]
 
 
 def resolve_jurisdiction(
@@ -252,10 +357,12 @@ def resolve_jurisdiction(
 
     for index, rule in enumerate(coverage_rules):
         address = getattr(rule, "business_address", None)
-        states, conflict = _address_check(address, country, code)
+        states, conflict, category = _address_check(address, country, code)
         if conflict is not None:
             return _unresolved(
-                evidence, f"coverage rule {index} business address {address!r} {conflict}"
+                evidence,
+                f"coverage rule {index} business address {address!r} {conflict}",
+                reason=category,
             )
         if states:
             evidence.append(f"coverage rule {index} business address {address!r} agrees")
@@ -275,6 +382,8 @@ def resolve_jurisdiction(
 
 
 __all__ = [
+    "ADDRESS_SUFFIX_AMBIGUOUS",
+    "CLARIFICATIONS",
     "RESOLVED_CONFIDENCE",
     "CoverageFacts",
     "JurisdictionResolution",

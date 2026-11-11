@@ -4,7 +4,7 @@ import { useState } from 'react';
 import * as api from '@/api/endpoints';
 import { ApiError } from '@/api/client';
 import { queryKeys } from '@/api/queryKeys';
-import type { GeoCoverageBase, LocationBase, LocationOut } from '@/api/types';
+import type { GeoCoverageBase, GeoCoverageOut, LocationBase, LocationOut } from '@/api/types';
 import { Field } from '@/components/common/form-field';
 import { Button } from '@/components/ui/button';
 import {
@@ -65,6 +65,34 @@ const emptyCoverage: GeoCoverageBase = {
   online_global: false,
 };
 
+/**
+ * The business address a stored service-area rule opens with (F-1). `null` means the
+ * field follows the street address: the location has no stored rule (its first save
+ * sends the street address), or the stored value is the street address as last saved.
+ * Otherwise it is the stored value, kept as the customer set it ('' when none is stored).
+ */
+function storedBusinessAddress(rule: GeoCoverageOut | undefined, savedStreet: string): string | null {
+  if (!rule) return null;
+  const stored = rule.business_address ?? '';
+  return stored === savedStreet ? null : stored;
+}
+
+/** A stored service-area rule as the Service area tab edits it. */
+function coverageFrom(rule: GeoCoverageOut): GeoCoverageBase {
+  return {
+    coverage_type: rule.coverage_type,
+    business_address: rule.business_address,
+    center_latitude: rule.center_latitude,
+    center_longitude: rule.center_longitude,
+    radius_miles: rule.radius_miles ?? 25,
+    country: rule.country,
+    state: rule.state,
+    included_markets: rule.included_markets ?? [],
+    excluded_markets: rule.excluded_markets ?? [],
+    online_global: rule.online_global,
+  };
+}
+
 export function LocationDialog({ workspaceId, open, onOpenChange, location, readOnly = false }: Props) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -74,6 +102,9 @@ export function LocationDialog({ workspaceId, open, onOpenChange, location, read
 
   const [form, setForm] = useState<LocationBase>(emptyLocation);
   const [coverage, setCoverage] = useState<GeoCoverageBase>(emptyCoverage);
+  // The business address the Service area tab shows and the save sends (F-1): `null`
+  // while it follows the street address, otherwise the value the customer set.
+  const [businessOverride, setBusinessOverride] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Why the last address lookup found no single place, and how to continue. Kept on
   // screen (not only a toast): the location can still be saved with its city,
@@ -86,6 +117,9 @@ export function LocationDialog({ workspaceId, open, onOpenChange, location, read
     enabled: open && Boolean(location),
     retry: false,
   });
+
+  // The fetched rule the Service area was last populated from (see below).
+  const [syncedCoverage, setSyncedCoverage] = useState<typeof coverageQuery.data>(undefined);
 
   // Reset the form to the dialog's subject whenever it (re)opens or the edited
   // location changes. Adjusted during render (guarded by the previous open state
@@ -113,32 +147,45 @@ export function LocationDialog({ workspaceId, open, onOpenChange, location, read
           longitude: location.longitude ?? null,
           local_competitors: location.local_competitors ?? [],
           local_notes: location.local_notes ?? '',
+          // Not edited here: sent back exactly as loaded, since the location PUT
+          // replaces every field it is not sent with its default.
+          languages: location.languages ?? [],
+          local_phone: location.local_phone ?? null,
+          local_website_page: location.local_website_page ?? null,
+          local_social_links: location.local_social_links ?? {},
+          google_business_profile: location.google_business_profile ?? null,
+          overrides: location.overrides ?? {},
         });
+        // Every opening starts from this location's stored rule: the cached one now, a
+        // fetched one when it arrives (below), the defaults while it has none. Nothing
+        // carries over from a cancelled edit or from another location.
+        const cached = coverageQuery.data;
+        setCoverage(cached ? coverageFrom(cached) : emptyCoverage);
+        setSyncedCoverage(cached);
+        setBusinessOverride(storedBusinessAddress(cached, location.address ?? ''));
       } else {
         setForm(emptyLocation);
         setCoverage(emptyCoverage);
+        setBusinessOverride(null);
       }
     }
   }
 
   // Populate coverage from the fetched record once it arrives (guarded by the
   // previous data reference so it runs exactly once per fetch).
-  const [syncedCoverage, setSyncedCoverage] = useState<typeof coverageQuery.data>(undefined);
   if (coverageQuery.data && coverageQuery.data !== syncedCoverage) {
     setSyncedCoverage(coverageQuery.data);
-    setCoverage({
-      coverage_type: coverageQuery.data.coverage_type,
-      business_address: coverageQuery.data.business_address,
-      center_latitude: coverageQuery.data.center_latitude,
-      center_longitude: coverageQuery.data.center_longitude,
-      radius_miles: coverageQuery.data.radius_miles ?? 25,
-      country: coverageQuery.data.country,
-      state: coverageQuery.data.state,
-      included_markets: coverageQuery.data.included_markets ?? [],
-      excluded_markets: coverageQuery.data.excluded_markets ?? [],
-      online_global: coverageQuery.data.online_global,
-    });
+    setCoverage(coverageFrom(coverageQuery.data));
+    setBusinessOverride(storedBusinessAddress(coverageQuery.data, location?.address ?? ''));
   }
+  const businessAddress = businessOverride ?? form.address ?? '';
+  // An existing location's rule is written back only once it is known: a copy is
+  // loaded, or the API answered 404 (none stored). Saving before that would store the
+  // defaults over it. The alert shows exactly when a failed read leaves Save blocked.
+  const ruleMissing = coverageQuery.error instanceof ApiError && coverageQuery.error.status === 404;
+  const ruleKnown = !location || coverageQuery.data !== undefined || ruleMissing;
+  const ruleUnreadable =
+    Boolean(location) && coverageQuery.isError && !ruleMissing && coverageQuery.data === undefined;
 
   const geocodeMutation = useMutation({
     // The dialog's workspace is the active one (Locations renders it inside RequireWorkspace).
@@ -180,7 +227,8 @@ export function LocationDialog({ workspaceId, open, onOpenChange, location, read
         ...coverage,
         center_latitude: coverage.center_latitude ?? form.latitude ?? null,
         center_longitude: coverage.center_longitude ?? form.longitude ?? null,
-        business_address: coverage.business_address ?? form.address ?? null,
+        // What the field shows; an empty field saves null (F-1).
+        business_address: businessAddress.trim() ? businessAddress : null,
       });
       return saved;
     },
@@ -210,6 +258,11 @@ export function LocationDialog({ workspaceId, open, onOpenChange, location, read
         {error ? (
           <div role="alert" className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
             {error}
+          </div>
+        ) : null}
+        {ruleUnreadable && !readOnly ? (
+          <div role="alert" className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            Could not load this location&apos;s service area. Close and reopen the location to try again before saving.
           </div>
         ) : null}
 
@@ -294,6 +347,26 @@ export function LocationDialog({ workspaceId, open, onOpenChange, location, read
           </TabsContent>
 
           <TabsContent value="coverage" className="space-y-4">
+            <Field
+              label="Business address"
+              description={readOnly ? undefined : 'Keep it in the same country and state or province as this location.'}
+            >
+              {({ id, describedBy }) =>
+                readOnly ? (
+                  <p className="text-sm">{businessAddress || 'Not set.'}</p>
+                ) : (
+                  <Input
+                    id={id}
+                    value={businessAddress}
+                    // While it equals the street address it moves with it; any other value stays as set.
+                    onChange={(e) => setBusinessOverride(e.target.value === (form.address ?? '') ? null : e.target.value)}
+                    aria-describedby={describedBy}
+                    maxLength={400}
+                  />
+                )
+              }
+            </Field>
+
             <Field label="Coverage type" description="How far this location serves customers.">
               {({ id }) => (
                 <Select value={coverage.coverage_type} onValueChange={(v) => setCoverage((c) => ({ ...c, coverage_type: v }))} disabled={readOnly}>
@@ -361,7 +434,7 @@ export function LocationDialog({ workspaceId, open, onOpenChange, location, read
               <Button variant="outline" onClick={() => onOpenChange(false)} disabled={save.isPending}>
                 Cancel
               </Button>
-              <Button onClick={() => save.mutate()} disabled={save.isPending || !form.name.trim()}>
+              <Button onClick={() => save.mutate()} disabled={save.isPending || !form.name.trim() || !ruleKnown}>
                 {isEdit ? 'Save changes' : 'Add location'}
               </Button>
             </>
