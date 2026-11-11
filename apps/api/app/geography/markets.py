@@ -937,10 +937,13 @@ def _unplaceable(label: str, *forms: _Form, city: str | None = None) -> MarketId
 
 
 def _form_reading(
-    parts: list[tuple[str, str]], label: str, *, observed: bool
+    parts: list[tuple[str, str]], label: str, *, observed: bool, address: bool = False
 ) -> MarketIdentity | None:
     """The reading of a text with a jurisdiction form where a qualifier goes, or ``None``
-    to read the text as words (no form there, or one that place names could explain)."""
+    to read the text as words (no form there, or one that place names could explain).
+
+    ``address``: the text is a business address, where a listed code may come before the town
+    ("US-CT, Hartford", "1 Main St, US-CT, Hartford, USA"; FU-E, W21-REV-5DW2FIX r3)."""
     words = [folded for folded, _ in parts]
     n = len(parts)
     forms = [
@@ -961,7 +964,13 @@ def _form_reading(
         return _identity(words[-2] if n > 1 else None, last.region, last.country, label)
     form = forms[-2] if n >= 2 else None
     if form is None:
-        return _unplaceable(label, forms[-3]) if n >= 3 and forms[-3] is not None else None
+        head = forms[-3] if n >= 3 else None
+        if address and head is not None and head.strict and _a_town(words[-2], head):
+            # FU-E: a business address "US-CT, Hartford, USA" is Hartford in US-CT when the
+            # country after the town agrees ("US-CT, Hartford, Canada" stays unplaceable).
+            if any(_agree(head, _Form(c, r, strict=False)) for c, r in _area_candidates(words[-1])):
+                return _identity(words[-2], head.region, head.country, label)
+        return _unplaceable(label, head) if head is not None else None
     # The head of "X, country" or the region of "city, X, country": the qualifier after it
     # must name the same country ("US-TX, USA", "Lagos State, Nigeria", "KE, Kenya").
     if n >= 3 and forms[-3] is not None:
@@ -970,7 +979,18 @@ def _form_reading(
         both = _agree(form, _Form(country, region, strict=False))
         if both is not None:
             return _identity(words[-3] if n >= 3 else None, both.region, both.country, label)
+    if address and form.strict and _a_town(words[-1], form):
+        # FU-E: a business address "US-CT, Hartford" is Hartford in US-CT; a town contradicts
+        # no code. A country or state after the code ("US-TX, Canada") still does.
+        return _identity(words[-1], form.region, form.country, label)
     return _unplaceable(label, form, city=words[-3] if n >= 3 else None)
+
+
+def _a_town(folded: str, form: _Form) -> bool:
+    """Is ``folded`` (a part that is no form) a town for ``form``? It names no country or
+    region, and no Nigerian state but the code's own ("Kano" after NG-KN)."""
+    homonyms = _homonym_areas(folded)
+    return not _area_candidates(folded) and all(area[1] == form.region for area in homonyms)
 
 
 # --- every reading, for exclusion checks (operator rulings X-1 to X-5, 2026-11-08) -------
@@ -1267,7 +1287,7 @@ def _parse(
     if not cleaned:
         return None
     if forms:
-        reading = _form_reading(cleaned, label, observed=not qualify)
+        reading = _form_reading(cleaned, label, observed=not qualify, address=street_address)
         if reading is not None:
             return reading
     parts = [folded for folded, _ in cleaned]

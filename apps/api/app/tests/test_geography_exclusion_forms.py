@@ -1083,3 +1083,141 @@ def test_country_table_is_unchanged_by_the_code_reading():
     for code in ("GB", "KE", "NG", "US", "gb"):
         assert _ident(parse_market(code)) == (None, None, code.upper())
     assert len(COUNTRIES) == 249
+
+
+# --------------------------------------------------------------------------- #
+# FU-E (W21-REV-5DW2FIX r3): a listed code written before the town in a business address
+# --------------------------------------------------------------------------- #
+
+HARTFORD_LOCATION = SimpleNamespace(
+    city="Hartford", state_province="Connecticut", country="United States"
+)
+DALLAS_LOCATION = SimpleNamespace(city="Dallas", state_province="Texas", country="United States")
+TORONTO_LOCATION = SimpleNamespace(city="Toronto", state_province="Ontario", country="Canada")
+LONDON_LOCATION = SimpleNamespace(city="London", state_province="England", country="United Kingdom")
+
+#: The review's eight code-first forms (r3 §4.2), written for a Hartford, Connecticut location.
+CODE_FIRST_FORMS = [
+    "US-CT, Hartford",
+    "US-CT, Hartford, United States",
+    "US-CT, Hartford, US",
+    "US-CT, Hartford 06103",
+    "1 Main St, US-CT, Hartford",
+    "1 Main St, US-CT, Hartford, United States",
+    "us-ct, hartford",
+    "US CT, Hartford",
+]
+#: What the resolver says of a listed code the rest of the address leaves unplaceable (r3 I-1).
+UNPLACED = "states subdivision {}, but the rest of the address cannot be read with it"
+
+
+def _location(city: str, state: str, country: str) -> SimpleNamespace:
+    return SimpleNamespace(city=city, state_province=state, country=country)
+
+
+def _resolve(location, address: str):
+    return resolve_jurisdiction(location, [SimpleNamespace(business_address=address)])
+
+
+@pytest.mark.parametrize("address", CODE_FIRST_FORMS)
+def test_fue_a_listed_code_before_the_town_is_the_locations_own_subdivision(address):
+    """FU-E: "US-CT, Hartford" is Hartford in Connecticut. A town contradicts no code, so a
+    business's own address written code first agrees with its location; it was refused as
+    "states subdivision US-CT?" (the D1 review's R9 row and the r3 review's 672 of 704)."""
+    result = _resolve(HARTFORD_LOCATION, address)
+    assert result.code == "US-CT", address
+    assert result.evidence[-1].endswith("agrees"), result.evidence
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "code"),
+    [
+        (TORONTO_LOCATION, "CA-ON, Toronto", "CA-ON"),
+        (TORONTO_LOCATION, "100 King St W, CA-ON, Toronto, Canada", "CA-ON"),
+        (_location("Sydney", "New South Wales", "Australia"), "AU-NSW, Sydney 2000", "AU-NSW"),
+        (_location("Ikeja", "Lagos", "Nigeria"), "NG-LA, Ikeja", "NG-LA"),
+        # A town named as its own state ("Kano" after NG-KN, "Lagos" after NG-LA) is the town.
+        (_location("Kano", "Kano", "Nigeria"), "NG-KN, Kano", "NG-KN"),
+        (_location("Lagos", "Lagos", "Nigeria"), "NG-LA, Lagos", "NG-LA"),
+    ],
+)
+def test_fue_holds_for_every_country_with_listed_subdivisions(location, address, code):
+    assert _resolve(location, address).code == code, address
+
+
+@pytest.mark.parametrize("address", CODE_FIRST_FORMS)
+def test_fue_the_same_forms_for_a_location_elsewhere_are_refused(address):
+    """The reading names Connecticut, so a location elsewhere is contradicted, in plain words
+    (the current release accepted these: it read no code there)."""
+    dallas = _resolve(DALLAS_LOCATION, address)
+    assert dallas.code == UNRESOLVED
+    assert dallas.evidence[-1].endswith("states subdivision US-CT"), dallas.evidence
+    toronto = _resolve(TORONTO_LOCATION, address)
+    assert toronto.code == UNRESOLVED
+    assert toronto.evidence[-1].endswith("states country US"), toronto.evidence
+
+
+def test_fue_a_country_after_the_town_must_agree_with_the_code():
+    """An address that contradicts itself ("US-CT, Hartford, Canada") is refused for Hartford
+    too, in words."""
+    result = _resolve(HARTFORD_LOCATION, "US-CT, Hartford, Canada")
+    assert result.code == UNRESOLVED
+    assert result.evidence[-1].endswith(UNPLACED.format("US-CT")), result.evidence
+
+
+def test_fue_uk_nations_and_comma_free_forms_read_as_the_review_measured():
+    """UK nations resolve by country, so a nation code before the town agrees with any UK
+    location and contradicts one abroad, as before. A code and a town with no comma between
+    them ("US-CT Hartford") is not read as a code here, as on the current release and D1: it
+    agrees with Hartford and does not contradict Dallas (a characterisation, not a ruling)."""
+    assert _resolve(LONDON_LOCATION, "GB-ENG, London").code == "GB"
+    assert _resolve(LONDON_LOCATION, "GB-SCT, Edinburgh").code == "GB"
+    toronto = _resolve(TORONTO_LOCATION, "GB-ENG, London")
+    assert toronto.code == UNRESOLVED
+    assert toronto.evidence[-1].endswith("states country GB")
+    assert _resolve(HARTFORD_LOCATION, "US-CT Hartford").code == "US-CT"
+    assert _resolve(DALLAS_LOCATION, "US-CT Hartford").code == "US-TX"
+
+
+def test_fue_only_the_business_address_reads_the_town():
+    """The town reading is the business-address reader's alone: exclusion, inclusion and
+    observed readings of the same text keep the unplaceable code (X-1 to X-5 unchanged)."""
+    for text in ("US-CT, Hartford", "1 Main St, US-CT, Hartford", "US-CT, Hartford, USA"):
+        for reading in (
+            *exclusion_readings(text),
+            *observed_readings(text),
+            *markets.inclusion_readings(text),
+            parse_market(text),
+            parse_observed(text),
+        ):
+            assert (reading.region, reading.country) == ("US-CT?", "US"), (text, reading)
+        stated = markets.read_business_address(text).stated
+        assert (stated.city, stated.region, stated.country) == ("hartford", "US-CT", "US")
+
+
+@pytest.mark.parametrize(
+    ("address", "note"),
+    [
+        ("US-TX, Canada", "r3 I-1: a code and another country"),
+        ("Dallas, US-TX, Canada", "a town, a code and another country"),
+        ("US-TX, Texas, USA", "r1 I-2: a code before its own state's name (not changed by FU-E)"),
+    ],
+)
+def test_fue_leaves_a_code_the_rest_of_the_address_cannot_be_read_with(address, note):
+    """Still refused for Dallas, now with words instead of "US-TX?". r1 I-2 is the same reader
+    rule as FU-E; the FU-E change reads a town after the code, never a state or a country, so
+    "US-TX, Texas, USA" stays refused and remains a follow-up."""
+    result = _resolve(DALLAS_LOCATION, address)
+    assert result.code == UNRESOLVED, note
+    assert result.evidence[-1].endswith(UNPLACED.format("US-TX")), (note, result.evidence)
+
+
+def test_fue_another_nigerian_state_after_the_code_is_not_a_town():
+    """A Nigerian state's name after the code ("NG-OG, Lagos") is that state, not a town in
+    Ogun: the code stays unplaceable and the address is refused for an Ogun location, while
+    "NG-OG, Abeokuta" agrees."""
+    abeokuta = _location("Abeokuta", "Ogun", "Nigeria")
+    result = _resolve(abeokuta, "NG-OG, Lagos")
+    assert result.code == UNRESOLVED
+    assert result.evidence[-1].endswith(UNPLACED.format("NG-OG")), result.evidence
+    assert _resolve(abeokuta, "NG-OG, Abeokuta").code == "NG-OG"
