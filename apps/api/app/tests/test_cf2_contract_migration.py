@@ -20,10 +20,10 @@ with the plumbing of ``test_cf1_contract_migration``:
   ``claims_library.retired_at`` gone, both CHECKs narrowed, every other index and row kept)
   and ``upgrade`` restores it.
 
-The CHECK-equality and insert tests run at the code head (CF-3's ``c3f8e1a6d2b9``, which adds a
-jurisdiction CHECK to both tables and widens the capability vocabulary); the downgrade tests
-start from ``a7d2e9f4c1b8`` itself (CF-3's own downgrade is pinned by
-``test_cf3_contract_migration``).
+The CHECK-equality and insert tests run at the code head (``d5f616c0ec97``, 5D-W1's data-only
+campaign-location repair, whose schema is CF-3's ``c3f8e1a6d2b9``: CF-3 adds a jurisdiction
+CHECK to both tables and widens the capability vocabulary); the downgrade tests start from
+``a7d2e9f4c1b8`` itself (CF-3's own downgrade is pinned by ``test_cf3_contract_migration``).
 """
 
 from __future__ import annotations

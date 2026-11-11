@@ -31,6 +31,9 @@ machine), on a disposable database of its own, through the real ``alembic`` CLI 
 * **Transactional failure**: a failure injected after the deletes and inserts have run (a
   trigger of the test database refuses the first mirror rewrite) leaves memberships, JSON and
   ``alembic_version`` exactly as they were; a clean re-run then completes.
+* **The lock** (PostgreSQL): the repair's first statement locks ``campaigns`` and
+  ``campaign_locations`` in SHARE ROW EXCLUSIVE mode; while its transaction is open, writers of
+  either table wait (on rows it never touched) and readers proceed.
 * **Safe repeat**: a second run changes nothing; upgrade, the no-op downgrade, upgrade changes
   nothing; an empty database goes from base to head with no report at all.
 """
@@ -50,9 +53,9 @@ from pathlib import Path
 import pytest
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import sessionmaker
 
 from app.auth import service as auth_service
@@ -920,6 +923,109 @@ def test_a_failure_after_deletes_and_inserts_leaves_everything_as_it_was(db: Db)
     for campaign_id in before[1]:
         members, _ = EXPECTED[campaign_id]
         assert db.memberships().get(campaign_id, set()) == members
+
+
+# --------------------------------------------------------------------------- #
+# The lock (PostgreSQL only)
+# --------------------------------------------------------------------------- #
+_LOCK_STATEMENT = "LOCK TABLE campaigns, campaign_locations IN SHARE ROW EXCLUSIVE MODE"
+
+
+def _from_another_session(conn, statement: str) -> str:
+    """``"waited"`` when ``statement`` had to wait for a lock (``lock_timeout`` cancelled it,
+    SQLSTATE 55P03), else ``"proceeded"``; rolled back either way. Only a lock wait can give
+    ``"waited"``: a slow statement that waits for no lock is never cancelled by
+    ``lock_timeout``."""
+    tx = conn.begin()
+    try:
+        conn.execute(sa.text("SET LOCAL lock_timeout = '500ms'"))
+        conn.execute(sa.text(statement))
+        return "proceeded"
+    except OperationalError as exc:
+        if getattr(exc.orig, "sqlstate", None) != "55P03":
+            raise
+        return "waited"
+    finally:
+        tx.rollback()
+
+
+def test_on_postgresql_the_repair_locks_both_tables_against_writers_not_readers(
+    tmp_path,
+) -> None:
+    """The revision's first statement on PostgreSQL is its ``LOCK TABLE``. While a real run's
+    transaction is still open, after it has written, its session holds SHARE ROW EXCLUSIVE on
+    both tables. From another session, a read and a ``FOR NO KEY UPDATE`` row lock proceed; an
+    INSERT and a DELETE on ``campaign_locations`` and an UPDATE of ``campaigns`` wait, each on
+    rows the repair never touched (so the table lock makes them wait, not a row lock); and a
+    second lock in the same mode waits, so two runs serialize. No outcome depends on timing:
+    the repair's transaction stays open until every probe has finished. (W21-REV-5DW1 r3 F-2,
+    after the reviewer's probe L1.)"""
+    with _database("postgresql", tmp_path) as db:
+        _state_world(db)
+        statements: list[str] = []
+        with db.engine.connect() as repair, db.engine.connect() as other:
+            event.listen(
+                repair,
+                "before_cursor_execute",
+                lambda _conn, _cursor, statement, *_rest: statements.append(statement),
+            )
+            tx = repair.begin()
+            try:
+                report = _module().reconcile_campaign_locations(repair)
+                assert report.changes() > 0  # it wrote: the lock is held with work in flight
+                pid = repair.execute(sa.text("SELECT pg_backend_pid()")).scalar_one()
+                held = {
+                    (row.relname, row.mode)
+                    for row in other.execute(
+                        sa.text(
+                            "SELECT c.relname, l.mode FROM pg_locks l"
+                            " JOIN pg_class c ON c.oid = l.relation"
+                            " WHERE l.pid = :pid AND l.granted"
+                            " AND c.relname IN ('campaigns', 'campaign_locations')"
+                        ),
+                        {"pid": pid},
+                    )
+                }
+                other.rollback()
+                observed = {
+                    "first_statement": statements[0],
+                    "share_row_exclusive_held_on": sorted(
+                        table for table, mode in held if mode == "ShareRowExclusiveLock"
+                    ),
+                    "select_memberships": _from_another_session(
+                        other, "SELECT count(*) FROM campaign_locations"
+                    ),
+                    "row_lock_untouched_campaign": _from_another_session(
+                        other,
+                        "SELECT id FROM campaigns WHERE id = 'zb-other-tenant' FOR NO KEY UPDATE",
+                    ),
+                    "insert_membership_untouched_campaign": _from_another_session(
+                        other,
+                        "INSERT INTO campaign_locations (id, organization_id, workspace_id,"
+                        " campaign_id, location_id, created_at) VALUES ('lock-probe', 'org-a',"
+                        " 'ws-a1', 's0-empty', 'la1c', now())",
+                    ),
+                    "delete_membership_untouched_campaign": _from_another_session(
+                        other,
+                        "DELETE FROM campaign_locations WHERE campaign_id = 'zb-other-tenant'",
+                    ),
+                    "update_untouched_campaign": _from_another_session(
+                        other, "UPDATE campaigns SET name = name WHERE id = 'zb-other-tenant'"
+                    ),
+                    "second_lock_same_mode": _from_another_session(other, _LOCK_STATEMENT),
+                }
+            finally:
+                tx.rollback()
+    assert observed == {
+        "first_statement": _LOCK_STATEMENT,
+        "share_row_exclusive_held_on": ["campaign_locations", "campaigns"],
+        "select_memberships": "proceeded",
+        "row_lock_untouched_campaign": "proceeded",
+        "insert_membership_untouched_campaign": "waited",
+        "delete_membership_untouched_campaign": "waited",
+        "update_untouched_campaign": "waited",
+        "second_lock_same_mode": "waited",
+    }
 
 
 # --------------------------------------------------------------------------- #
