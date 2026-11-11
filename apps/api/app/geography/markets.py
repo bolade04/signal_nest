@@ -498,6 +498,9 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
         stated = _parse(text, None, qualify=False, known=None, street_address=True)
         kind = street_line_kind(text)
         ambiguous = parse_observed(text) if kind == STREET_LINE_AMBIGUOUS else None
+        if stated is not None and stated.country is not None and _street_name_and_direction(text):
+            # C-15: "5th St SE" may be "5th Street Southeast": its code reading is ambiguous.
+            ambiguous, stated = stated, MarketIdentity(city=stated.city, label=stated.label)
         return BusinessAddressReading(
             stated,
             (),
@@ -513,9 +516,13 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
             continue
         kept.append(part)
         stated_here, maybe = _part_reading(part)
+        explicit_here, ambiguous_here = _part_groups(part)
+        if _designator(part):
+            # C-16(b): "12000 FM 1960", "Unit 5 NY 10001": a route or a state and its ZIP.
+            stated_here, maybe = [], stated_here + maybe
+            explicit_here, ambiguous_here = [], explicit_here + ambiguous_here
         parts += stated_here
         ambiguous += maybe
-        explicit_here, ambiguous_here = _part_groups(part)
         groups += explicit_here
         ambiguous_groups += ambiguous_here
     stated = _parse(", ".join(kept), None, qualify=False, known=None, street_address=True)
@@ -551,7 +558,7 @@ def _part_groups(
         group = [_spaced_group(spaced, part)] if _spaced_group(spaced, part) else []
         return ([], group) if _street_and_direction(spaced) else (group, [])
     if (len(town) == 2 and _country_code(town) and not explicit_code) or (
-        not explicit_code and _unlisted_code_form(part)
+        not explicit_code and (_unlisted_code_form(part) or _designator(part, unit=True))
     ):
         return [], []
     if code in STREET_SUFFIXES or _street_name_and_direction(part):
@@ -645,6 +652,28 @@ def _spaced_group(spaced: tuple[str, str], label: str) -> tuple[MarketIdentity, 
     return tuple(MarketIdentity(region=r, country=c, label=label) for c, r in readings)
 
 
+#: Words that number a unit ("Flat No 3", "Plot Nr 12").
+_NUMBER_LABELS: Final = frozenset({"no", "nr", "num", "number"})
+
+
+def _designator(part: str, unit: bool = False) -> bool:
+    """C-16: is the last word of ``part`` a code only once a trailing number is dropped, and after
+    a number or a unit label ("12000 FM 1960", "1 SR 520", "Unit 5 NY 10001"), or a unit label
+    after a street type ("123 Main St Fl 3")? In a later part such a code is ambiguous. With
+    ``unit``: is it a number label after a unit label ("Flat No 3", "Plot No 12"), which states
+    nothing?"""
+    words, kept = fold(part).split(), _strip_postcode(fold(part)).split()
+    if len(words) == len(kept) or len(kept) < 2:
+        return False
+    if unit:
+        return kept[-1] in _NUMBER_LABELS and kept[-2] in _UNIT_LABELS
+    return (
+        bool(_HAS_DIGIT.search(kept[-2]))
+        or kept[-2] in _UNIT_LABELS
+        or (kept[-1] in _UNIT_LABELS and kept[-2] in STREET_SUFFIXES)
+    )
+
+
 def _part_reading(part: str) -> tuple[list[MarketIdentity], list[MarketIdentity]]:
     """(explicit, ambiguous) readings of one comma part that ends in a code."""
     folded = _strip_postcode(fold(part))
@@ -662,11 +691,15 @@ def _part_reading(part: str) -> tuple[list[MarketIdentity], list[MarketIdentity]
         or " ".join(folded.split()[-2:]) in _FOLDED_SUBDIVISION_CODES
     ):
         return _placed(parse_observed(part)), []
-    if (len(town) == 2 and _country_code(town)) or _unlisted_code_form(part):
+    if (
+        (len(town) == 2 and _country_code(town))
+        or _unlisted_code_form(part)
+        or _designator(part, unit=True)
+    ):
         return [], []
     if _spaced_code_form(part) is not None:
         return [], []  # C-12: read as a group of both readings (_part_groups)
-    if code in STREET_SUFFIXES:
+    if code in STREET_SUFFIXES or _street_name_and_direction(part):
         return [], _placed(parse_observed(part))
     return _placed(parse_observed(part)), []
 

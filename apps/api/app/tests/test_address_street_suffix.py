@@ -46,6 +46,11 @@ These tests prove:
 * an ordinal street name ("123 4th St") is a street name, and a street type before a
   post-directional ("St NE" alone, "5th St NE" with no house number) is an ambiguous group that
   asks for clarification, never explicit text (re-bind 2 C-13 and C-14; lane r9 probe R17);
+* a single-area direction after a street with no house number ("5th St SE": Sweden) is ambiguous
+  too, in a comma-free address and in a part (re-bind 3 C-15); in a part after the first, a unit
+  number ("Flat No 3") states nothing, and a route or a code after a number or a unit ("12000 FM
+  1960", "Unit 5 NY 10001", "123 Main St Fl 3") is ambiguous, never explicit and never nothing
+  (re-bind 3 C-16);
 * any other text reads exactly as an observed market does, and only the business-address reader
   reads differently (the live Scout readers do not);
 * lane 5DW2FIX's realistic-address corpus (924 rows) resolves to each row's own location, except
@@ -1047,6 +1052,129 @@ def test_an_ambiguous_ordinal_line_or_street_and_direction_asks_for_clarificatio
     ids=lambda value: value if isinstance(value, str) else value.city,
 )
 def test_explicit_text_after_an_ordinal_street_is_still_refused(location, address, conflict):
+    resolution = _resolve(location, address)
+    assert resolution.code == UNRESOLVED
+    assert resolution.reason is None
+    assert resolution.evidence[-1] == (
+        f"unresolved: coverage rule 0 business address {address!r} states {conflict}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# A single-area direction and a designator in a part (W21-REV-D1STREET r2 re-bind 3 C-15 and
+# C-16): the reviewer's proposed tests (r2d/proposed/test_rev_r2d_c15_c16_proposed.py), with
+# exact evidence. "5th St SE" may be "5th Street Southeast", so its single-area code reading
+# (Sweden) is ambiguous, as "5th St NE" is. In a part after the first, a unit number ("Flat No
+# 3") states nothing, and a route, or a state and its ZIP code after a unit ("12000 FM 1960",
+# "Unit 5 NY 10001", "123 Main St Fl 3"), is ambiguous: explicit geography settles it, and it is
+# never read as nothing. The first part keeps its reading ("1 SR 520, Redmond, WA 98052").
+# --------------------------------------------------------------------------- #
+
+SEATTLE = _location("Seattle", "WA", "US")
+MIAMI = _location("Miami", "FL", "US")
+STOCKHOLM = _location("Stockholm", "Stockholm", "Sweden")
+MAHARASHTRA_MUMBAI = _location("Mumbai", "Maharashtra", "India")
+
+DIRECTION_OR_DESIGNATOR_OWN = [
+    # C-15
+    (WASHINGTON, "US-DC", "Suite 5, 5th St SE, Washington, DC 20003"),
+    (WASHINGTON, "US-DC", "Suite 5, Massachusetts Ave SE, Washington, DC"),
+    (WASHINGTON, "US-DC", "5th St SE, Washington, DC"),
+    (STOCKHOLM, "SE", "5th St SE"),
+    (STOCKHOLM, "SE", "Suite 5, 5th St SE"),
+    # C-16
+    (HOUSTON, "US-TX", "ACME Inc, 12000 FM 1960, Houston, TX 77070"),
+    (SEATTLE, "US-WA", "ACME, 1 SR 520, Seattle, WA 98052"),
+    (DALLAS, "US-TX", "ACME, 100 CR 45, Dallas, TX"),
+    (DALLAS, "US-TX", "ACME, 123 Main St Fl 3, Dallas, TX"),
+    (MIAMI, "US-FL", "ACME, 123 Main St Fl 3"),
+    (MAHARASHTRA_MUMBAI, "IN", "Sea View Apts, Flat No 3, Bandra, Mumbai"),
+    (MAHARASHTRA_MUMBAI, "IN", "ACME Ltd, Shop No 5, MG Road, Mumbai"),
+    (MAHARASHTRA_MUMBAI, "IN", "Unit 4, Plot No 12, MIDC, Andheri East, Mumbai 400093"),
+    (LAGOS, "NG-LA", "ACME Ltd, Plot No 12, Admiralty Way, Lekki"),
+    (LAGOS, "NG-LA", "Block A, Flat No 3, Victoria Island, Lagos"),
+    # C-16 is for later parts: a designator in the first part keeps its reading, as on main.
+    (SEATTLE, "US-WA", "1 SR 520, Redmond, WA 98052"),
+    (SEATTLE, "US-WA", "1 SR 520, Redmond"),
+    (HOUSTON, "US-TX", "12000 FM 1960, Houston"),
+    (DALLAS, "US-TX", "123 Main St Fl 3, Dallas"),
+    (DALLAS, "US-TX", "100 CR 45, Dallas"),
+]
+
+
+@pytest.mark.parametrize(
+    ("location", "code", "address"),
+    DIRECTION_OR_DESIGNATOR_OWN,
+    ids=[f"{loc.city}:{a}" for loc, _, a in DIRECTION_OR_DESIGNATOR_OWN],
+)
+def test_a_direction_or_designator_in_a_later_part_resolves_its_own_location(
+    location, code, address
+):
+    resolution = _resolve(location, address)
+    assert resolution.code == code, resolution.evidence
+    assert resolution.reason is None
+
+
+DIRECTION_OR_DESIGNATOR_AMBIGUOUS = [
+    # C-15
+    (WASHINGTON, "5th St SE", "country SE"),
+    (WASHINGTON, "5TH ST SE", "country SE"),
+    (WASHINGTON, "5th St SE 20003", "country SE"),
+    (WASHINGTON, "Suite 5, 5th St SE", "country SE"),
+    (WASHINGTON, "5th St SE, Suite 5", "country SE"),
+    (WASHINGTON, "ACME, 5th St SE", "country SE"),
+    (DALLAS, "Gate 2 1 Main St SE", "country SE"),
+    (DALLAS, "Suite 5, 5th St SE, Stockholm", "country SE"),
+    # C-16: a route, or a state and its postcode after a unit, with nothing explicit to settle it
+    (HOUSTON, "Suite 5, 12000 FM 1960", "country FM"),
+    (SEATTLE, "Suite 5, 1 SR 520", "country SR"),
+    (DALLAS, "Suite 5, 100 CR 45", "country CR"),
+    (DALLAS, "1 Main St, Unit 5 NY 10001", "subdivision US-NY"),
+    (DALLAS, "ACME, Apt 5 CT 06103", "subdivision US-CT"),
+    (DALLAS, "ACME, 123 Main St FL 32801", "subdivision US-FL"),
+    (DALLAS, "ACME, Suite 5 CA 90265", "country CA or subdivision US-CA"),
+    (TORONTO, "ACME, Suite 5 TX 75201", "country US"),
+]
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "reading"),
+    DIRECTION_OR_DESIGNATOR_AMBIGUOUS,
+    ids=[f"{loc.city}:{a}" for loc, a, _ in DIRECTION_OR_DESIGNATOR_AMBIGUOUS],
+)
+def test_an_ambiguous_direction_or_designator_asks_for_clarification(location, address, reading):
+    resolution = _resolve(location, address)
+    assert resolution.code == UNRESOLVED
+    assert resolution.reason == ADDRESS_SUFFIX_AMBIGUOUS
+    assert resolution.evidence[-1] == (
+        f"unresolved: coverage rule 0 business address {address!r} is ambiguous: "
+        f"a street type or {reading}"
+    )
+
+
+DIRECTION_OR_DESIGNATOR_REFUSED = [
+    (DALLAS, "1 Main St, Orlando FL 32801", "subdivision US-FL"),
+    (DALLAS, "1 Main St, Miami FL 33101", "subdivision US-FL"),
+    (DALLAS, "ACME, Floor 3 US-CT 06103", "subdivision US-CT"),
+    (DALLAS, "ACME, Flat No 3, Oslo, Norway", "country NO"),
+    (DALLAS, "ACME, Plot No 12, Lagos NG 100001", "country NG"),
+    (DALLAS, "ACME, 1 SR 520, Paramaribo, SR", "country SR"),
+    (DALLAS, "Level 3, 1 Martin Pl, Sydney NSW 2000", "country AU"),
+    (DALLAS, "1 Main St, Sector 5 SE", "country SE"),
+    (HOUSTON, "Suite 5, 12000 FM 1960, Pohnpei, Micronesia", "country FM"),
+    (WASHINGTON, "5th St SE, Stockholm, Sweden", "country SE"),
+    (WASHINGTON, "Drottninggatan 5, Stockholm SE", "country SE"),
+]
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "conflict"),
+    DIRECTION_OR_DESIGNATOR_REFUSED,
+    ids=[f"{loc.city}:{a}" for loc, a, _ in DIRECTION_OR_DESIGNATOR_REFUSED],
+)
+def test_explicit_geography_beside_a_direction_or_designator_is_still_refused(
+    location, address, conflict
+):
     resolution = _resolve(location, address)
     assert resolution.code == UNRESOLVED
     assert resolution.reason is None
