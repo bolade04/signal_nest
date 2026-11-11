@@ -361,7 +361,7 @@ REALISTIC_ADDRESSES = [
     (("Malibu", "California", US), "CA-1, Malibu, CA 90265", "US-CA"),
     (("Malibu", "California", US), "CA-1", "US-CA"),
     (("Bloomington", "Indiana", US), "IN-37", "US-IN"),
-    (("Al Ain", "Abu Dhabi", "United Arab Emirates"), "KHALIFA ST, AL-AIN", "AE"),
+    (("Al Ain", "Abu Dhabi", "United Arab Emirates"), "KHALIFA STREET, AL-AIN", "AE"),
     (("Ca Mau", "Ca Mau", "Vietnam"), "Ca-Mau, Vietnam", "VN"),
     # US and state highway numbers whose prefix is also an ISO country code.
     (("Ventura", "California", US), "US-101, Ventura, CA 93001", "US-CA"),
