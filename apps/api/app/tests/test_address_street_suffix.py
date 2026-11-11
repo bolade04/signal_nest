@@ -43,6 +43,9 @@ These tests prove:
 * an unlisted code form written with a space ("Munich DE BY", "Ikeja NG LA") is read as a group of
   both readings, the country of the code form or the code after a word, under C-8's rule
   (W21-REV-D1STREET r2 re-bind C-12);
+* an ordinal street name ("123 4th St") is a street name, and a street type before a
+  post-directional ("St NE" alone, "5th St NE" with no house number) is an ambiguous group that
+  asks for clarification, never explicit text (re-bind 2 C-13 and C-14; lane r9 probe R17);
 * any other text reads exactly as an observed market does, and only the business-address reader
   reads differently (the live Scout readers do not);
 * lane 5DW2FIX's realistic-address corpus (924 rows) resolves to each row's own location, except
@@ -902,8 +905,6 @@ SPACED_CONTRADICTING = [
     (HARTFORD, "1500 Broadway, Harris Co TX", "country CO or subdivision US-TX"),
     (HARTFORD, "1500 BROADWAY, HARRIS CO TX", "country CO or subdivision US-TX"),
     (LONDON, "1500 BROADWAY, FULTON CO GA", "country CO or country GA or country US"),
-    (DALLAS, "ST NE", "country ST or country NE or subdivision US-NE"),
-    (DALLAS, "1 Main Rd, ST NE", "country ST or country NE or subdivision US-NE"),
 ]
 
 
@@ -942,6 +943,116 @@ def test_a_listed_code_written_with_a_space_stays_explicit(address):
     resolution = _resolve(TORONTO, address)
     assert resolution.code == UNRESOLVED
     assert resolution.evidence[-1].endswith("states country US"), resolution.evidence
+
+
+# --------------------------------------------------------------------------- #
+# An ordinal street name and a street type before a post-directional (W21-REV-D1STREET r2 re-bind 2
+# C-13 and C-14): the reviewer's proposed tests (r2c/proposed/test_rev_r2c_c13_c14_proposed.py),
+# with exact evidence, plus the lane's r9 rows (broad probe R17). "4th" is a street name, so "123
+# 4th St" is a clear street line. "St NE" alone, and "5th St NE" without a house number (R17), may
+# be a street type and a direction: the code readings form an ambiguous group, settled by explicit
+# geography and never refused as explicit text (the two "ST NE" rows moved here from
+# SPACED_CONTRADICTING).
+# --------------------------------------------------------------------------- #
+
+WASHINGTON = _location("Washington", "DC", "US")
+NEW_YORK = _location("New York", "NY", "US")
+
+ORDINAL_OR_DIRECTION_OWN = [
+    (DALLAS, "US-TX", "123 4th St"),
+    (DALLAS, "US-TX", "100 1st Pl"),
+    (DALLAS, "US-TX", "22 3rd Ct"),
+    (DALLAS, "US-TX", "500 2nd St"),
+    (DALLAS, "US-TX", "Suite 5, 123 4th St"),
+    (DALLAS, "US-TX", "123 4th St NE"),
+    (NEW_YORK, "US-NY", "1 W 34th St"),
+    (WASHINGTON, "US-DC", "123 4th St NE"),
+    (WASHINGTON, "US-DC", "1 1st St SE"),
+    (WASHINGTON, "US-DC", "Suite 200, 123 4th St NE, Washington, DC 20002"),
+    (WASHINGTON, "US-DC", "Suite 200, 123 4th St NE"),
+    (WASHINGTON, "US-DC", "Suite 5, 1 1st St SE, Washington, DC 20003"),
+    (WASHINGTON, "US-DC", "1 Main St, St NE, Washington, DC"),
+    (OMAHA, "US-NE", "ST NE"),
+    (SAO_TOME, "ST", "ST NE"),
+    # The lane's R17 rows: a street name before "St NE" with no house number.
+    (WASHINGTON, "US-DC", "5th St NE, Washington, DC"),
+    (WASHINGTON, "US-DC", "5th St NE, Washington, DC 20002"),
+    (OMAHA, "US-NE", "5th St NE"),
+    (NIAMEY, "NE", "5th St NE"),
+]
+
+
+@pytest.mark.parametrize(
+    ("location", "code", "address"),
+    ORDINAL_OR_DIRECTION_OWN,
+    ids=[f"{loc.city}:{a}" for loc, _, a in ORDINAL_OR_DIRECTION_OWN],
+)
+def test_an_ordinal_street_or_a_street_and_direction_resolves_its_own_location(
+    location, code, address
+):
+    resolution = _resolve(location, address)
+    assert resolution.code == code, resolution.evidence
+    assert resolution.reason is None
+
+
+ORDINAL_OR_DIRECTION_AMBIGUOUS = [
+    (DALLAS, "123 4TH ST", "country ST"),
+    (WASHINGTON, "123 4TH ST NE", "country NE or subdivision US-NE"),
+    (DALLAS, "ST NE", "country ST or country NE or subdivision US-NE"),
+    (DALLAS, "1 Main Rd, ST NE", "country ST or country NE or subdivision US-NE"),
+    (DALLAS, "1 Main St, St NE", "country ST or country NE or subdivision US-NE"),
+    (WASHINGTON, "1 Main St, St NE", "country ST or country NE or subdivision US-NE"),
+    # The lane's R17 rows: main accepts "5th St NE" for Washington, DC, and C-8 refused it as
+    # explicit text; it asks for clarification as "St NE" alone does.
+    (WASHINGTON, "5th St NE", "country NE or subdivision US-NE"),
+    (WASHINGTON, "5TH ST NE", "country NE or subdivision US-NE"),
+    (WASHINGTON, "5th st ne", "country NE or subdivision US-NE"),
+    (WASHINGTON, "Massachusetts Ave NE", "country NE or subdivision US-NE"),
+    (WASHINGTON, "5th St NE 20002", "country NE or subdivision US-NE"),
+    (WASHINGTON, "Suite 5, 5th St NE", "country NE or subdivision US-NE"),
+    (WASHINGTON, "5th St NE, Suite 5", "country NE or subdivision US-NE"),
+    (DALLAS, "5th St NE", "country NE or subdivision US-NE"),
+    (LONDON, "5th St NE", "country NE or country US"),
+]
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "conflict"),
+    ORDINAL_OR_DIRECTION_AMBIGUOUS,
+    ids=[f"{loc.city}:{a}" for loc, a, _ in ORDINAL_OR_DIRECTION_AMBIGUOUS],
+)
+def test_an_ambiguous_ordinal_line_or_street_and_direction_asks_for_clarification(
+    location, address, conflict
+):
+    resolution = _resolve(location, address)
+    assert resolution.code == UNRESOLVED
+    assert resolution.reason == ADDRESS_SUFFIX_AMBIGUOUS
+    assert resolution.evidence[-1] == (
+        f"unresolved: coverage rule 0 business address {address!r} is ambiguous: "
+        f"a street type or {conflict}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "conflict"),
+    [
+        (DALLAS, "123 4th St Hartford CT", "subdivision US-CT"),
+        (DALLAS, "12 14 PL", "country PL"),
+        (DALLAS, "PL MA", "country PL or country MA or subdivision US-MA"),
+        # R17: explicit geography after "5th St NE" is still read.
+        (LONDON, "5th St NE, Washington, DC", "country US"),
+        (WASHINGTON, "5th St NE, Dallas, TX", "subdivision US-TX"),
+        (DALLAS, "5th St NE, Omaha, NE", "subdivision US-NE"),
+    ],
+    ids=lambda value: value if isinstance(value, str) else value.city,
+)
+def test_explicit_text_after_an_ordinal_street_is_still_refused(location, address, conflict):
+    resolution = _resolve(location, address)
+    assert resolution.code == UNRESOLVED
+    assert resolution.reason is None
+    assert resolution.evidence[-1] == (
+        f"unresolved: coverage rule 0 business address {address!r} states {conflict}"
+    )
 
 
 #: The live Scout readers' reading of street lines, as measured at main e3571ac8.

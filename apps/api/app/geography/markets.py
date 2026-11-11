@@ -280,6 +280,15 @@ _FOLDED_SUBDIVISION_CODES: Final = frozenset(
 )
 
 
+#: An ordinal street name ("4th", "1st", "22nd", "3rd"): a street-name word, not a number.
+_ORDINAL: Final = re.compile(r"\d+(?:st|nd|rd|th)", re.IGNORECASE)
+
+
+def _is_name(word: str) -> bool:
+    """A street-name word: one without a digit, or an ordinal ("4th")."""
+    return not _HAS_DIGIT.search(word) or _ORDINAL.fullmatch(word) is not None
+
+
 def _is_street_line(folded: str) -> bool:
     """Is ``folded`` (one comma-free part, folded, trailing postcode dropped) a street line?
 
@@ -304,7 +313,7 @@ def _is_street_line(folded: str) -> bool:
     if " ".join(words[-2:]) in _FOLDED_SUBDIVISION_CODES:
         return False
     street = words[number + 1 : -1]
-    named = [i for i, word in enumerate(street) if not _HAS_DIGIT.search(word)]
+    named = [i for i, word in enumerate(street) if _is_name(word)]
     if not named:
         return False
     return not any(word in _STREET_TYPES for word in street[named[0] + 1 :])
@@ -357,7 +366,7 @@ def _street_kind(part: str) -> str | None:
     if words[-1] in _POST_DIRECTIONALS:
         words, written = words[:-1], written[:-1]
     number = next(i for i, word in enumerate(words[:2]) if _HAS_DIGIT.search(word))
-    names = [word for word in words[number + 1 : -1] if not _HAS_DIGIT.search(word)]
+    names = [word for word in words[number + 1 : -1] if _is_name(word)]
     if len(names) > 1 and names[0] in _POST_DIRECTIONALS:
         names = names[1:]
     letters = "".join(word for word in written if not _HAS_DIGIT.search(word))
@@ -420,7 +429,8 @@ def _alternatives(text: str) -> tuple[MarketIdentity, ...]:
         return ()
     spaced = _spaced_code_form(text)
     if spaced is not None:
-        return _spaced_group(spaced, text)
+        # "St NE" alone may be a street type and a direction: its part's group is ambiguous.
+        return () if _street_and_direction(spaced) else _spaced_group(spaced, text)
     parts = _clean_parts(text)
     last = whole = parts[-1]
     if len(parts) == 1 and last not in CITY_FIRST_NAMES and not _area_candidates(last):
@@ -473,7 +483,9 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
     Georgia or Gabon; "1 SPRING HILL ST NE": Nebraska or Niger) keeps its readings as a group,
     never as nothing (C-8): ``alternatives`` for explicit text, ``ambiguous_alternatives`` for an
     ambiguous street line or part. A listed subdivision code keeps only the reading its country
-    prefix names ("US-CA" is California).
+    prefix names ("US-CA" is California). A street type before a post-directional with no house
+    number ("St NE" alone, C-14; "5th St NE", R17) is an ambiguous part, and an ordinal ("4th") is a
+    street name (C-13).
     """
     if text is None:
         return BusinessAddressReading(None)
@@ -490,8 +502,8 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
             stated,
             (),
             tuple(_placed(ambiguous)),
-            _groups(text) if kind is None else (),
-            _groups(text) if kind == STREET_LINE_AMBIGUOUS else (),
+            _groups(text) if kind is None and not _street_name_and_direction(text) else (),
+            _groups(text) if kind == STREET_LINE_AMBIGUOUS else _street_direction_group(text),
         )
     kept, parts, ambiguous = [raw_parts[0]], [], []
     groups, ambiguous_groups = [], []
@@ -536,13 +548,13 @@ def _part_groups(
     explicit_code = " ".join(folded.split()[-2:]) in _FOLDED_SUBDIVISION_CODES
     spaced = None if explicit_code else _spaced_code_form(part)
     if spaced is not None:
-        group = _spaced_group(spaced, part)
-        return ([group] if group else []), []
+        group = [_spaced_group(spaced, part)] if _spaced_group(spaced, part) else []
+        return ([], group) if _street_and_direction(spaced) else (group, [])
     if (len(town) == 2 and _country_code(town) and not explicit_code) or (
         not explicit_code and _unlisted_code_form(part)
     ):
         return [], []
-    if code in STREET_SUFFIXES:
+    if code in STREET_SUFFIXES or _street_name_and_direction(part):
         return [], list(_groups(part))
     return list(_groups(part)), []
 
@@ -589,6 +601,37 @@ def _spaced_code_form(part: str) -> tuple[str, str] | None:
     if country in STREET_SUFFIXES and len(written.split()) > 2:
         return None
     return country.upper(), letters
+
+
+def _street_and_direction(spaced: tuple[str, str]) -> bool:
+    """C-14: "St NE" may be a street type and a post-directional, so its code readings are
+    ambiguous, as in "123 MAIN ST NE"."""
+    return spaced[0].lower() in STREET_SUFFIXES and spaced[1] in _POST_DIRECTIONALS
+
+
+def _street_name_and_direction(part: str) -> bool:
+    """R17: a street name, a street type and a post-directional with no house number ("5th St NE",
+    "Massachusetts Ave NE"): the direction may be a code, so its readings are ambiguous, as for
+    "St NE" alone (C-14) and "123 MAIN ST NE"."""
+    words = _strip_postcode(fold(part)).split()
+    return (
+        len(words) > 2
+        and words[-2] in STREET_SUFFIXES
+        and words[-1] in _POST_DIRECTIONALS
+        and _street_kind(part) is None
+    )
+
+
+def _street_direction_group(text: str) -> tuple[tuple[MarketIdentity, ...], ...]:
+    """C-14: the ambiguous group of a one-part address that is only "St NE"; R17: or a street name
+    before it ("5th St NE")."""
+    spaced = _spaced_code_form(text)
+    if spaced is None:
+        return _groups(text) if _street_name_and_direction(text) else ()
+    if not _street_and_direction(spaced):
+        return ()
+    group = _spaced_group(spaced, text)
+    return (group,) if group else ()
 
 
 def _spaced_group(spaced: tuple[str, str], label: str) -> tuple[MarketIdentity, ...]:
