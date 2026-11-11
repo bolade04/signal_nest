@@ -943,7 +943,8 @@ def _form_reading(
     to read the text as words (no form there, or one that place names could explain).
 
     ``address``: the text is a business address, where a listed code may come before the town
-    ("US-CT, Hartford", "1 Main St, US-CT, Hartford, USA"; FU-E, W21-REV-5DW2FIX r3)."""
+    ("US-CT, Hartford", "1 Main St, US-CT, Hartford, USA"; FU-E, W21-REV-5DW2FIX r3) or before
+    its own state's name and the country ("US-TX, Texas, USA"; r1 I-2, r3b)."""
     words = [folded for folded, _ in parts]
     n = len(parts)
     forms = [
@@ -970,6 +971,11 @@ def _form_reading(
             # country after the town agrees ("US-CT, Hartford, Canada" stays unplaceable).
             if any(_agree(head, _Form(c, r, strict=False)) for c, r in _area_candidates(words[-1])):
                 return _identity(words[-2], head.region, head.country, label)
+        if address and head is not None and head.strict and _names_area(words[-2], head):
+            # I-2: "US-TX, Texas, USA" is Texas when the state after the code is the code's own
+            # and the country after it agrees ("US-TX, Ohio, USA" stays unplaceable).
+            if any(_agree(head, _Form(c, r, strict=False)) for c, r in _area_candidates(words[-1])):
+                return _identity(None, head.region, head.country, label)
         return _unplaceable(label, head) if head is not None else None
     # The head of "X, country" or the region of "city, X, country": the qualifier after it
     # must name the same country ("US-TX, USA", "Lagos State, Nigeria", "KE, Kenya").
@@ -991,6 +997,11 @@ def _a_town(folded: str, form: _Form) -> bool:
     region, and no Nigerian state but the code's own ("Kano" after NG-KN)."""
     homonyms = _homonym_areas(folded)
     return not _area_candidates(folded) and all(area[1] == form.region for area in homonyms)
+
+
+def _names_area(folded: str, form: _Form) -> bool:
+    """Does ``folded`` name ``form``'s own subdivision ("texas" for US-TX; r1 I-2, r3b)?"""
+    return (form.country, form.region) in _area_candidates(folded)
 
 
 # --- every reading, for exclusion checks (operator rulings X-1 to X-5, 2026-11-08) -------

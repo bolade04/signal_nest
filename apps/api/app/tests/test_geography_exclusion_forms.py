@@ -1200,13 +1200,13 @@ def test_fue_only_the_business_address_reads_the_town():
     [
         ("US-TX, Canada", "r3 I-1: a code and another country"),
         ("Dallas, US-TX, Canada", "a town, a code and another country"),
-        ("US-TX, Texas, USA", "r1 I-2: a code before its own state's name (not changed by FU-E)"),
+        ("US-TX, Texas, Canada", "a code, its own state's name and another country"),
+        ("US-TX, Ohio, USA", "a code and another state's name"),
     ],
 )
 def test_fue_leaves_a_code_the_rest_of_the_address_cannot_be_read_with(address, note):
-    """Still refused for Dallas, now with words instead of "US-TX?". r1 I-2 is the same reader
-    rule as FU-E; the FU-E change reads a town after the code, never a state or a country, so
-    "US-TX, Texas, USA" stays refused and remains a follow-up."""
+    """Still refused for Dallas, now with words instead of "US-TX?": what follows the code is
+    another country or another state, not a town or the code's own state with its country."""
     result = _resolve(DALLAS_LOCATION, address)
     assert result.code == UNRESOLVED, note
     assert result.evidence[-1].endswith(UNPLACED.format("US-TX")), (note, result.evidence)
@@ -1221,3 +1221,92 @@ def test_fue_another_nigerian_state_after_the_code_is_not_a_town():
     assert result.code == UNRESOLVED
     assert result.evidence[-1].endswith(UNPLACED.format("NG-OG")), result.evidence
     assert _resolve(abeokuta, "NG-OG, Abeokuta").code == "NG-OG"
+
+
+def test_fue_a_town_named_like_a_country_code_is_not_read_as_one():
+    """W21-REV-5DW2FIX r3b C-4: only a listed subdivision code is read before the town. A town
+    whose name is also a country code ("Bo" is Bolivia's, "Ba" Bosnia's) stays the town, so these
+    own addresses resolve by country, as on the current release and D1."""
+    bo = _location("Bo", "Southern Province", "Sierra Leone")
+    ba = _location("Ba", "Western Division", "Fiji")
+    assert _resolve(bo, "Bo, Southern Province").code == "SL"
+    assert _resolve(ba, "Ba, Western Division").code == "FJ"
+
+
+# --------------------------------------------------------------------------- #
+# r1 I-2 (folded in after W21-REV-5DW2FIX r3b): a code before its own state's name
+# --------------------------------------------------------------------------- #
+
+SYDNEY_LOCATION = _location("Sydney", "New South Wales", "Australia")
+I2_OWN = [
+    (DALLAS_LOCATION, "US-TX, Texas, USA", "US-TX"),
+    (DALLAS_LOCATION, "US-TX, Texas, United States", "US-TX"),
+    (DALLAS_LOCATION, "us-tx, texas, us", "US-TX"),
+    (DALLAS_LOCATION, "1 Main St, US-TX, Texas, USA", "US-TX"),
+    (HARTFORD_LOCATION, "US-CT, Connecticut, United States", "US-CT"),
+    (TORONTO_LOCATION, "CA-ON, Ontario, Canada", "CA-ON"),
+    (SYDNEY_LOCATION, "AU-NSW, New South Wales, Australia", "AU-NSW"),
+    (_location("Ikeja", "Lagos", "Nigeria"), "NG-LA, Lagos, Nigeria", "NG-LA"),
+]
+
+
+@pytest.mark.parametrize(("location", "address", "code"), I2_OWN)
+def test_i2_a_code_before_its_own_state_and_country_is_that_state(location, address, code):
+    """r1 I-2: "US-TX, Texas, USA" is the business's own address in Texas. It was refused as an
+    unplaceable "US-TX?" (74 of the review's 84 own rows at 4896bd69); it now agrees."""
+    result = _resolve(location, address)
+    assert result.code == code, address
+    assert result.evidence[-1].endswith("agrees"), result.evidence
+
+
+def test_i2_the_same_forms_for_a_location_elsewhere_are_refused():
+    hartford = _resolve(HARTFORD_LOCATION, "US-TX, Texas, USA")
+    assert hartford.code == UNRESOLVED
+    assert hartford.evidence[-1].endswith("states subdivision US-TX"), hartford.evidence
+    toronto = _resolve(TORONTO_LOCATION, "US-TX, Texas, USA")
+    assert toronto.code == UNRESOLVED
+    assert toronto.evidence[-1].endswith("states country US"), toronto.evidence
+    dallas = _resolve(DALLAS_LOCATION, "CA-ON, Ontario, Canada")
+    assert dallas.code == UNRESOLVED
+    assert dallas.evidence[-1].endswith("states country CA"), dallas.evidence
+
+
+def test_i2_only_the_business_address_reads_the_state_after_the_code():
+    """Exclusion, inclusion and observed readings of the same text keep the unplaceable code."""
+    text = "US-TX, Texas, USA"
+    for reading in (
+        *exclusion_readings(text),
+        *observed_readings(text),
+        *markets.inclusion_readings(text),
+        parse_market(text),
+        parse_observed(text),
+    ):
+        assert (reading.region, reading.country) == ("US-TX?", "US"), reading
+    stated = markets.read_business_address(text).stated
+    assert (stated.city, stated.region, stated.country) == (None, "US-TX", "US")
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "code", "why"),
+    [
+        (
+            _location("Abuja", "Federal Capital Territory", "Nigeria"),
+            "NG-FC, Federal Capital Territory, Nigeria",
+            "NG-FC",
+            "the suffixed name is itself a form, so two forms stand before the country",
+        ),
+        (
+            _location("Minna", "Niger", "Nigeria"),
+            "NG-NI, Niger, Nigeria",
+            "NG-NI",
+            "Niger is also a country, so it is neither a town nor read as the state's own name",
+        ),
+    ],
+)
+def test_i2_leaves_two_of_the_reviews_84_own_rows_unresolved(location, address, code, why):
+    """The 2 of the review's 84 own rows the I-2 reading does not resolve (r3b §5), pinned as they
+    are: refused for their own location, with words. Written town first they resolve."""
+    result = _resolve(location, address)
+    assert result.code == UNRESOLVED, why
+    assert result.evidence[-1].endswith(UNPLACED.format(code)), (why, result.evidence)
+    assert _resolve(location, f"{location.city}, {code}, Nigeria").code == code
