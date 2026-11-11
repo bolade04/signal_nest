@@ -418,14 +418,15 @@ def _alternatives(text: str) -> tuple[MarketIdentity, ...]:
     observed = parse_observed(text)
     if observed is None or observed.country is not None or _unlisted_code_form(text):
         return ()
+    spaced = _spaced_code_form(text)
+    if spaced is not None:
+        return _spaced_group(spaced, text)
     parts = _clean_parts(text)
     last = whole = parts[-1]
     if len(parts) == 1 and last not in CITY_FIRST_NAMES and not _area_candidates(last):
         split = _split_trailing_code(last)
         if split is None:
             return ()
-        if len(split[0]) == 2 and _country_code(split[0]) and last not in _FOLDED_SUBDIVISION_CODES:
-            return ()  # C-9: a bare unlisted code form with a space ("NG LA") states nothing
         last = split[1]
     if last in CITY_FIRST_NAMES:
         return ()
@@ -533,6 +534,10 @@ def _part_groups(
         return [], []
     town, code = split
     explicit_code = " ".join(folded.split()[-2:]) in _FOLDED_SUBDIVISION_CODES
+    spaced = None if explicit_code else _spaced_code_form(part)
+    if spaced is not None:
+        group = _spaced_group(spaced, part)
+        return ([group] if group else []), []
     if (len(town) == 2 and _country_code(town) and not explicit_code) or (
         not explicit_code and _unlisted_code_form(part)
     ):
@@ -542,8 +547,11 @@ def _part_groups(
     return list(_groups(part)), []
 
 
-#: An ISO 3166-2 form at the end of a part as written: "DE-BY", "Munich DE-BY", "IN-MH".
-_TRAILING_CODE_FORM: Final = re.compile(r"(?:^|[^A-Za-z])([A-Za-z]{2})\s*-\s*[A-Za-z]{1,3}\s*$")
+#: An ISO 3166-2 form at the end of a part as written: "DE-BY", "Munich DE-BY", "IN-MH", also with
+#: a typographic dash ("NG\u2013LA").
+_TRAILING_CODE_FORM: Final = re.compile(
+    r"(?:^|[^A-Za-z])([A-Za-z]{2})\s*[-\u2010-\u2015\u2212]\s*[A-Za-z]{1,3}\s*$"
+)
 #: Trailing words with a digit (a postcode, "Munich DE-BY 80331"), as :func:`_strip_postcode` drops.
 _TRAILING_POSTCODE: Final = re.compile(r"(?:\s+\S*\d\S*)+\s*$")
 
@@ -557,6 +565,41 @@ def _unlisted_code_form(part: str) -> bool:
     if match is None or _country_code(match[1].lower()) is None:
         return False
     return " ".join(_strip_postcode(fold(last)).split()[-2:]) not in _FOLDED_SUBDIVISION_CODES
+
+
+#: An ISO 3166-2 form written with a space at the end of a part ("Munich DE BY", "Ikeja NG LA").
+_SPACED_CODE_FORM: Final = re.compile(r"(?:^|\s)([A-Za-z]{2})\s+([A-Za-z]{1,3})\s*$")
+
+
+def _spaced_code_form(part: str) -> tuple[str, str] | None:
+    """``(country, letters)`` when ``part`` (or its last part) ends, before a postcode, in "XX YY":
+    XX a country code and "XX YY" not a listed subdivision code ("Munich DE BY", "Ikeja NG LA",
+    "NG LA", "Harris Co TX"). It is a code form of XX or the code YY after a word (W21-REV-D1STREET
+    r2 re-bind C-12). XX may not be a street-type abbreviation after other words ("123 MAIN ST
+    NE" is C-8's NE case); alone with YY it is a code form too ("PL MA"). Dots and apostrophes are
+    dropped first, as :func:`fold` drops them ("N.G. LA")."""
+    last = _PART_SEPARATORS.split(part.rstrip(",;/\r\n \t"))[-1]
+    written = _TRAILING_POSTCODE.sub("", re.sub(r"[.'’`´]", "", last).rstrip())
+    match = _SPACED_CODE_FORM.search(written)
+    if match is None:
+        return None
+    country, letters = match[1].lower(), match[2].lower()
+    if _country_code(country) is None or f"{country} {letters}" in _FOLDED_SUBDIVISION_CODES:
+        return None
+    if country in STREET_SUFFIXES and len(written.split()) > 2:
+        return None
+    return country.upper(), letters
+
+
+def _spaced_group(spaced: tuple[str, str], label: str) -> tuple[MarketIdentity, ...]:
+    """C-12: both readings of a spaced code form, the country XX and each reading of YY; empty when
+    YY names no area ("AL ULA")."""
+    country, letters = spaced
+    areas = _area_candidates(letters)
+    if not areas:
+        return ()
+    readings = [(country, None)] + [area for area in areas if area != (country, None)]
+    return tuple(MarketIdentity(region=r, country=c, label=label) for c, r in readings)
 
 
 def _part_reading(part: str) -> tuple[list[MarketIdentity], list[MarketIdentity]]:
@@ -578,6 +621,8 @@ def _part_reading(part: str) -> tuple[list[MarketIdentity], list[MarketIdentity]
         return _placed(parse_observed(part)), []
     if (len(town) == 2 and _country_code(town)) or _unlisted_code_form(part):
         return [], []
+    if _spaced_code_form(part) is not None:
+        return [], []  # C-12: read as a group of both readings (_part_groups)
     if code in STREET_SUFFIXES:
         return [], _placed(parse_observed(part))
     return _placed(parse_observed(part)), []

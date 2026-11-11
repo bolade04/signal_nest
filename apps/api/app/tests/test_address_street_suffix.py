@@ -40,6 +40,9 @@ These tests prove:
   it is refused when every reading contradicts, asks for clarification when it ends an ambiguous
   street line ("1 SPRING HILL ST NE"), and agrees in the location's own area (C-8);
 * line breaks and semicolons separate parts as commas do (C-10);
+* an unlisted code form written with a space ("Munich DE BY", "Ikeja NG LA") is read as a group of
+  both readings, the country of the code form or the code after a word, under C-8's rule
+  (W21-REV-D1STREET r2 re-bind C-12);
 * any other text reads exactly as an observed market does, and only the business-address reader
   reads differently (the live Scout readers do not);
 * lane 5DW2FIX's realistic-address corpus (924 rows) resolves to each row's own location, except
@@ -760,6 +763,12 @@ UNLISTED_CODE_FORMS = [
     (LAGOS, "NG-LA", "Lekki NG-LA"),
     (LAGOS, "NG-LA", "NG LA"),
     (MUNICH, "DE", "Marienplatz 1, 80331 Munich, DE BY"),
+    # With a typographic dash, or another separator that folding reads as a space (lane r8).
+    (MUNICH, "DE", "Marienplatz 1, Munich DE\u2013BY"),
+    (MUNICH, "DE", "Marienplatz 1, Munich DE \u2013 BY"),
+    (LAGOS, "NG-LA", "Plot 1, Lekki NG\u2013LA"),
+    (LAGOS, "NG-LA", "NG\u2013LA"),
+    (MUNICH, "DE", "Marienplatz 1, 80331 Munich, DE_BY"),
 ]
 
 
@@ -842,6 +851,97 @@ def test_a_line_break_settles_or_agrees_as_a_comma_does(location, code, address)
     resolution = _resolve(location, address)
     assert resolution.code == code
     assert resolution.reason is None
+
+
+# --------------------------------------------------------------------------- #
+# An unlisted code form written with a space (W21-REV-D1STREET r2 re-bind C-12): the reviewer's
+# proposed tests (r2b/proposed/test_rev_r2b_c12_proposed.py), with exact evidence, plus the lane's
+# r8 rows. "XX YY" is the country XX of a code form, or the code YY after a word; both readings
+# form a group, so the business's own address agrees and every-reading contradictions are refused.
+# --------------------------------------------------------------------------- #
+
+BOGOTA = _location("Bogota", "Bogota", "Colombia")
+MILAN = _location("Milan", "Lombardy", "Italy")
+HOUSTON = _location("Houston", "TX", "US")
+ALULA = _location("AlUla", "Medina", "Saudi Arabia")
+KRAKOW = _location("Krakow", "Malopolskie", "Poland")
+
+SPACED_OWN = [
+    (MUNICH, "DE", "Marienplatz 1, Munich DE BY"),
+    (MUNICH, "DE", "Marienplatz 1, Munich DE BY 80331"),
+    (MUNICH, "DE", "Marienplatz 1, Munich De By"),
+    (MUMBAI, "IN", "Shop 5, Andheri IN MH"),
+    (BOGOTA, "CO", "Calle 1, Bogota CO DC"),
+    (MILAN, "IT", "Via Roma 1, Milano IT MI"),
+    (LAGOS, "NG-LA", "Ikeja NG LA"),
+    (LAGOS, "NG-LA", "1 Main Rd, Ikeja NG LA"),
+    (LAGOS, "NG-LA", "Plot 1, Lekki NG LA"),
+    (LAGOS, "NG-LA", "NG LA"),
+    (HOUSTON, "US-TX", "1500 BROADWAY, HARRIS CO TX"),
+    (ATLANTA, "US-GA", "1500 BROADWAY, FULTON CO GA"),
+    (ALULA, "SA", "Old Town, AL ULA"),
+    # The lane's r8 rows: dots dropped as folding drops them, and a bare form whose country code
+    # is also a street-type abbreviation ("PL" alone with a code is no street).
+    (LAGOS, "NG-LA", "N.G. LA"),
+    (KRAKOW, "PL", "PL MA"),
+]
+
+
+@pytest.mark.parametrize(
+    ("location", "code", "address"), SPACED_OWN, ids=[a for _, _, a in SPACED_OWN]
+)
+def test_a_spaced_code_form_does_not_refuse_its_own_location(location, code, address):
+    resolution = _resolve(location, address)
+    assert resolution.code == code, resolution.evidence
+    assert resolution.reason is None
+
+
+SPACED_CONTRADICTING = [
+    (DALLAS, "Marienplatz 1, Munich DE BY", "country DE or country BY"),
+    (DALLAS, "Ikeja NG LA", "country NG or country LA or subdivision US-LA"),
+    (HARTFORD, "1500 Broadway, Harris Co TX", "country CO or subdivision US-TX"),
+    (HARTFORD, "1500 BROADWAY, HARRIS CO TX", "country CO or subdivision US-TX"),
+    (LONDON, "1500 BROADWAY, FULTON CO GA", "country CO or country GA or country US"),
+    (DALLAS, "ST NE", "country ST or country NE or subdivision US-NE"),
+    (DALLAS, "1 Main Rd, ST NE", "country ST or country NE or subdivision US-NE"),
+]
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "conflict"),
+    SPACED_CONTRADICTING,
+    ids=[f"{loc.city}:{a}" for loc, a, _ in SPACED_CONTRADICTING],
+)
+def test_a_spaced_code_form_that_contradicts_in_every_reading_is_refused(
+    location, address, conflict
+):
+    resolution = _resolve(location, address)
+    assert resolution.code == UNRESOLVED
+    assert resolution.reason is None
+    assert resolution.evidence[-1] == (
+        f"unresolved: coverage rule 0 business address {address!r} states {conflict}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("location", "address"),
+    [(DALLAS, "NG LA"), (LONDON, "NG LA"), (DALLAS, "N.G. LA")],
+    ids=["Dallas:NG LA", "London:NG LA", "Dallas:N.G. LA"],
+)
+def test_a_bare_spaced_code_form_that_contradicts_is_refused(location, address):
+    """Asserted by outcome only: here the group's readings all contradict ("states country NG or
+    country LA or ..."); lane 5DW2FIX (816fc941) reads a bare "NG LA" as the jurisdiction form NG-LA
+    and refuses it as "states country NG"."""
+    resolution = _resolve(location, address)
+    assert resolution.code == UNRESOLVED
+    assert resolution.reason is None
+
+
+@pytest.mark.parametrize("address", ["1500 Broadway, US CA", "1 Main St, Los Angeles, US CA"])
+def test_a_listed_code_written_with_a_space_stays_explicit(address):
+    resolution = _resolve(TORONTO, address)
+    assert resolution.code == UNRESOLVED
+    assert resolution.evidence[-1].endswith("states country US"), resolution.evidence
 
 
 #: The live Scout readers' reading of street lines, as measured at main e3571ac8.
