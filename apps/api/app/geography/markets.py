@@ -329,12 +329,19 @@ def _written_words(text: str) -> list[str]:
     return words
 
 
+#: What separates the parts of a business address (W21-REV-D1STREET r2 C-10): a comma, a semicolon,
+#: a slash or a line break ("123 MAIN ST / DALLAS"). A unit written "5/12 Main St" reads as the
+#: parts "5" and "12 Main St", which state what the whole line states.
+_PART_SEPARATORS: Final = re.compile(r"[,;/\r\n]")
+
+
 def _written_parts(text: str) -> list[str]:
-    """The comma-separated parts of ``text`` as written that name something (the parts
-    :func:`_clean_parts` keeps)."""
+    """The parts of ``text`` as written that name something (the parts :func:`_clean_parts`
+    keeps), separated by :data:`_PART_SEPARATORS` ("123 MAIN ST\nDALLAS" reads as "123 MAIN ST,
+    DALLAS")."""
     return [
         raw
-        for raw in text.split(",")
+        for raw in _PART_SEPARATORS.split(text)
         if (part := _strip_postcode(fold(raw))) and part not in _EMPTY_PARTS
     ]
 
@@ -393,21 +400,64 @@ class BusinessAddressReading:
     stated: MarketIdentity | None
     parts: tuple[MarketIdentity, ...] = ()
     ambiguous: tuple[MarketIdentity, ...] = ()
+    #: C-8 (F6): the readings of a qualifier that names two or more areas and that place knowledge
+    #: leaves undecided ("Dallas, GA": Georgia or Gabon), one group per qualifier; explicit text
+    #: (``alternatives``) or an ambiguous street line or part (``ambiguous_alternatives``).
+    alternatives: tuple[tuple[MarketIdentity, ...], ...] = ()
+    ambiguous_alternatives: tuple[tuple[MarketIdentity, ...], ...] = ()
+
+
+def _alternatives(text: str) -> tuple[MarketIdentity, ...]:
+    """Each area reading of ``text``'s qualifier when :func:`parse_observed` places none because
+    it names two or more areas that place knowledge does not decide; empty otherwise.
+
+    A listed subdivision code keeps only the reading its country prefix names: "US-CA" is
+    California, never Canada, and "US-AL" Alabama, never Albania. An unlisted code form has no
+    readings ("NG-LA", "Lekki NG-LA" and a bare "NG LA" are not Laos or Louisiana; C-9).
+    """
+    observed = parse_observed(text)
+    if observed is None or observed.country is not None or _unlisted_code_form(text):
+        return ()
+    parts = _clean_parts(text)
+    last = whole = parts[-1]
+    if len(parts) == 1 and last not in CITY_FIRST_NAMES and not _area_candidates(last):
+        split = _split_trailing_code(last)
+        if split is None:
+            return ()
+        if len(split[0]) == 2 and _country_code(split[0]) and last not in _FOLDED_SUBDIVISION_CODES:
+            return ()  # C-9: a bare unlisted code form with a space ("NG LA") states nothing
+        last = split[1]
+    if last in CITY_FIRST_NAMES:
+        return ()
+    areas = _area_candidates(last)
+    listed = whole.split()[-2:]
+    if " ".join(listed) in _FOLDED_SUBDIVISION_CODES:
+        areas = [(c, r) for c, r in areas if c == listed[0].upper()]
+    elif len(areas) < 2:
+        return ()
+    return tuple(MarketIdentity(region=r, country=c, label=text) for c, r in areas)
+
+
+def _groups(*texts: str) -> tuple[tuple[MarketIdentity, ...], ...]:
+    return tuple(g for g in (_alternatives(t) for t in texts) if g)
 
 
 def read_business_address(text: str | None) -> BusinessAddressReading:
     """Read a business's own address (a coverage rule's ``business_address``).
 
-    A comma-free address that is an ambiguous street line has an ambiguous reading. In an
-    address with commas, the whole text is read as before (a postcode alone in a later part is
-    left out, so "..., Hartford, CT, 06103, USA" reads Connecticut), and each part after the
-    first is also read on its own when it ends in a code:
+    Parts are separated by commas, semicolons, slashes or line breaks (C-10;
+    :data:`_PART_SEPARATORS`). An address of one part that
+    is an ambiguous street line has an ambiguous reading. In an address of several parts, the
+    whole text is read as before (a postcode alone in a later part is left out, so "...,
+    Hartford, CT, 06103, USA" reads Connecticut), and each part after the first is also read on
+    its own when it ends in a code:
 
     * a street line: a clear one states nothing, an ambiguous one is ambiguous
       ("Suite 5, 1500 Broadway CT");
     * a listed subdivision code, alone or at its end ("US-TX", "Hartford US-CT"), or a town and a
       code that is not a street-type abbreviation ("Dallas TX", "Sydney NSW"): states that place;
-    * an unlisted code form ("DE-BY", "NG-PL"): nothing, as before;
+    * an unlisted code form ("DE-BY", "NG-PL"), alone or after a town and before any postcode
+      ("Munich DE-BY", "Andheri IN-MH 400053"): nothing, as on main (C-9);
     * a town and a code that is also a street-type abbreviation ("Hartford CT", "Warszawa PL",
       "Kings Ct"): ambiguous, since it may be a street.
 
@@ -417,6 +467,12 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
     postcode or a unit ("Suite 200", "06103"; a label that is also a code, "FL-12", is not a unit),
     the address is read as its first part alone, as a comma-free address ("1500 Broadway CT, Suite
     200").
+
+    A qualifier that names two or more areas that place knowledge leaves undecided ("Dallas, GA":
+    Georgia or Gabon; "1 SPRING HILL ST NE": Nebraska or Niger) keeps its readings as a group,
+    never as nothing (C-8): ``alternatives`` for explicit text, ``ambiguous_alternatives`` for an
+    ambiguous street line or part. A listed subdivision code keeps only the reading its country
+    prefix names ("US-CA" is California).
     """
     if text is None:
         return BusinessAddressReading(None)
@@ -427,11 +483,17 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
         text, raw_parts = raw_parts[0], raw_parts[:1]
     if len(raw_parts) < 2:
         stated = _parse(text, None, qualify=False, known=None, street_address=True)
-        ambiguous = (
-            parse_observed(text) if street_line_kind(text) == STREET_LINE_AMBIGUOUS else None
+        kind = street_line_kind(text)
+        ambiguous = parse_observed(text) if kind == STREET_LINE_AMBIGUOUS else None
+        return BusinessAddressReading(
+            stated,
+            (),
+            tuple(_placed(ambiguous)),
+            _groups(text) if kind is None else (),
+            _groups(text) if kind == STREET_LINE_AMBIGUOUS else (),
         )
-        return BusinessAddressReading(stated, (), tuple(_placed(ambiguous)))
     kept, parts, ambiguous = [raw_parts[0]], [], []
+    groups, ambiguous_groups = [], []
     for part in raw_parts[1:]:
         folded = _strip_postcode(fold(part))
         if all(_HAS_DIGIT.search(word) for word in folded.split()):
@@ -440,13 +502,61 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
         stated_here, maybe = _part_reading(part)
         parts += stated_here
         ambiguous += maybe
+        explicit_here, ambiguous_here = _part_groups(part)
+        groups += explicit_here
+        ambiguous_groups += ambiguous_here
     stated = _parse(", ".join(kept), None, qualify=False, known=None, street_address=True)
     # C-6 and FU-R1 (ambiguous readings only): a first part whose last word may be a street type or
     # a code ("1500 Broadway Hartford CT, USA", "123 MAIN ST, DALLAS") is ambiguous, never nothing,
     # whatever the later parts state. Explicit geography in the address settles that reading or
     # rules it out (``_address_check``); a town alone ("..., DALLAS") does neither.
     ambiguous = _part_reading(raw_parts[0])[1] + ambiguous
-    return BusinessAddressReading(stated, tuple(parts), tuple(ambiguous))
+    groups = list(_groups(", ".join(kept))) + groups
+    ambiguous_groups = _part_groups(raw_parts[0])[1] + ambiguous_groups
+    return BusinessAddressReading(
+        stated, tuple(parts), tuple(ambiguous), tuple(groups), tuple(ambiguous_groups)
+    )
+
+
+def _part_groups(
+    part: str,
+) -> tuple[list[tuple[MarketIdentity, ...]], list[tuple[MarketIdentity, ...]]]:
+    """(explicit, ambiguous) C-8 groups of one part, as :func:`_part_reading` branches."""
+    folded = _strip_postcode(fold(part))
+    kind = _street_kind(part)
+    if kind is not None:
+        return [], (list(_groups(part)) if kind == STREET_LINE_AMBIGUOUS else [])
+    if folded in CITY_FIRST_NAMES or _area_candidates(folded):
+        return [], []
+    split = _split_trailing_code(folded)
+    if split is None:
+        return [], []
+    town, code = split
+    explicit_code = " ".join(folded.split()[-2:]) in _FOLDED_SUBDIVISION_CODES
+    if (len(town) == 2 and _country_code(town) and not explicit_code) or (
+        not explicit_code and _unlisted_code_form(part)
+    ):
+        return [], []
+    if code in STREET_SUFFIXES:
+        return [], list(_groups(part))
+    return list(_groups(part)), []
+
+
+#: An ISO 3166-2 form at the end of a part as written: "DE-BY", "Munich DE-BY", "IN-MH".
+_TRAILING_CODE_FORM: Final = re.compile(r"(?:^|[^A-Za-z])([A-Za-z]{2})\s*-\s*[A-Za-z]{1,3}\s*$")
+#: Trailing words with a digit (a postcode, "Munich DE-BY 80331"), as :func:`_strip_postcode` drops.
+_TRAILING_POSTCODE: Final = re.compile(r"(?:\s+\S*\d\S*)+\s*$")
+
+
+def _unlisted_code_form(part: str) -> bool:
+    """Does ``part`` (or the last part of ``part``) end, before any postcode, in an ISO 3166-2 form
+    of a country whose subdivision is not listed ("Munich DE-BY", "Andheri IN-MH 400053")? Its
+    letters after the hyphen are not a code on their own; the form states nothing."""
+    last = _PART_SEPARATORS.split(part.rstrip(",;/\r\n \t"))[-1]
+    match = _TRAILING_CODE_FORM.search(_TRAILING_POSTCODE.sub("", last.rstrip()))
+    if match is None or _country_code(match[1].lower()) is None:
+        return False
+    return " ".join(_strip_postcode(fold(last)).split()[-2:]) not in _FOLDED_SUBDIVISION_CODES
 
 
 def _part_reading(part: str) -> tuple[list[MarketIdentity], list[MarketIdentity]]:
@@ -466,7 +576,7 @@ def _part_reading(part: str) -> tuple[list[MarketIdentity], list[MarketIdentity]
         or " ".join(folded.split()[-2:]) in _FOLDED_SUBDIVISION_CODES
     ):
         return _placed(parse_observed(part)), []
-    if len(town) == 2 and _country_code(town):
+    if (len(town) == 2 and _country_code(town)) or _unlisted_code_form(part):
         return [], []
     if code in STREET_SUFFIXES:
         return [], _placed(parse_observed(part))

@@ -34,7 +34,12 @@ These tests prove:
   200");
 * in an address with commas, a part after the first that ends in a code is read: "1500
   Broadway, Dallas TX" states US-TX, "1500 Broadway, Hartford CT" is ambiguous (CT may be a
-  street type), a postcode alone is left out, and an unlisted code form ("DE-BY") reads as before;
+  street type), a postcode alone is left out, and an unlisted code form ("DE-BY"), alone or after a
+  town ("Munich DE-BY"), reads as before (W21-REV-D1STREET r2 C-9);
+* a code that names two or more areas ("Dallas, GA": Georgia or Gabon) is never read as nothing:
+  it is refused when every reading contradicts, asks for clarification when it ends an ambiguous
+  street line ("1 SPRING HILL ST NE"), and agrees in the location's own area (C-8);
+* line breaks and semicolons separate parts as commas do (C-10);
 * any other text reads exactly as an observed market does, and only the business-address reader
   reads differently (the live Scout readers do not);
 * lane 5DW2FIX's realistic-address corpus (924 rows) resolves to each row's own location, except
@@ -274,7 +279,6 @@ AMBIGUOUS = [
     (DALLAS, "10 Ermou Athens GR", "country GR"),
     (DALLAS, "1 Rua X Sao Tome ST", "country ST"),
     (DALLAS, "1500 Broadway\nHartford CT", "subdivision US-CT"),
-    (DALLAS, "1500 Broadway; CT", "subdivision US-CT"),
     (DALLAS, "3 Kings CT", "subdivision US-CT"),
     (DALLAS, "123 MAIN ST", "country ST"),
     (DALLAS, "123 main st", "country ST"),
@@ -594,6 +598,8 @@ CONTRADICTING = [
     (DALLAS, "1500 Broadway, Hartford US CT", "states subdivision US-CT"),
     # A unit label that is also a code is not a unit: "FL-12" is a Florida road (C-6).
     (DALLAS, "Suite 5, FL-12", "states subdivision US-FL"),
+    # A semicolon separates parts as a comma does, so a lone "CT" is explicit (C-10).
+    (DALLAS, "1500 Broadway; CT", "states subdivision US-CT"),
     # Explicit geography after an ambiguous first part is still read (FU-R1).
     (DALLAS, "123 MAIN ST, HARTFORD, CT", "states subdivision US-CT"),
     (DALLAS, "1500 Broadway Hartford CT, Hartford, CT", "states subdivision US-CT"),
@@ -610,6 +616,232 @@ def test_contradicting_addresses_are_still_refused(location, address, conflict):
     assert resolution.evidence[-1] == (
         f"unresolved: coverage rule 0 business address {address!r} {conflict}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# A code of two or more areas (W21-REV-D1STREET r2 C-8), an unlisted code form after a town
+# (C-9), and line breaks and semicolons as separators (C-10). The reviewer's proposed tests
+# (r2/proposed/test_rev_r2_f6_proposed.py), with exact evidence, plus the lane's r7 rows.
+# --------------------------------------------------------------------------- #
+
+OMAHA = _location("Omaha", "NE", "US")
+NIAMEY = _location("Niamey", "Niamey", "Niger")
+ATLANTA = _location("Atlanta", "GA", "US")
+LIBREVILLE = _location("Libreville", "Estuaire", "Gabon")
+CUMMING = _location("Cumming", "GA", "US")
+TIRANA = _location("Tirana", "Tirana", "Albania")
+MUMBAI = _location("Mumbai", "MH", "India")
+
+#: (a) An ambiguous street line whose post-directional NE may be Nebraska or Niger.
+NE_LINES = [
+    "1 SPRING HILL ST NE",
+    "123 MAIN ST NE",
+    "1 Spring Hill St NE",
+    "123 MAIN ST NE, Dallas",
+]
+
+
+@pytest.mark.parametrize(
+    ("location", "conflict"),
+    [(DALLAS, "country NE or subdivision US-NE"), (LONDON, "country NE or country US")],
+    ids=["Dallas", "London"],
+)
+@pytest.mark.parametrize("address", NE_LINES)
+def test_an_ambiguous_street_line_ending_in_ne_asks_for_clarification(location, conflict, address):
+    resolution = _resolve(location, address)
+    assert resolution.code == UNRESOLVED
+    assert resolution.reason == ADDRESS_SUFFIX_AMBIGUOUS
+    assert resolution.evidence[-1] == (
+        f"unresolved: coverage rule 0 business address {address!r} is ambiguous: "
+        f"a street type or {conflict}"
+    )
+
+
+@pytest.mark.parametrize(("location", "code"), [(OMAHA, "US-NE"), (NIAMEY, "NE")])
+@pytest.mark.parametrize("address", NE_LINES)
+def test_an_ambiguous_ne_line_agrees_where_one_reading_is_the_location(location, code, address):
+    resolution = _resolve(location, address)
+    assert resolution.code == code
+    assert resolution.reason is None
+
+
+def test_a_clear_street_line_ending_in_ne_states_nothing():
+    resolution = _resolve(DALLAS, "123 Main St NE")
+    assert resolution.code == "US-TX"
+    assert _states_nothing(resolution)
+
+
+#: (b) Explicit text whose code names two areas, every reading contradicting the location.
+TWO_AREA_CONTRADICTING = [
+    (LONDON, "Dallas, GA", "country GA or country US"),
+    (DALLAS, "Dallas, GA", "country GA or subdivision US-GA"),
+    (LONDON, "Dallas GA", "country GA or country US"),
+    (DALLAS, "GA", "country GA or subdivision US-GA"),
+    (DALLAS, "5945 Main St, Malibu, CA 90265", "country CA or subdivision US-CA"),
+    (LONDON, "5945 Main St, Malibu, CA 90265", "country CA or country US"),
+    (DALLAS, "100 Main St, Kennebunk, ME 04043", "country ME or subdivision US-ME"),
+    (DALLAS, "1500 Broadway, Dallas GA, USA", "country GA or subdivision US-GA"),
+    (DALLAS, "1500 Broadway NE", "country NE or subdivision US-NE"),
+    # A stated country cannot excuse explicit text ("Dallas GA" with "Canada").
+    (TORONTO, "1500 Broadway, Dallas GA, Canada", "country GA or country US"),
+    # A listed subdivision code keeps only the reading its prefix names: "US-CA" is never Canada,
+    # "US-AL" never Albania, "US-GA" never Gabon.
+    (TORONTO, "1500 Broadway, Malibu US-CA", "country US"),
+    (TORONTO, "1500 Broadway US-CA", "country US"),
+    (TIRANA, "1 Main St, Montgomery, US-AL", "country US"),
+    (LIBREVILLE, "Dallas, US-GA", "country US"),
+    (DALLAS, "Dallas, US-GA", "subdivision US-GA"),
+]
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "conflict"),
+    TWO_AREA_CONTRADICTING,
+    ids=[f"{loc.city}:{a}" for loc, a, _ in TWO_AREA_CONTRADICTING],
+)
+def test_a_code_of_two_areas_that_contradicts_in_every_reading_is_refused(
+    location, address, conflict
+):
+    resolution = _resolve(location, address)
+    assert resolution.code == UNRESOLVED
+    assert resolution.reason is None
+    assert resolution.evidence[-1] == (
+        f"unresolved: coverage rule 0 business address {address!r} states {conflict}"
+    )
+
+
+TWO_AREA_AGREEING = [
+    (ATLANTA, "US-GA", "Dallas, GA"),
+    (LIBREVILLE, "GA", "Dallas, GA"),
+    (MALIBU, "US-CA", "5945 Main St, Malibu, CA 90265"),
+    (CUMMING, "US-GA", "100 Main St, Cumming, GA 30040"),
+    (OMAHA, "US-NE", "1500 Broadway NE"),
+    (DALLAS, "US-TX", "Dallas, TX"),
+    (MALIBU, "US-CA", "1500 Broadway, Malibu US-CA"),
+]
+
+
+@pytest.mark.parametrize(
+    ("location", "code", "address"),
+    TWO_AREA_AGREEING,
+    ids=[f"{loc.city}:{a}" for loc, _, a in TWO_AREA_AGREEING],
+)
+def test_a_code_of_two_areas_agrees_where_one_reading_is_the_location(location, code, address):
+    resolution = _resolve(location, address)
+    assert resolution.code == code
+    assert resolution.reason is None
+
+
+def test_a_stated_country_rules_out_an_ambiguous_lines_readings_elsewhere():
+    """An ambiguous street line keeps its street reading, so a stated country rules out its code
+    readings in another country ("123 MAIN ST NE, Toronto, Canada"); explicit text has no such
+    reading (see "1500 Broadway, Dallas GA, Canada" above)."""
+    assert _resolve(TORONTO, "123 MAIN ST NE, Toronto, Canada").code == "CA-ON"
+    resolution = _resolve(DALLAS, "123 MAIN ST NE, USA")
+    assert resolution.reason == ADDRESS_SUFFIX_AMBIGUOUS
+    assert resolution.evidence[-1].endswith("is ambiguous: a street type or subdivision US-NE")
+
+
+#: (C-9) An ISO 3166-2 form whose subdivision is not listed, alone or after a town and before any
+#: postcode, states nothing, as on main and at 816fc941; its letters after the hyphen are no code.
+UNLISTED_CODE_FORMS = [
+    (MUNICH, "DE", "Marienplatz 1, Munich DE-BY"),
+    (_location("Berlin", "Berlin", "Germany"), "DE", "Unter den Linden 1, Berlin DE-BE"),
+    (MUMBAI, "IN", "Shop 5, Andheri IN-MH"),
+    (_location("Bogota", "Bogota", "Colombia"), "CO", "Calle 1, Bogota CO-DC"),
+    (_location("Barcelona", "Catalonia", "Spain"), "ES", "Carrer Gran 1, Barcelona ES-CT"),
+    (_location("Milan", "Lombardy", "Italy"), "IT", "Via Roma 1, Milano IT-MI"),
+    (_location("Chennai", "Tamil Nadu", "India"), "IN", "1 Anna Salai, Chennai IN-TN"),
+    (LAGOS, "NG-LA", "NG-LA"),
+    (LAGOS, "NG-LA", "Plot 1, Lekki NG-LA"),
+    (MUMBAI, "IN", "Shop 5, Andheri IN-MH 400053"),
+    (MUNICH, "DE", "Marienplatz 1, Munich DE-BY 80331"),
+    # With no comma before it, or bare and written with a space, as before.
+    (LAGOS, "NG-LA", "Lekki NG-LA"),
+    (LAGOS, "NG-LA", "NG LA"),
+    (MUNICH, "DE", "Marienplatz 1, 80331 Munich, DE BY"),
+]
+
+
+@pytest.mark.parametrize(
+    ("location", "code", "address"),
+    UNLISTED_CODE_FORMS,
+    ids=[a for _, _, a in UNLISTED_CODE_FORMS],
+)
+def test_an_unlisted_code_form_after_a_town_does_not_refuse_its_own_location(
+    location, code, address
+):
+    resolution = _resolve(location, address)
+    assert resolution.code == code, resolution.evidence
+    # It states nothing here, as on main; lane 5DW2FIX (816fc941) reads a listed jurisdiction form
+    # such as "NG-LA" and adds an "agrees" line. Neither refuses nor asks for clarification.
+    assert resolution.reason is None
+
+
+@pytest.mark.parametrize(
+    ("address", "conflict"),
+    [
+        ("1 King St, Toronto CA-ON", "country CA"),
+        ("1 Martin Pl, Sydney AU-NSW", "country AU"),
+        ("1500 Broadway, Hartford US-CT", "subdivision US-CT"),
+    ],
+)
+def test_a_listed_code_form_after_a_town_is_still_explicit(address, conflict):
+    resolution = _resolve(DALLAS, address)
+    assert resolution.code == UNRESOLVED
+    assert resolution.reason is None
+    assert resolution.evidence[-1].endswith(f"{address!r} states {conflict}")
+
+
+#: (C-10) A line break or a semicolon after an ambiguous first line separates the parts as a
+#: comma does, so FU-R1 holds whatever the separator.
+SEPARATED = [
+    (HARTFORD, "123 MAIN ST\nDALLAS", "country ST"),
+    (LONDON, "123 MAIN ST\nDALLAS", "country ST"),
+    (HARTFORD, "123 MAIN ST\r\nDALLAS 75201", "country ST"),
+    (HARTFORD, "123 MAIN ST; DALLAS", "country ST"),
+    (DALLAS, "1500 Broadway Hartford CT\nDallas", "subdivision US-CT"),
+    # A slash separates parts too (lane r7).
+    (HARTFORD, "123 MAIN ST / DALLAS", "country ST"),
+    (HARTFORD, "123 MAIN ST/DALLAS", "country ST"),
+]
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "conflict"),
+    SEPARATED,
+    ids=[f"{loc.city}:{a!r}" for loc, a, _ in SEPARATED],
+)
+def test_an_ambiguous_first_line_before_a_line_break_asks_for_clarification(
+    location, address, conflict
+):
+    resolution = _resolve(location, address)
+    assert resolution.code == UNRESOLVED
+    assert resolution.reason == ADDRESS_SUFFIX_AMBIGUOUS
+    assert resolution.evidence[-1] == (
+        f"unresolved: coverage rule 0 business address {address!r} is ambiguous: "
+        f"a street type or {conflict}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("location", "code", "address"),
+    [
+        (DALLAS, "US-TX", "123 MAIN ST\nDALLAS, TX"),
+        (SAO_TOME, "ST", "123 MAIN ST\nSAO TOME"),
+        (HARTFORD, "US-CT", "1500 Broadway Hartford CT\nHartford"),
+        (DALLAS, "US-TX", "123 Main St\nDallas"),
+        (DALLAS, "US-TX", "123 Main St\nDallas, TX 75201"),
+        (DALLAS, "US-TX", "123 MAIN ST / DALLAS, TX"),
+        # A unit written "5/12" (unit 5, number 12) reads as before.
+        (SYDNEY, "AU-NSW", "5/12 Main St"),
+        (DALLAS, "US-TX", "Unit 5 / 12 Main St"),
+    ],
+)
+def test_a_line_break_settles_or_agrees_as_a_comma_does(location, code, address):
+    resolution = _resolve(location, address)
+    assert resolution.code == code
+    assert resolution.reason is None
 
 
 #: The live Scout readers' reading of street lines, as measured at main e3571ac8.
