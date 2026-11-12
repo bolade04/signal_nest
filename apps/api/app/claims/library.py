@@ -98,7 +98,8 @@ def audit_claim_created(
     entry_id: str,
 ) -> None:
     """Write ``claims_library_entry.created`` for one new entry, as ``/claims`` does: the
-    field names in ``context`` and the entry's text and kind in ``new_state``.
+    field names in ``context`` and the entry's ``jurisdiction_codes``, ``kind`` and ``text``
+    (:data:`CLAIM_AUDIT_VALUES`) in ``new_state``.
 
     The entry is the one the caller has just added and flushed in ``db``, so it is read from
     the session (no query)."""
