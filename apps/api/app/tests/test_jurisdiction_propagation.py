@@ -2,10 +2,9 @@
 
 The 5D plan gives this module to lane 5D-W1 (§5): "a brief/draft/review row snapshots the
 jurisdiction, and a jurisdiction-restricted claims-library rule fires only in its
-jurisdictions". **Only the claims half is here.** The snapshot half tests lane 5D-W3's capture
-code in ``briefs/service.py`` and ``creative/service.py``, which does not exist yet and waits
-for the operator's ruling on packet item 33 (and ideally 31); its tests come with that code. No
-placeholder, skipped or expected-failure test stands in for it.
+jurisdictions". The claims half comes first (lane 5D-W1). The snapshot half, which tests lane
+5D-W3's capture code in ``briefs/service.py`` and ``creative/service.py``, is the section lane
+5D-W4 appended below, written after items 33 and 31 were ruled and that code existed (I-5D).
 
 What is proven here, with the shared gate :func:`app.jurisdiction.resolver.jurisdiction_permits`
 deciding every match (codes, never substrings):
@@ -18,12 +17,12 @@ deciding every match (codes, never substrings):
   approved entry only inside one of its codes; a blocking or required-disclaimer entry unless
   the draft's code is known to lie outside all of them.
 * **Fail closed when the draft's jurisdiction is unknown** (``None``, ``UNRESOLVED`` or
-  malformed; every draft today, since nothing captures one before 5D-W3): restricted entries
-  that restrict apply, restricted entries that permit do not. An unreadable stored restriction
-  fails closed both ways.
+  malformed; since 5D-W3 only a legacy draft has none): restricted entries that restrict
+  apply, restricted entries that permit do not. An unreadable stored restriction fails closed
+  both ways (ruling B-2).
 * **End to end through the database**: a rule set through the API and read by
-  :func:`app.claims.library.load_library` fires only in its jurisdictions, and the creative
-  service's own call (``active_entries(load_library(...))``, no jurisdiction) gets the
+  :func:`app.claims.library.load_library` fires only in its jurisdictions, and a call with no
+  jurisdiction (``active_entries(load_library(...))``, as a legacy draft's would be) gets the
   fail-closed reading.
 * **Reachable codes only (operator ruling Q-2, 2026-11-08)**: create and update refuse, with a
   422 naming the code, any code the shared resolver cannot produce (``US-PR``, ``US-ZZ``,
@@ -307,9 +306,10 @@ def test_a_rule_set_through_the_api_fires_only_in_its_jurisdictions(env) -> None
 
 
 def test_callers_that_capture_no_jurisdiction_get_the_fail_closed_reading(env) -> None:
-    """The creative service reads ``active_entries(load_library(db, workspace_id))`` with no
-    jurisdiction (nothing captures one before 5D-W3): every restricted entry that restricts
-    applies, no restricted entry that permits is offered; a hand-written unreadable value too."""
+    """``active_entries(load_library(db, workspace_id))`` with no jurisdiction (the creative
+    service's call before 5D-W3, and a legacy draft's reading since): every restricted entry
+    that restricts applies, no restricted entry that permits is offered; a hand-written
+    unreadable value too."""
     ids = _library_world(env)
     with env.witness.begin() as conn:
         conn.execute(
@@ -621,7 +621,7 @@ def test_q2_the_report_command_runs_read_only_against_a_database(env) -> None:
 # claims half above; the snapshot half tests lane 5D-W3's capture and propagation code
 # (``briefs/service.py``, ``creative/service.py``), and 5D-W3 authors no tests (5d:191), so lane
 # 5D-W4 writes it, independently of W3, as this appended section. W1's rows above are unchanged
-# (the module docstring's note that the snapshot half "waits" predates this section).
+# (at I-5D the module docstring was brought up to date with this section; text only).
 #
 # What is pinned, from the S1-5D rulings record (2026-11-08) and 5d §2's propagation chain
 # location -> brief -> creative -> review:

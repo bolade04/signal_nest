@@ -1899,11 +1899,14 @@ export interface paths {
          * @description Generate a brief from one of the opportunity's intelligence records (editor; gated).
          *
          *     The record must live in this workspace (404) and belong to this opportunity (422); an
-         *     optional campaign must belong to the workspace (404). Answers 429
-         *     ``llm_budget_exhausted`` when the workspace's AI budget is spent, 503
-         *     ``brief_generation_unavailable`` when the model call fails, 422 ``brief_withheld`` when
-         *     the output fails the safety screen, and 409 when a concurrent capture took the version;
-         *     none of these stores a brief.
+         *     optional campaign must belong to the workspace (404). The brief records the jurisdiction
+         *     of the record's location; a record with no location gets a brief with no jurisdiction,
+         *     from which no draft can be generated. Answers 422 ``jurisdiction_unresolved``, before any
+         *     model call or budget use, when the record's location is not one of this workspace's or its
+         *     jurisdiction cannot be determined; 429 ``llm_budget_exhausted`` when the workspace's AI
+         *     budget is spent, 503 ``brief_generation_unavailable`` when the model call fails, 422
+         *     ``brief_withheld`` when the output fails the safety screen, and 409 when a concurrent
+         *     capture took the version; none of these stores a brief.
          */
         post: operations["create_opportunity_brief_api_v1_workspaces__workspace_id__opportunities__opportunity_id__briefs_post"];
         delete?: never;

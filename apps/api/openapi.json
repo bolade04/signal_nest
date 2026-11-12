@@ -17389,7 +17389,7 @@
         ]
       },
       "post": {
-        "description": "Generate a brief from one of the opportunity's intelligence records (editor; gated).\n\nThe record must live in this workspace (404) and belong to this opportunity (422); an\noptional campaign must belong to the workspace (404). Answers 429\n``llm_budget_exhausted`` when the workspace's AI budget is spent, 503\n``brief_generation_unavailable`` when the model call fails, 422 ``brief_withheld`` when\nthe output fails the safety screen, and 409 when a concurrent capture took the version;\nnone of these stores a brief.",
+        "description": "Generate a brief from one of the opportunity's intelligence records (editor; gated).\n\nThe record must live in this workspace (404) and belong to this opportunity (422); an\noptional campaign must belong to the workspace (404). The brief records the jurisdiction\nof the record's location; a record with no location gets a brief with no jurisdiction,\nfrom which no draft can be generated. Answers 422 ``jurisdiction_unresolved``, before any\nmodel call or budget use, when the record's location is not one of this workspace's or its\njurisdiction cannot be determined; 429 ``llm_budget_exhausted`` when the workspace's AI\nbudget is spent, 503 ``brief_generation_unavailable`` when the model call fails, 422\n``brief_withheld`` when the output fails the safety screen, and 409 when a concurrent\ncapture took the version; none of these stores a brief.",
         "operationId": "create_opportunity_brief_api_v1_workspaces__workspace_id__opportunities__opportunity_id__briefs_post",
         "parameters": [
           {

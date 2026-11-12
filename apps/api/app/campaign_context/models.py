@@ -146,7 +146,7 @@ class ClaimsLibraryEntry(Base, _WorkspaceScoped):
     #: Jurisdiction-conditioned claim rules (Project Phase 5D, W21 CF-3): the jurisdiction
     #: codes (``app.jurisdiction.codes``) this entry applies in. NULL or an empty list means
     #: every jurisdiction - the meaning of every entry written before the column existed.
-    #: The claims engine reads it from 5D on; nothing reads it yet.
+    #: The claims engine reads it (``app.claims.engine.active_entries``, since 5D-W1).
     jurisdiction_codes: Mapped[list | None] = mapped_column(JSON)
 
 
