@@ -484,6 +484,30 @@ def without_town_parts(text: str | None, towns: frozenset[str]) -> str | None:
     return ", ".join(raw.strip() for raw in kept if raw.strip())
 
 
+def last_written_part(text: str | None) -> str | None:
+    """The last part of a business address that names something, as the reader splits it."""
+    if not text:
+        return None
+    parts = _written_parts(_other_separators("\n".join(text.splitlines())))
+    return parts[-1] if parts else None
+
+
+def own_reading_of_homonym(stated: MarketIdentity, last: str | None) -> list[_Area]:
+    """The listed homonyms of the last part's name ("Niger": Niger State, X-5) when ``stated`` is
+    that name's own reading (its country a reading of the name; its region, if any, naming no
+    listed area); ``[]`` otherwise."""
+    if last is None or stated.country is None:
+        return []
+    name = address_part_key(last)
+    if stated.country not in {country for country, _ in _area_candidates(name)}:
+        return []
+    if stated.region is not None:
+        region = stated.region.split(":", 1)[-1]
+        if _area_candidates(region) or region in _JURISDICTION_CODE_AREAS:
+            return []
+    return _homonym_areas(name)
+
+
 def _written_parts(text: str) -> list[str]:
     """The parts of ``text`` as written that name something (the parts :func:`_clean_parts`
     keeps), separated by :data:`_PART_SEPARATORS` ("123 MAIN ST\nDALLAS" reads as "123 MAIN ST,

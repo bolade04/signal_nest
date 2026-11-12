@@ -55,6 +55,8 @@ VIENTIANE = _location("Vientiane", None, "Laos")
 ASABA = _location("Asaba", "Delta", "Nigeria")
 WASHINGTON_DC = _location("Washington", "District of Columbia", "United States")
 SEATTLE = _location("Seattle", "Washington", "United States")
+MINNA = _location("Minna", "Niger", "Nigeria")
+NIAMEY = _location("Niamey", None, "Niger")
 
 
 # --------------------------------------------------------------------------- #
@@ -193,3 +195,30 @@ def test_p3_the_city_never_hides_a_contradiction():
     )
     city_field_is_a_code = _location("US-AL", "Alabama", "United States")
     _refused(city_field_is_a_code, "US-AL, 1 Main St, Anchorage, AK", "states subdivision US-AK")
+
+
+# --------------------------------------------------------------------------- #
+# 3b. "Niger": the country, or Niger State (register G-2; ruling P3-R-6)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "address", ["Minna, Niger", "1 Allen Ave, Minna, Niger", "Minna, 1 Allen Ave, Niger"]
+)
+def test_p3_niger_for_a_niger_state_location_asks(address):
+    """ "Niger" is the country and Niger State (X-5). For a Niger State location only Niger State
+    agrees, and nothing settles it: the address asks, where it was refused as the country."""
+    _clarified(
+        MINNA, address, ADDRESS_PLACE_UNCLEAR, "is ambiguous: country NE or subdivision NG-NI"
+    )
+
+
+@pytest.mark.parametrize("address", ["Minna, Niger State", "Minna, Niger, Nigeria"])
+def test_p3_niger_state_or_nigeria_written_settles_it(address):
+    assert _resolve(MINNA, address).code == "NG-NI"
+
+
+def test_p3_niger_never_hides_a_contradiction():
+    _refused(MINNA, "1 Main St, Springfield, AB, Niger", "states country NE")
+    _refused(DALLAS, "Minna, Niger", "states country NE")
+    assert _resolve(NIAMEY, "Niamey, Niger").code == "NE"

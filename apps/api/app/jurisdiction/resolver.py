@@ -73,8 +73,10 @@ from app.geography.markets import (
     PartPlace,
     address_part_key,
     fold,
+    last_written_part,
     normalize_country,
     normalize_region,
+    own_reading_of_homonym,
     read_business_address,
     without_town_parts,
 )
@@ -389,6 +391,14 @@ def _address_check(
     Washington" for Washington, DC, where "Washington" is also Washington State); the second
     reading stands only when it states the location's own area and nothing contradicts it. A
     listed code or a suffixed or prefixed subdivision is never left out.
+
+    GEO-P3 (register G-2; ruling P3-R-6): a last part whose name has a listed homonym ("Niger": the
+    country, or Niger State, X-5) is read as the country, as before, and the homonym never makes the
+    address agree by itself. When the homonym is the only reading that agrees ("Minna, Niger" and
+    "1 Allen Ave, Minna, Niger" for a Niger State location) and nothing settles it, the address
+    asks (:data:`ADDRESS_PLACE_UNCLEAR`: "is ambiguous: country NE or subdivision NG-NI"), after an
+    explicit code elsewhere that contradicts is refused. "Minna, Niger State" and "Minna, Niger,
+    Nigeria" resolve; for any other location the country reading still refuses.
     """
     result = _reading_check(read_business_address(address), address, country, code, city)
     if result[1] is not None and result[2] is None:
@@ -409,9 +419,26 @@ def _reading_check(
 ) -> tuple[bool, str | None, str | None]:
     """:func:`_address_check` for one reading of the address."""
     explicit = [s for s in (reading.stated, *reading.parts) if s is not None and s.country]
-    for stated in explicit:
+    homonym_ask = None
+    last = last_written_part(address)
+    for stated in list(explicit):
         conflict = _conflict(stated, country, code)
         if conflict is not None:
+            if stated is reading.stated:
+                agreeing = [
+                    MarketIdentity(region=r, country=c, label=stated.label)
+                    for c, r in own_reading_of_homonym(stated, last)
+                ]
+                agreeing = [a for a in agreeing if _conflict(a, country, code) is None]
+                if agreeing:
+                    # "Niger" is the country or Niger State: one reading agrees, one contradicts.
+                    explicit.remove(stated)
+                    either = " or ".join(
+                        f"subdivision {_stated_subdivision(a, country) or a.region}"
+                        for a in agreeing
+                    )
+                    homonym_ask = f"is ambiguous: {conflict} or {either}"
+                    continue
             return True, f"states {conflict}", None
     for group in reading.alternatives:
         # Every reading is a place: a stated country cannot excuse them ("Dallas GA, Canada").
@@ -421,6 +448,10 @@ def _reading_check(
         unsettled = _unsettled_homonym(group, found, reading, explicit, country, code)
         if unsettled is not None:
             return True, f"is ambiguous: {unsettled}", ADDRESS_PLACE_UNCLEAR
+    if homonym_ask is not None and not any(
+        p.kind == PLACE_CODE and _part_conflicts(p, country, code) for p in reading.places
+    ):
+        return True, homonym_ask, ADDRESS_PLACE_UNCLEAR
     towns = _town_keys(city)
     # W21-REV-GEO r1 C-1: the first part's "town code" is compared whatever the city, as a code is.
     first_parts = [p for p in reading.places if p.kind == PLACE_FIRST_PART]
