@@ -366,6 +366,8 @@ def test_r1_c1_a_floor_shaped_part_after_a_town_asks(address):
         "123 Main St, Fl 3",
         "1 Main St, Dallas, TX 75201, Fl 3",
         "ACME, Fl 3, 123 Main St, Dallas, TX",
+        # Review GEO-P2 r2 C-6 (mutant Y3): after a town written with its state's code, a floor.
+        "1 Main St, Dallas TX, Fl 3",
     ],
 )
 def test_r1_c1_a_floor_after_a_street_or_a_state_or_before_a_street_stays_a_floor(address):
@@ -391,10 +393,14 @@ def test_r1_c2_a_county_road_or_a_direction_is_no_route_code(location, address, 
     [
         (IKEJA, "No 1234, Allen Avenue, Ikeja, Lagos", "NG-LA"),
         (KUALA_LUMPUR, "NO 1234, Jalan Ampang, Kuala Lumpur", "MY"),
+        # Review GEO-P2 r2 C-6 (mutant Y8): five digits, the length of a ZIP code, in both cases.
+        (IKEJA, "No 12345, Allen Avenue, Ikeja, Lagos", "NG-LA"),
+        (KUALA_LUMPUR, "NO 12345, Jalan Ampang, Kuala Lumpur", "MY"),
     ],
 )
 def test_r1_c3_a_unit_label_before_a_long_number_is_a_unit(location, address, code):
-    """C-3: only "FL" before a ZIP code leaves the unit-label reading; "No 1234" is a number."""
+    """C-3: only "FL" before a ZIP code leaves the unit-label reading; "No 1234" and "No 12345" are
+    numbers."""
     assert _resolve(location, address).code == code
 
 
