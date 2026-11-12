@@ -12,10 +12,14 @@ Built on the P6-PRIV-1 world (``_privacy_support``: organization A with ALICE th
 admin and CAROL a viewer whose address is verified; B the bystander), through the real routes,
 on SQLite and on PostgreSQL (``TEST_POSTGRES_URL``; unset FAILS in CI and skips elsewhere).
 
-* **The shape.** A create records ``new_state = {kind, text}``; every update records the
-  values before (``previous_state``) and after (``new_state``), whichever fields changed; a
-  retirement records ``previous_state``. ``context`` keeps the field names; no other field's
-  value is recorded. The chain rebuilds the entry's history.
+* **The shape.** A create records ``new_state = {jurisdiction_codes, kind, text}``; every
+  update records the values before (``previous_state``) and after (``new_state``), whichever
+  fields changed; a retirement records ``previous_state``. ``context`` keeps the field names; no
+  other field's value is recorded. The chain rebuilds the entry's history.
+* **Jurisdiction codes (coordinator addition A-R-3, beyond the ruling's minimum).** Since 5D-W1
+  an entry's ``jurisdiction_codes`` decide where it applies, so they are recorded beside kind and
+  text, as stored: a codes-only edit records the codes before and after, a retirement records
+  the codes that stop applying, and a legacy entry's NULL codes are recorded as NULL.
 * **Access.** The audit read returns the text to OWNER, ADMIN and COMPLIANCE_REVIEWER only; a
   marketer, reviewer or viewer is refused (and can still read the live library).
 * **Export.** The organization export carries the values; the steward's account export never
@@ -137,11 +141,15 @@ def _states(env: PrivacyEnv, claim_id: str) -> list[tuple]:
     return [(a["action"], a["previous_state"], a["new_state"]) for a in _audits(env, claim_id)]
 
 
+#: The history's jurisdiction restriction (A-R-3): recorded beside kind and text.
+CODES = ["US-TX"]
+
+
 def _history(env: PrivacyEnv) -> str:
     """A claim created naming CAROL, edited (text, then kind, then category only), then edited
     again to remove her address — the live entry no longer names her; its audit rows do."""
     claim_id = _create(env, ALICE, {"text": NAMING_CAROL, "kind": "approved",
-                                     "category": "health"})
+                                     "category": "health", "jurisdiction_codes": CODES})
     _patch(env, DAVE, claim_id, {"kind": "restricted"})
     _patch(env, ALICE, claim_id, {"category": "testimonial"})
     _patch(env, DAVE, claim_id, {"text": "Recommended by our customers"})
@@ -155,9 +163,10 @@ def test_create_update_and_retire_record_the_previous_and_new_text_and_kind(env)
     claim_id = _history(env)
     _retire(env, ALICE, claim_id)
 
-    named = {"kind": "approved", "text": NAMING_CAROL}
-    restricted = {"kind": "restricted", "text": NAMING_CAROL}
-    edited = {"kind": "restricted", "text": "Recommended by our customers"}
+    named = {"jurisdiction_codes": CODES, "kind": "approved", "text": NAMING_CAROL}
+    restricted = {"jurisdiction_codes": CODES, "kind": "restricted", "text": NAMING_CAROL}
+    edited = {"jurisdiction_codes": CODES, "kind": "restricted",
+              "text": "Recommended by our customers"}
     assert _states(env, claim_id) == [
         ("claims_library_entry.created", None, named),
         ("claims_library_entry.updated", named, restricted),
@@ -170,7 +179,7 @@ def test_create_update_and_retire_record_the_previous_and_new_text_and_kind(env)
         {"fields": ["kind"]}, {"fields": ["category"]}, {"fields": ["text"]},
         {"fields": ["retired_at"]},
     ]
-    # Only text and kind: the category's values are never recorded.
+    # Only codes, kind and text: the category's values are never recorded.
     states = json.dumps([[a["previous_state"], a["new_state"]] for a in _audits(env, claim_id)])
     assert "health" not in states and "testimonial" not in states
 
@@ -185,13 +194,51 @@ def test_the_audit_chain_rebuilds_the_entrys_history(env):
     with env.session() as s:
         live = claim_audit_values(s.get(ClaimsLibraryEntry, claim_id))
     assert rows[-1]["new_state"] == live
-    assert tuple(sorted(live)) == CLAIM_AUDIT_VALUES == ("kind", "text")
+    assert tuple(sorted(live)) == CLAIM_AUDIT_VALUES == ("jurisdiction_codes", "kind", "text")
 
 
 def test_an_empty_update_writes_no_audit_record(env):
     claim_id = _create(env, ALICE, {"text": "Locally roasted"})
     _patch(env, ALICE, claim_id, {})
     assert [a["action"] for a in _audits(env, claim_id)] == ["claims_library_entry.created"]
+
+
+def test_jurisdiction_codes_are_recorded_on_create_update_and_retire(env):
+    """A-R-3: a codes-only edit records the codes before and after it (so the entry's
+    applicability can be rebuilt), and a retirement records the codes that stop applying."""
+    claim_id = _create(env, ALICE, {"text": "Free parking all weekend", "kind": "blocked",
+                                     "jurisdiction_codes": ["US-TX"]})
+    _patch(env, DAVE, claim_id, {"jurisdiction_codes": ["US-TX", "GB"]})
+    _patch(env, ALICE, claim_id, {"jurisdiction_codes": []})  # every jurisdiction
+    _retire(env, DAVE, claim_id)
+
+    def state(codes):
+        return {"jurisdiction_codes": codes, "kind": "blocked",
+                "text": "Free parking all weekend"}
+
+    assert _states(env, claim_id) == [
+        ("claims_library_entry.created", None, state(["US-TX"])),
+        ("claims_library_entry.updated", state(["US-TX"]), state(["US-TX", "GB"])),
+        ("claims_library_entry.updated", state(["US-TX", "GB"]), state([])),
+        ("claims_library_entry.retired", state([]), None),
+    ]
+    assert [a["context"] for a in _audits(env, claim_id)][1:3] == [
+        {"fields": ["jurisdiction_codes"]}, {"fields": ["jurisdiction_codes"]},
+    ]
+
+
+def test_a_legacy_entrys_null_codes_are_recorded_as_stored(env):
+    """An entry written before the column existed has NULL codes (every jurisdiction): the
+    audit records NULL, not a guessed list."""
+    legacy = "a1-claim"  # seeded directly by the P6-PRIV-1 world, codes NULL
+    with env.session() as s:
+        assert s.get(ClaimsLibraryEntry, legacy).jurisdiction_codes is None
+    _patch(env, DAVE, legacy, {"kind": "restricted"})
+    assert _states(env, legacy) == [
+        ("claims_library_entry.updated",
+         {"jurisdiction_codes": None, "kind": "approved", "text": "Claim"},
+         {"jurisdiction_codes": None, "kind": "restricted", "text": "Claim"}),
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -205,10 +252,11 @@ def test_the_audit_read_shows_the_values_to_owner_admin_and_compliance_reviewer(
         params={"entity_id": claim_id},
     )
     assert r.status_code == 200, r.text
-    rows = {(a["action"], json.dumps(a["previous_state"]), json.dumps(a["new_state"]))
-            for a in r.json()}
-    assert ("claims_library_entry.created", "null",
-            json.dumps({"kind": "approved", "text": NAMING_CAROL})) in rows
+    rows = {(a["action"], json.dumps(a["previous_state"], sort_keys=True),
+             json.dumps(a["new_state"], sort_keys=True)) for a in r.json()}
+    assert ("claims_library_entry.created", "null", json.dumps(
+        {"jurisdiction_codes": CODES, "kind": "approved", "text": NAMING_CAROL}, sort_keys=True,
+    )) in rows
 
 
 @pytest.mark.parametrize("reader", [MARKETER, REVIEWER, CAROL])
@@ -270,9 +318,10 @@ def test_account_deletion_erases_a_claim_text_naming_the_account_from_the_histor
     )
     assert r.status_code == 200, r.text
 
-    erased_named = {"kind": "approved", "text": ERASED}
-    erased_restricted = {"kind": "restricted", "text": ERASED}
-    edited = {"kind": "restricted", "text": "Recommended by our customers"}
+    erased_named = {"jurisdiction_codes": CODES, "kind": "approved", "text": ERASED}
+    erased_restricted = {"jurisdiction_codes": CODES, "kind": "restricted", "text": ERASED}
+    edited = {"jurisdiction_codes": CODES, "kind": "restricted",
+              "text": "Recommended by our customers"}
     assert _states(env, claim_id) == [
         ("claims_library_entry.created", None, erased_named),
         ("claims_library_entry.updated", erased_named, erased_restricted),
@@ -290,7 +339,8 @@ def test_invitee_email_erasure_erases_a_claim_text_naming_the_address(env):
         erase_invitee_email(s, email=INVITEE)
         s.commit()
     assert _states(env, claim_id) == [
-        ("claims_library_entry.created", None, {"kind": "approved", "text": ERASED}),
+        ("claims_library_entry.created", None,
+         {"jurisdiction_codes": [], "kind": "approved", "text": ERASED}),
     ]
 
 
@@ -311,7 +361,9 @@ def test_organization_deletion_clears_the_values_keeps_the_rows_and_spares_b(env
         assert (row["previous_state"], row["new_state"], row["entity_id"]) == (None, None, None)
     assert env.count(AuditLog, AuditLog.entity_id == claim_id) == 0
     assert _audits(env, b_claim) == b_before
-    assert b_before[0]["new_state"] == {"kind": "blocked", "text": "Bravo's own claim"}
+    assert b_before[0]["new_state"] == {
+        "jurisdiction_codes": [], "kind": "blocked", "text": "Bravo's own claim"
+    }
     assert b_before[0]["organization_id"] == ORG_B
     with env.session() as s:
         report = verify_organization_erased(
@@ -359,6 +411,7 @@ def test_the_inventory_classifies_the_claim_text_as_possibly_personal():
     section = text.split("#### Claims-library audit text (D-N4 item 40)", 1)[1].split("\n## ", 1)[0]
     assert "**may contain personal data**" in section
     assert "never treated as containing none" in section
+    assert "`jurisdiction_codes`" in section and "A-R-3" in section  # codes: not personal
     for control in ("**Access.**", "**Export.**", "**Erasure.**", "**Retention.**",
                     "**Verification.**", "**Limit:**"):
         assert control in section, control

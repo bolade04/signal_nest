@@ -13,7 +13,8 @@ plan §2). For ``/workspaces/{workspace_id}/claims`` only:
 * **Audited.** Every create, update and retirement writes ``claims_library_entry.created`` /
   ``.updated`` / ``.retired`` naming the actor, the entry and the changed field *names*, and
   (operator ruling D-N4 item 40, 2026-11-12, superseding the CF-2 "field names, never their
-  values" shape) the entry's ``text`` and ``kind``: a create as ``new_state``, an update as
+  values" shape) the entry's ``text`` and ``kind``, and (coordinator addition A-R-3) its
+  ``jurisdiction_codes``: a create as ``new_state``, an update as
   ``previous_state`` and ``new_state``, a retirement as ``previous_state``.
   ``test_claims_audit_values`` covers the shape in full and the privacy controls over it.
 * **Nothing else changed.** Another collection (products) keeps the OWNER/ADMIN/MARKETER
@@ -249,11 +250,14 @@ def test_a_steward_creates_updates_and_retires_with_an_audit_trail(
         assert audit["entity_type"] == "claims_library_entry"
         assert (audit["organization_id"], audit["workspace_id"]) == (world.org, world.ws)
         assert audit["actor_user_id"] == actor is not None
-    # D-N4 item 40: the previous and new claim text and kind (no other field's value).
+    # D-N4 item 40: the previous and new claim text and kind, with the jurisdiction codes
+    # (coordinator addition A-R-3); no other field's value.
+    blocked = {"jurisdiction_codes": [], "kind": "blocked", "text": BLOCKED_TEXT}
+    restricted = {"jurisdiction_codes": [], "kind": "restricted", "text": BLOCKED_TEXT}
     assert [(a["previous_state"], a["new_state"]) for a in audits] == [
-        (None, {"kind": "blocked", "text": BLOCKED_TEXT}),
-        ({"kind": "blocked", "text": BLOCKED_TEXT}, {"kind": "restricted", "text": BLOCKED_TEXT}),
-        ({"kind": "restricted", "text": BLOCKED_TEXT}, None),
+        (None, blocked),
+        (blocked, restricted),
+        (restricted, None),
     ]
     assert "health" not in json.dumps([a["new_state"] for a in audits])  # category: names only
 

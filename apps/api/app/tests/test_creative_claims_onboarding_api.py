@@ -11,7 +11,8 @@ trusts the library's approved claims, so all four are closed (:mod:`app.brands.s
   onboards exactly as before;
 * **audited like ``/claims``** — one ``claims_library_entry.created`` row per entry, with the
   same entity, actor and field-name context a ``/claims`` create writes, and (operator ruling
-  D-N4 item 40) the same ``new_state``: the new entry's text and kind;
+  D-N4 item 40) the same ``new_state``: the new entry's text and kind, with its jurisdiction
+  codes (coordinator addition A-R-3);
 * **validated like ``/claims``** — each claim must be a valid ``ClaimIn`` (empty text 422);
 * **first onboarding only** — once the workspace is onboarded, claims are added through
   ``/claims``: a repeated onboarding with claims is 409 ``onboarding_claims_closed``.
@@ -119,10 +120,15 @@ def test_a_stewards_first_onboarding_creates_the_claims_and_audits_each(world, r
         assert audit["actor_user_id"] == world.users[role]
         assert audit["entity_type"] == "claims_library_entry"
         assert audit["context"] == {"fields": list(CLAIM_CREATE_FIELDS)}
-        # D-N4 item 40: the new entry's text and kind, exactly as stored; no other value.
+        # D-N4 item 40: the new entry's text and kind, with its jurisdiction codes (A-R-3),
+        # exactly as stored; no other value.
         entry = by_id[audit["entity_id"]]
         assert audit["previous_state"] is None
-        assert audit["new_state"] == {"kind": entry["kind"], "text": entry["text"]}
+        assert audit["new_state"] == {
+            "jurisdiction_codes": entry["jurisdiction_codes"], "kind": entry["kind"],
+            "text": entry["text"],
+        }
+        assert entry["jurisdiction_codes"] == []
         assert "health" not in str(audit["new_state"])
 
 
@@ -146,7 +152,9 @@ def test_the_onboarding_audit_has_the_claims_route_shape(world):
         for a in audits
     ]
     assert shapes[0] == shapes[1]
-    assert shapes[0]["new_state"] == {"kind": "approved", "text": "<text>"}
+    assert shapes[0]["new_state"] == {
+        "jurisdiction_codes": [], "kind": "approved", "text": "<text>"
+    }
 
 
 # --------------------------------------------------------------------------- #

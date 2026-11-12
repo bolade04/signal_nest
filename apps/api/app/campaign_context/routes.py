@@ -25,15 +25,17 @@ marketer whose draft is blocked must not be able to remove the claim that blocks
   is no longer listed, updated or retired again (404, as a missing one);
 * every create, update and retirement writes an audit record
   (``claims_library_entry.created`` / ``.updated`` / ``.retired``) naming the changed field
-  names in ``context`` and carrying the entry's ``text`` and ``kind``
+  names in ``context`` and carrying the entry's ``text``, ``kind`` and ``jurisdiction_codes``
   (:func:`app.claims.library.claim_audit_values`; operator ruling D-N4 item 40, 2026-11-12:
   "record the previous and new claim text and kind under the applicable access, retention and
   erasure controls. Free-form claim text must not automatically be classified as containing no
   personal data."): a create records them as ``new_state``; an update as ``previous_state``
   (before the change) and ``new_state`` (after it), on every update whichever fields changed;
   a retirement as ``previous_state`` (``new_state`` empty: the entry no longer applies). The
-  other fields' values are not recorded. The claim text may name a person, so it is treated as
-  personal data under the ``audit_logs`` controls (``docs/operations/data-inventory.md``).
+  ``jurisdiction_codes`` are a coordinator addition beyond the ruling's minimum (DN4-A ruling
+  A-R-3: they decide where an entry applies since 5D-W1; codes only). The other fields' values
+  are not recorded. The claim text may name a person, so it is treated as personal data under
+  the ``audit_logs`` controls (``docs/operations/data-inventory.md``).
 
 **Onboarding is held to the same rules (coordinator ruling R1, closed by the 5C build, W21
 lane P5C).** ``POST /workspaces/{workspace_id}/onboarding`` (:mod:`app.brands.service`) is the

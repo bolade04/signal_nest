@@ -15,12 +15,17 @@ authority for each:
 * :func:`audit_claim_created` — the ``claims_library_entry.created`` audit record, in the
   shape the ``/claims`` create route writes: entity ``claims_library_entry``, the entry id,
   the request model's field *names* (:data:`CLAIM_CREATE_FIELDS`) in ``context``, and the new
-  entry's ``text`` and ``kind`` in ``new_state`` (:func:`claim_audit_values`).
+  entry's ``text``, ``kind`` and ``jurisdiction_codes`` in ``new_state``
+  (:func:`claim_audit_values`).
 * :func:`claim_audit_values` — what every claims-library audit record carries of the entry
   (operator ruling D-N4 item 40, 2026-11-12: "record the previous and new claim text and kind
   under the applicable access, retention and erasure controls. Free-form claim text must not
-  automatically be classified as containing no personal data."): its ``text`` and ``kind``
-  (:data:`CLAIM_AUDIT_VALUES`). A create records them as ``new_state``, an update as
+  automatically be classified as containing no personal data."): its ``text`` and ``kind``,
+  and its ``jurisdiction_codes`` (:data:`CLAIM_AUDIT_VALUES`). The codes are a coordinator
+  addition beyond the ruling's minimum (DN4-A ruling A-R-3): since 5D-W1 they decide where an
+  entry applies, so without them the trail could not rebuild an entry's applicability after an
+  edit; they are jurisdiction codes, not personal data. A create records them as ``new_state``,
+  an update as
   ``previous_state`` and ``new_state`` (both on every update, changed or not), a retirement as
   ``previous_state``, so the library a draft was reviewed against can be rebuilt from the audit
   trail after an edit (review W21-REV-R4 F-2). The text is free-form tenant text that may name
@@ -59,8 +64,9 @@ CLAIM_ENTITY_TYPE = "claims_library_entry"
 CLAIM_CREATE_FIELDS: tuple[str, ...] = tuple(sorted(ClaimIn.model_fields))
 
 #: The entry values every claims-library audit record carries (operator ruling D-N4 item 40):
-#: the claim's free-form ``text`` (which may contain personal data) and its ``kind``.
-CLAIM_AUDIT_VALUES: tuple[str, ...] = ("kind", "text")
+#: the claim's free-form ``text`` (which may contain personal data) and its ``kind``; and its
+#: ``jurisdiction_codes`` (codes only; coordinator addition A-R-3, beyond the ruling's minimum).
+CLAIM_AUDIT_VALUES: tuple[str, ...] = ("jurisdiction_codes", "kind", "text")
 
 
 def is_claims_steward(role: Role | str) -> bool:
@@ -71,10 +77,16 @@ def is_claims_steward(role: Role | str) -> bool:
         return False
 
 
-def claim_audit_values(entry: ClaimsLibraryEntry) -> dict[str, str | None]:
-    """The entry's :data:`CLAIM_AUDIT_VALUES` as an audit state: ``{"kind": …, "text": …}``,
-    exactly as stored (D-N4 item 40)."""
-    return {name: getattr(entry, name) for name in CLAIM_AUDIT_VALUES}
+def claim_audit_values(entry: ClaimsLibraryEntry) -> dict[str, object]:
+    """The entry's :data:`CLAIM_AUDIT_VALUES` as an audit state, exactly as stored (D-N4 item
+    40; A-R-3): ``{"jurisdiction_codes": …, "kind": …, "text": …}``. ``jurisdiction_codes`` is
+    the stored list (an empty list or ``None`` both mean every jurisdiction), copied so the
+    state never shares the entry's list."""
+    values: dict[str, object] = {}
+    for name in CLAIM_AUDIT_VALUES:
+        value = getattr(entry, name)
+        values[name] = list(value) if isinstance(value, list) else value
+    return values
 
 
 def audit_claim_created(
