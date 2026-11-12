@@ -76,6 +76,9 @@ ROLE_LINES = [
 KEPT = [
     ("you are now", "You are now eligible for free weekend parking."),
     ("you are now mid", "Good news: you are now able to book online."),
+    # The exemptions stay exempt even shaped like a label: the rule names two roles only.
+    ("you are now label", "You are now: one step from free weekend parking."),
+    ("act as label", "Act as: a guide for first-time visitors."),
     ("act as", "For parents who act as carers, we open early."),
     ("defanged act as", "For parents who [quoted:act as] carers, we open early."),
     ("mid-line assistant", "Ask our assistant: she knows every stall."),
