@@ -49,6 +49,10 @@ ANCHORAGE = _location("Anchorage", "Alaska", "United States")
 MONTGOMERY = _location("Montgomery", "Alabama", "United States")
 LEKKI = _location("Lekki", "Lagos", "Nigeria")
 DALLAS = _location("Dallas", "Texas", "United States")
+IKEJA = _location("Ikeja", "Lagos", "Nigeria")
+NEW_ORLEANS = _location("New Orleans", "Louisiana", "United States")
+VIENTIANE = _location("Vientiane", None, "Laos")
+ASABA = _location("Asaba", "Delta", "Nigeria")
 
 
 # --------------------------------------------------------------------------- #
@@ -98,3 +102,53 @@ def test_p3_a_code_form_written_with_a_spaced_dash_stays_a_code():
     _refused(DALLAS, "Plot 1, Lekki NG - LA", "states country NG")
     reading = read_business_address("Montgomery AL - 1 Main St")
     assert [p.text for p in reading.places][:1] == ["montgomery al"]
+
+
+# --------------------------------------------------------------------------- #
+# 2. A Nigerian code as the last part (register G-10 N-1)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("address", ["1 Main St, Ikeja, LA", "LA", "1 Main St, Ikeja, LA 100001"])
+def test_p3_a_last_part_code_that_is_also_a_nigerian_state_asks(address):
+    """ "LA" is Laos, Louisiana or Lagos State. For a Lagos location only the Nigerian reading
+    agrees, and nothing settles it: the address asks, where it was refused as Laos or Louisiana."""
+    _clarified(
+        IKEJA,
+        address,
+        ADDRESS_PLACE_UNCLEAR,
+        "is ambiguous: country LA or country US or subdivision NG-LA",
+    )
+
+
+def test_p3_nigeria_written_settles_a_nigerian_reading():
+    assert _resolve(IKEJA, "1 Main St, Ikeja, LA, Nigeria").code == "NG-LA"
+
+
+def test_p3_the_nigerian_reading_never_hides_a_contradiction_or_another_reading():
+    _refused(DALLAS, "1 Main St, Ikeja, LA", "states country LA or subdivision US-LA or country NG")
+    assert _resolve(NEW_ORLEANS, "1 Main St, New Orleans, LA").code == "US-LA"
+    assert _resolve(VIENTIANE, "1 Main St, Ikeja, LA").code == "LA"
+
+
+@pytest.mark.parametrize(
+    ("address", "evidence"),
+    [
+        ("1500 Broadway US-LA", "states country US"),
+        ("LA-1", "states country LA or country US"),
+        ("State of CR, 1 Main St, Springfield, DE", "states country CR or subdivision NG-CR"),
+    ],
+)
+def test_p3_a_code_form_or_an_explicit_code_elsewhere_is_still_refused(address, evidence):
+    location = ASABA if address.endswith("DE") else IKEJA
+    _refused(location, address, evidence)
+
+
+def test_p3_a_building_name_before_a_nigerian_code_asks():
+    """P3-R-2: "Kwara Plaza, …, LA" for Lagos asks (refused on main and GEO-P2, accepted pre-D1)."""
+    _clarified(
+        IKEJA,
+        "Kwara Plaza, 1 Main St, Springfield, LA",
+        ADDRESS_PLACE_UNCLEAR,
+        "is ambiguous: country LA or country US or subdivision NG-LA",
+    )

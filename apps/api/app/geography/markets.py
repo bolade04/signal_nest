@@ -576,6 +576,11 @@ class BusinessAddressReading:
     #: in ``ambiguous``, with D1's reason.)
     routes: tuple[MarketIdentity, ...] = ()
     route_groups: tuple[tuple[MarketIdentity, ...], ...] = ()
+    #: GEO-P3 (register G-10 N-1; review I-6): the Nigerian readings the reader adds to a group of a
+    #: code that is also a Nigerian state's ("LA": Laos, Louisiana or Lagos State). Such a reading
+    #: never makes an address agree by itself: when it is the group's only agreeing reading and
+    #: nothing settles it, the address asks (RULING-D1-C3).
+    homonyms: tuple[MarketIdentity, ...] = ()
 
 
 def _alternatives(text: str) -> tuple[MarketIdentity, ...]:
@@ -707,6 +712,7 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
         _part_places(text),
         reading.routes,
         reading.route_groups,
+        reading.homonyms,
     )
 
 
@@ -800,6 +806,7 @@ def _read_business_address(text: str) -> BusinessAddressReading:
             ambiguous = stated if stated is not None and stated.country is not None else ambiguous
             ambiguous_groups, groups = ambiguous_groups + groups, ()
             stated = MarketIdentity(city=stated.city, label=stated.label) if stated else None
+        groups, homonyms = _with_nigerian_homonym(tuple(groups), text)
         return BusinessAddressReading(
             stated,
             (),
@@ -808,6 +815,7 @@ def _read_business_address(text: str) -> BusinessAddressReading:
             ambiguous_groups,
             routes=routes,
             route_groups=route_groups,
+            homonyms=homonyms,
         )
     kept, parts, ambiguous = [raw_parts[0]], [], []
     groups, ambiguous_groups = [], []
@@ -841,9 +849,63 @@ def _read_business_address(text: str) -> BusinessAddressReading:
     ambiguous = _part_reading(raw_parts[0])[1] + ambiguous
     groups = list(_groups(", ".join(kept))) + groups
     ambiguous_groups = _part_groups(raw_parts[0])[1] + ambiguous_groups
+    with_homonym, homonyms = _with_nigerian_homonym(tuple(groups), raw_parts[-1])
     return BusinessAddressReading(
-        stated, tuple(parts), tuple(ambiguous), tuple(groups), tuple(ambiguous_groups)
+        stated,
+        tuple(parts),
+        tuple(ambiguous),
+        with_homonym,
+        tuple(ambiguous_groups),
+        homonyms=homonyms,
     )
+
+
+def _code_form_part(part: str) -> bool:
+    """GEO-P3: does ``part`` end in a listed code form written with a space ("US LA") or hold a
+    hyphenated code form or road ("US-LA", "1500 Broadway US-LA", "LA-1")? Its code keeps the
+    reading it has; it is not a town and a code, nor a code alone."""
+    words = _strip_postcode(fold(part)).split()
+    return " ".join(words[-2:]) in _FOLDED_SUBDIVISION_CODES or bool(_HYPHEN_CODE.search(part))
+
+
+#: A two-letter code joined by a dash to letters or digits ("US-LA", "LA-1", "NG–LA").
+_HYPHEN_CODE: Final = re.compile(r"[A-Za-z]{2}\s*[-\u2010-\u2015\u2212]\s*[A-Za-z0-9]")
+
+
+def _nigerian_homonym(part: str) -> MarketIdentity | None:
+    """GEO-P3: the Nigerian state that the code ending ``part`` also names (C-2's reading: "LA" is
+    Lagos State, "DE" Delta State), when that code ends the part as a word and is no code form."""
+    words = _strip_postcode(fold(part)).split()
+    if not words or _code_form_part(part):
+        return None
+    coded = _JURISDICTION_CODE_AREAS.get(words[-1])
+    if coded is None:
+        return None
+    return MarketIdentity(region=coded[1], country=coded[0], label=part.strip())
+
+
+def _with_nigerian_homonym(
+    groups: tuple[tuple[MarketIdentity, ...], ...], last: str
+) -> tuple[tuple[tuple[MarketIdentity, ...], ...], tuple[MarketIdentity, ...]]:
+    """GEO-P3 (register G-10 N-1): the qualifier's C-8 groups of the last part's code, each with
+    the code's Nigerian reading added when the code is also a Nigerian state's ("…, Ikeja, LA":
+    Laos, Louisiana or Lagos State; "…, Springfield, DE": Germany, Delaware or Delta State).
+    Before, "1 Main St, Ikeja, LA" was refused for an Ikeja location. The added readings are
+    returned too: they never make an address agree by themselves (``homonyms``)."""
+    homonym = _nigerian_homonym(last)
+    if homonym is None:
+        return groups, ()
+    code = _strip_postcode(fold(last)).split()[-1]
+    readings = set(_area_candidates(code))
+    added = False
+    out = []
+    for group in groups:
+        areas = {(r.country, r.region) for r in group}
+        if group and areas <= readings and all(r.region != homonym.region for r in group):
+            group = (*group, homonym)
+            added = True
+        out.append(group)
+    return tuple(out), ((homonym,) if added else ())
 
 
 #: A code written with a hyphen or a dash inside a part ("US-CT Hartford", "Hartford US-CT",

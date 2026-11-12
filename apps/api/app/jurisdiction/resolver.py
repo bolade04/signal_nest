@@ -68,6 +68,7 @@ from app.geography.markets import (
     PLACE_FIRST_PART,
     PLACE_NAME,
     PLACE_UNCLEAR,
+    BusinessAddressReading,
     MarketIdentity,
     PartPlace,
     address_part_key,
@@ -392,6 +393,9 @@ def _address_check(
         found = _group_conflicts(group, (), country, code)
         if found and all(found):
             return True, "states " + " or ".join(found), None
+        unsettled = _unsettled_homonym(group, found, reading, explicit, country, code)
+        if unsettled is not None:
+            return True, f"is ambiguous: {unsettled}", ADDRESS_PLACE_UNCLEAR
     towns = _town_keys(city)
     # W21-REV-GEO r1 C-1: the first part's "town code" is compared whatever the city, as a code is.
     first_parts = [p for p in reading.places if p.kind == PLACE_FIRST_PART]
@@ -461,6 +465,38 @@ def _address_check(
             return True, f"also names {either}", ADDRESS_NAMES_ANOTHER_PLACE
         return True, f"is ambiguous: a town's name or {either}", ADDRESS_PLACE_UNCLEAR
     return bool(explicit), None, None
+
+
+def _unsettled_homonym(
+    group: Sequence[MarketIdentity],
+    found: list[str | None],
+    reading: BusinessAddressReading,
+    explicit: Sequence[MarketIdentity],
+    country: str,
+    code: str,
+) -> str | None:
+    """GEO-P3 (register G-10 N-1; review I-6): the readings of a C-8 group when its only agreeing
+    reading is a Nigerian one the reader added (``homonyms``: "…, Ikeja, LA" for a Lagos location,
+    whose "LA" is also Laos and Louisiana), every other reading contradicts, and nothing settles it.
+    An address that states Nigeria explicitly settles it; an explicit code elsewhere that
+    contradicts the location is refused first (GEO-P1's order). Such a reading never makes the
+    address agree by itself: it asks (RULING-D1-C3). ``None`` otherwise."""
+    added = [i for i, r in enumerate(group) if r in reading.homonyms]
+    others = [i for i in range(len(group)) if i not in added]
+    if not added or not others or len(found) != len(group):
+        return None
+    if any(found[i] is None for i in others) or all(found[i] is not None for i in added):
+        return None
+    if any(s.country == "NG" for s in explicit):
+        return None
+    if any(p.kind == PLACE_CODE and _part_conflicts(p, country, code) for p in reading.places):
+        return None
+    agreeing = [
+        f"subdivision {_stated_subdivision(group[i], country) or group[i].region}"
+        for i in added
+        if found[i] is None
+    ]
+    return " or ".join([found[i] for i in others if found[i]] + agreeing)
 
 
 def _town_keys(city: str | None) -> frozenset[str]:
