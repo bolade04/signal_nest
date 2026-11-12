@@ -111,10 +111,10 @@ ADDRESS_CLARIFICATIONS: Final[Mapping[str, str]] = MappingProxyType(
             "same place. This cannot be confirmed instead of corrected."
         ),
         BUSINESS_ADDRESS_TEXT_CONFLICT: (
-            "The Business address text names a different country, or state or province, from "
-            "this location's. Correct that text on the location's Service area tab, or leave it "
-            "empty and use the business address fields. This cannot be confirmed instead of "
-            "corrected."
+            "We read the Business address text as naming a different country, or state or "
+            "province, from this location's. Correct that text on the location's Service area "
+            "tab, or leave it empty and use the business address fields. This cannot be "
+            "confirmed instead of corrected."
         ),
         BUSINESS_ADDRESS_LOCALITY_UNCONFIRMED: (
             "The business town or locality is not this location's city. If the business is in "

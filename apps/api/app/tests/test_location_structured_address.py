@@ -38,6 +38,7 @@ from app.audit.models import AuditLog
 from app.briefs.models import RecommendationBrief
 from app.creative.models import ContentReview, CreativeDraft
 from app.jurisdiction.business_address import (
+    ACTION_CLARIFICATIONS,
     BUSINESS_ADDRESS_CONFLICT,
     BUSINESS_ADDRESS_LOCALITY_UNCONFIRMED,
     CONFIRMATION_REFUSALS,
@@ -237,6 +238,14 @@ def test_an_unreadable_value_is_a_fixed_422_at_its_field(w: W, fields, loc, mess
     assert _validation(r) == [(["body", loc], f"Value error, {message}")]
     assert SENTINEL not in r.text
     assert w.row(GeoCoverageRule, "geo-a1") == before and _audits(w) == audits
+
+
+def test_the_text_refusal_message_is_worded_as_a_reading() -> None:
+    """Review d1 C-7, pinned with the other fixed messages (A-2)."""
+    assert ACTION_CLARIFICATIONS["business_address_text_conflict"].startswith(
+        "We read the Business address text as naming a different country, or state or province, "
+        "from this location's."
+    )
 
 
 def test_the_messages_fit_the_web_clients_bound_whole() -> None:

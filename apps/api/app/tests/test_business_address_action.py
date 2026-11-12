@@ -445,6 +445,28 @@ def test_the_vocabulary_is_closed_disjoint_and_fixed() -> None:
         assert ACTION_CLARIFICATIONS[category].endswith(TEXT_REMEDY)
 
 
+def test_the_text_refusal_is_worded_as_a_reading() -> None:
+    """Review d1 C-7: the reader also refuses own addresses through its own defects (552 own rows
+    of the extended P-CN: US-DC read as US-WA, NG-NI as the country Niger), so the message says
+    what was read, not what the text is."""
+    assert ADDRESS_CLARIFICATIONS[BUSINESS_ADDRESS_TEXT_CONFLICT] == (
+        "We read the Business address text as naming a different country, or state or province, "
+        "from this location's. Correct that text on the location's Service area tab, or leave it "
+        "empty and use the business address fields. This cannot be confirmed instead of "
+        "corrected."
+    )
+
+
+def test_the_web_copy_mirrors_these_categories_and_messages() -> None:
+    """The web's static copy (``apps/web/src/lib/jurisdictionClarifications.ts``), which the brief
+    panel shows for ``error.details.reason``, holds exactly these five lines and the remedy."""
+    mirror = (APP.parents[1] / "web/src/lib/jurisdictionClarifications.ts").read_text()
+    for category, message in ADDRESS_CLARIFICATIONS.items():
+        assert f'  {category}: "{message}",\n' in mirror, category
+    assert mirror.count('",\n') == len(ADDRESS_CLARIFICATIONS)
+    assert f'export const TEXT_REMEDY = "{TEXT_REMEDY}";' in mirror
+
+
 def test_the_design_messages_verbatim() -> None:
     assert ADDRESS_CLARIFICATIONS[BUSINESS_ADDRESS_INCOMPLETE] == (
         "This location's business address is incomplete. Open the location and, on its Service "
