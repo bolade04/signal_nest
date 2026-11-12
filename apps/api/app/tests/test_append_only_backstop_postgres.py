@@ -1460,6 +1460,7 @@ def test_a_brief_inserted_while_a_campaign_is_deleted_still_gets_the_409(fresh) 
     answers: list = []
     try:
         holder_pid = holder.execute(select(func.pg_backend_pid())).scalar_one()
+        holder.commit()  # end the transaction that reading the pid began
         held = holder.begin()
         holder.execute(
             insert(RecommendationBrief.__table__).values(
