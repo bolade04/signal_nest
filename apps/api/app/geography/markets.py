@@ -791,7 +791,9 @@ def _part_places(text: str) -> tuple[PartPlace, ...]:
         if folded in _DIRECTION_PARTS:
             places.append(PartPlace(PLACE_DIRECTION, folded, identities(areas)))
             continue
-        short = " " not in folded and len(folded) <= 3
+        # A code of two or three letters ("NG", "TX", "NSW"); a name that short ("Edo", "Imo",
+        # "Oyo", a Nigerian state's bare name) is not one.
+        short = " " not in folded and len(folded) <= 3 and bool(areas)
         if short and folded in _UNIT_LABELS and len(fold(raw).split()) > 1:
             continue  # "FL 3", "NO 5": a floor or a unit before its number
         following = [p for p in map(address_part_key, raw_parts[index + 1 :]) if _is_named(p)]

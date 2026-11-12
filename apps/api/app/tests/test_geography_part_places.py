@@ -459,6 +459,17 @@ def test_a_code_before_a_listed_country_is_that_countrys_subdivision(location, a
     assert _resolve(location, address).code == code
 
 
+def test_a_three_letter_state_name_is_a_name_not_a_code():
+    """ "Edo", "Imo" and "Oyo" are Nigerian states' bare names (also towns), not codes: before
+    "Nigeria" they are not read as the region slot's code, and they ask for clarification for a
+    location in another state, as any bare Nigerian name does."""
+    ebonyi = _location("Abakaliki", "Ebonyi", "Nigeria")
+    for address in ("Edo, Nigeria, NG-EB", "Imo, Nigeria, NG-EB", "Oyo, Nigeria, NG-EB"):
+        result = _resolve(ebonyi, address)
+        assert (result.code, result.reason) == (UNRESOLVED, ADDRESS_PLACE_UNCLEAR), address
+    assert _resolve(_location("Benin City", "Edo", "Nigeria"), "Edo, Nigeria").code == "NG-ED"
+
+
 def test_another_subdivisions_code_before_a_listed_country_is_refused():
     _refused(IKEJA, "Ikeja, KE, Nigeria", "states subdivision NG-KE")
     _clarified(IKEJA, "KE, NG", ADDRESS_PLACE_UNCLEAR, "a town's name or subdivision NG-KE")
