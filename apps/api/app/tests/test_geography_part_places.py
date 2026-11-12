@@ -443,6 +443,7 @@ def test_a_floor_or_unit_label_before_its_number_is_left_to_the_unit_rules():
         "Shop No-5, MG Road, Mumbai, MH, India",
         "Mumbai, MH 400001, India",
         "MG Road, Mumbai; MH; India",
+        "MG Road, Mumbai, MH, 400001, India",
     ],
 )
 def test_a_region_code_before_an_unlisted_country_is_left_unread(address):
@@ -479,6 +480,8 @@ def test_a_three_letter_state_name_is_a_name_not_a_code():
     for address in ("Edo, Nigeria, NG-EB", "Imo, Nigeria, NG-EB", "Oyo, Nigeria, NG-EB"):
         result = _resolve(ebonyi, address)
         assert (result.code, result.reason) == (UNRESOLVED, ADDRESS_PLACE_UNCLEAR), address
+    # Written in capitals in a mixed-case address it is still a name, never a code.
+    _clarified(ebonyi, "ACME, EDO, Nigeria, 1 Main St", ADDRESS_PLACE_UNCLEAR, "NG-ED")
     assert _resolve(_location("Benin City", "Edo", "Nigeria"), "Edo, Nigeria").code == "NG-ED"
 
 
@@ -549,6 +552,13 @@ def test_c1_a_first_part_town_and_code_asks_for_clarification(
     assert _resolve(own, address).code == code
 
 
+def test_c1_a_first_part_town_and_code_is_compared_whatever_the_city():
+    """Like a code, the first part's reading is compared even when the location's city field holds
+    the same text."""
+    city = _location("Dallas TX", "Alaska", "United States")
+    _clarified(city, "Dallas TX, 1 Main St", ADDRESS_PLACE_UNCLEAR, "a name or subdivision US-TX")
+
+
 def test_c1_explicit_geography_settles_a_first_part_town_and_code():
     """Ruling R-2 (the settled form): an explicit subdivision of the location's country settles the
     first part's reading, and an explicit country rules out its readings in other countries. It is
@@ -590,6 +600,11 @@ def test_c1b_a_first_part_town_and_nigerian_code_asks_for_clarification():
     # D1's reading ("12 Allen Pl" is a street line; PL is Poland and Plateau State).
     _refused(MINNA, "OG, Abeokuta, 1 Main St", "states subdivision NG-OG")
     assert _resolve(IKEJA, "12 Allen Pl, Ikeja").code == "NG-LA"
+    # A spaced code form keeps C-12's two readings: Germany's code form, or OG after a word.
+    munich = _location("Munich", None, "Germany")
+    assert _resolve(munich, "Munich DE OG, 1 Main St").code == "DE"
+    assert _resolve(ABEOKUTA, "Munich DE OG, 1 Main St").code == "NG-OG"
+    _clarified(DALLAS, "Munich DE OG, 1 Main St", ADDRESS_PLACE_UNCLEAR, "country DE or country NG")
     # Its cost: "Oy" is a Finnish legal form and Oyo State's code. The country written resolves it.
     _clarified(MADRID, "ACME Oy, Calle Mayor 1, 28013 Madrid", ADDRESS_PLACE_UNCLEAR, "country NG")
     assert _resolve(MADRID, "ACME Oy, Calle Mayor 1, 28013 Madrid, Spain").code == "ES"

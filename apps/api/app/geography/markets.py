@@ -866,8 +866,9 @@ def _first_part_readings(raw: str, folded: str) -> list[tuple[MarketIdentity, ..
     explicit C-8 and C-12 groups (:func:`_part_groups`: "Dallas GA", "Munich DE BY"), each with the
     Nigerian reading of a two-letter code (C-2: "Springfield LA" is Louisiana, Laos or Lagos
     State). C-1b (coordinator ruling R-2): a word and a Nigerian code that names nothing else
-    ("Springfield AN", where D1 reads "Springfield TX"), with that code's reading alone. Empty for
-    anything else."""
+    ("Springfield AN", where D1 reads "Springfield TX"), with that code's reading alone, or beside
+    the country of a spaced code form, as C-12 reads one ("Munich DE OG"). Empty for anything
+    else."""
     explicit, _ = _part_reading(raw)
     groups, _ = _part_groups(raw)
     found = [(reading,) for reading in explicit] + [tuple(group) for group in groups]
@@ -878,10 +879,12 @@ def _first_part_readings(raw: str, folded: str) -> list[tuple[MarketIdentity, ..
     nigerian = MarketIdentity(region=coded[1], country=coded[0], label=raw)
     if found:
         return [(*readings, nigerian) for readings in found]
-    if len(words) < 2 or _area_candidates(words[-1]) or _spaced_code_form(raw) is not None:
-        # "OG" alone is a short part (C-2); "12 Allen Pl" is D1's street line ("PL" is Poland
-        # too); "Munich DE OG" is a C-12 code form.
-        return []
+    if len(words) < 2 or _area_candidates(words[-1]):
+        return []  # "OG" alone is a short part (C-2); "12 Allen Pl" is D1's ("PL" is Poland too)
+    spaced = _spaced_code_form(raw)
+    if spaced is not None:
+        # C-12: "Munich DE OG" is Germany's code form or the code OG after a word.
+        return [(MarketIdentity(country=spaced[0], label=raw), nigerian)]
     return [(nigerian,)]
 
 
