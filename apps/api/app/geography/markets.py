@@ -276,6 +276,18 @@ class MarketIdentity:
 #: An area reading of a token: ``(country, region key or None)``.
 _Area = tuple[str, str | None]
 
+#: W21-REV-GEO r1 C-2: each two-letter code of a country whose subdivisions only the jurisdiction
+#: module lists (Nigeria) -> that subdivision's area ("la" -> Lagos State, "og" -> Ogun State). A
+#: part that is only such a code ("ACME, LA, Ikeja", "Abeokuta, OG, Nigeria") has this reading
+#: beside any other ("LA" is also Laos and Louisiana), so it is never read as naming nothing.
+_JURISDICTION_CODE_AREAS: Final[dict[str, _Area]] = {
+    code.lower(): (country, f"{country}:{fold(names[0])}")
+    for country, divisions in SUBDIVISION_JURISDICTIONS.items()
+    if country not in SUBDIVISIONS
+    for code, names in divisions.items()
+    if len(code) == 2
+}
+
 
 def _area_candidates(folded: str) -> list[_Area]:
     candidates: list[_Area] = []
@@ -495,6 +507,7 @@ PLACE_CODE: Final = "code"
 PLACE_NAME: Final = "name"
 PLACE_UNCLEAR: Final = "unclear"
 PLACE_DIRECTION: Final = "direction"
+PLACE_FIRST_PART: Final = "first_part"
 
 
 @dataclass(frozen=True)
@@ -513,16 +526,20 @@ class PartPlace:
       takes such a name at the end of an address, but a town or a business may bear it
       ("Lebanon", "Jordan").
     * :data:`PLACE_UNCLEAR`: a word as likely a town's name as a place: a code of two or three
-      letters in an address written in one case ("ACME, NG, LAGOS"), a Nigerian state's bare name,
-      which is also a town's ("Adamawa", "Kano"; X-5), or a city-first name ("Washington"; X-4).
-    * :data:`PLACE_DIRECTION`: a part that is only a direction ("1200 Pennsylvania Ave, SE"; "ACME,
-      NE, Omaha"), which may be a street's direction or a code, as "St NE" may (C-14, C-15).
-
-    A code of two or three letters written otherwise in an address that mixes cases is a word, as
-    W21-REV-5DW2FIX r3b C-4 reads "Bo" and "Ba" ("Bo, Southern Province"), and is not a part place.
+      letters in an address written in one case ("ACME, NG, LAGOS"), or written otherwise than in
+      capitals in an address that mixes cases ("Dallas, Tx, 1 Main St"; "Bo, Southern Province",
+      W21-REV-GEO r1 C-3), a Nigerian state's bare name, which is also a town's ("Adamawa",
+      "Kano"; X-5), or a city-first name ("Washington"; X-4).
+    * :data:`PLACE_DIRECTION`: a part that is only a direction ("ACME, NE, Omaha"), which may be a
+      street's direction or a code, as "St NE" may (C-14, C-15).
+    * :data:`PLACE_FIRST_PART` (W21-REV-GEO r1 C-1): the first part of an address of two or more
+      parts read as a town and a code ("Dallas TX, 1 Main St"; "Springfield LA; 1 Main St"), as
+      D1 reads a later part. It may as well be a business's name and its legal form ("ACME SA",
+      "ACME AB", "Jane Doe MD"), so it is an ambiguous reading, never an explicit one.
 
     ``text``: the part, folded, without a trailing postcode. ``readings``: every area it may name,
-    two or more for a name of two areas ("Georgia": the country or US-GA; "Niger").
+    two or more for a name of two areas ("Georgia": the country or US-GA; "Niger"; a Nigerian
+    code: "LA" is Laos, Louisiana or Lagos State).
     """
 
     kind: str
@@ -595,7 +612,8 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
     """Read a business's own address (a coverage rule's ``business_address``).
 
     Parts are separated by commas, semicolons, slashes or line breaks (C-10;
-    :data:`_PART_SEPARATORS`). An address of one part that
+    :data:`_PART_SEPARATORS`); every line break that :meth:`str.splitlines` knows counts as one
+    (W21-REV-GEO r1 C-4: also VT, FF, NEL, U+2028 and U+2029). An address of one part that
     is an ambiguous street line has an ambiguous reading. In an address of several parts, the
     whole text is read as before (a postcode alone in a later part is left out, so "...,
     Hartford, CT, 06103, USA" reads Connecticut), and each part after the first is also read on
@@ -627,10 +645,12 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
 
     Every part that names a place by itself is also read wherever it stands, first, middle or last,
     at any distance from the end and whatever the separator (GEO-P1, :func:`_part_places`):
-    ``places``.
+    ``places``. The first part's explicit reading ("Dallas TX, 1 Main St") is one of them, as an
+    ambiguous reading (W21-REV-GEO r1 C-1: :data:`PLACE_FIRST_PART`).
     """
     if text is None:
         return BusinessAddressReading(None)
+    text = "\n".join(text.splitlines())  # W21-REV-GEO r1 C-4: every line break is one
     reading = _read_business_address(text)
     return BusinessAddressReading(
         reading.stated,
@@ -757,7 +777,14 @@ def _part_places(text: str) -> tuple[PartPlace, ...]:
     whose subdivisions are not listed ("Mumbai, MH, India"), the region slot of "town, region,
     country", which the tables cannot check (the geography register's G-7). In that slot before a
     country whose subdivisions are listed, the code is read as that country's subdivision first, as
-    the qualifier rules read it ("Ikeja, LA, Nigeria" is Lagos State, "Dallas, TX, USA" Texas)."""
+    the qualifier rules read it ("Ikeja, LA, Nigeria" is Lagos State, "Dallas, TX, USA" Texas,
+    "Abeokuta, OG, Nigeria" Ogun State).
+
+    W21-REV-GEO r1: a Nigerian two-letter code has its Nigerian reading beside any other (C-2,
+    :data:`_JURISDICTION_CODE_AREAS`); a short code that case does not settle is unclear, never a
+    word (C-3); and the first part of an address of two or more parts is read as D1 reads a later
+    part, "Dallas TX" or "Springfield LA" (C-1, :func:`_first_part_readings`), except a
+    route designator ("1 SR 520, Redmond"), whose first-part reading D1 keeps (C-16)."""
     letters = [ch for ch in text if ch.isalpha()]
     mixed = any(ch.isupper() for ch in letters) and any(ch.islower() for ch in letters)
     places: list[PartPlace] = []
@@ -775,6 +802,13 @@ def _part_places(text: str) -> tuple[PartPlace, ...]:
             continue
         if _CODE_TOKEN.search(raw):
             continue  # "US-9", "GA-400", "AL-AIN", "DE-BY": no listed code (C-1, C-9)
+        if index == 0 and len(raw_parts) > 1 and not _designator(raw):
+            # W21-REV-GEO r1 C-1: "Dallas TX, 1 Main St". A designator keeps D1's first-part
+            # reading (C-16: "1 SR 520, Redmond").
+            found = _first_part_readings(raw, folded)
+            if found:
+                places += [PartPlace(PLACE_FIRST_PART, folded, readings) for readings in found]
+                continue
         named = _named_subdivision(folded)
         prefixed = _AREA_PREFIX.sub("", folded) if _AREA_PREFIX.match(folded) else None
         if named is not None:
@@ -785,6 +819,9 @@ def _part_places(text: str) -> tuple[PartPlace, ...]:
             places.append(PartPlace(PLACE_CODE, folded, identities(areas)))
             continue
         areas = _area_candidates(folded)
+        coded = _JURISDICTION_CODE_AREAS.get(folded)
+        if coded is not None and coded not in areas:
+            areas = [*areas, coded]  # W21-REV-GEO r1 C-2: "LA" is Lagos State too, "OG" Ogun State
         homonyms = [area for area in _homonym_areas(folded) if area not in areas]
         if not areas and not homonyms:
             continue
@@ -815,9 +852,29 @@ def _part_places(text: str) -> tuple[PartPlace, ...]:
         elif len(written) == 1 and written[0].isupper():
             kind = PLACE_NAME  # "ACME, NG, Lagos": a code written as one
         else:
-            continue  # "Bo, Southern Province": a word (C-4)
+            # W21-REV-GEO r1 C-3: "Dallas, Tx, 1 Main St", "Bo, Southern Province": case does not
+            # settle it, so it is never read as naming nothing. "Bo" for a location in Bo is the
+            # town (the resolver's city exemption; r3b C-4).
+            kind = PLACE_UNCLEAR
         places.append(PartPlace(kind, folded, identities(areas + homonyms)))
     return tuple(places)
+
+
+def _first_part_readings(raw: str, folded: str) -> list[tuple[MarketIdentity, ...]]:
+    """W21-REV-GEO r1 C-1: the readings of an address's first part as a town and a code, one group
+    each: D1's explicit reading of a later part (:func:`_part_reading`: "Dallas TX") and its
+    explicit C-8 and C-12 groups (:func:`_part_groups`: "Dallas GA", "Munich DE BY"), each with the
+    Nigerian reading of a two-letter code (C-2: "Springfield LA" is Louisiana, Laos or Lagos
+    State). Empty for what D1 does not read as a town and a code."""
+    explicit, _ = _part_reading(raw)
+    groups, _ = _part_groups(raw)
+    found = [(reading,) for reading in explicit] + [tuple(group) for group in groups]
+    words = folded.split()
+    coded = _JURISDICTION_CODE_AREAS.get(words[-1]) if words else None
+    if coded is None:
+        return found
+    nigerian = MarketIdentity(region=coded[1], country=coded[0], label=raw)
+    return [(*readings, nigerian) for readings in found]
 
 
 def _part_groups(

@@ -36,7 +36,9 @@ federations listed in :mod:`app.jurisdiction.subdivisions`, the first-level subd
   in capitals, is refused unless another part names the location's own area, when it asks with the
   reason :data:`ADDRESS_NAMES_ANOTHER_PLACE`; a word that may be a town's name asks with
   :data:`ADDRESS_PLACE_UNCLEAR`, and a part that is only a direction with
-  :data:`ADDRESS_DIRECTION_AMBIGUOUS` unless explicit geography settles it.
+  :data:`ADDRESS_DIRECTION_AMBIGUOUS` unless explicit geography settles it. A first part read as a
+  town and a code ("Dallas TX, 1 Main St"), which may be a business's name ("ACME SA"), asks with
+  :data:`ADDRESS_PLACE_UNCLEAR` unless explicit geography settles it (W21-REV-GEO r1 C-1).
 
 A city alone never resolves, known or unknown: a bare city says nothing about which
 country it is in (``app.geography.markets`` reads a bare "London" the same way). Every
@@ -59,6 +61,7 @@ from typing import Final, Protocol
 from app.geography.markets import (
     PLACE_CODE,
     PLACE_DIRECTION,
+    PLACE_FIRST_PART,
     PLACE_NAME,
     PLACE_UNCLEAR,
     MarketIdentity,
@@ -150,8 +153,9 @@ ADDRESS_SUFFIX_AMBIGUOUS: Final = "address_suffix_ambiguous"
 #: town's or a business's name ("Lebanon", "Jordan"), so it is not refused.
 ADDRESS_NAMES_ANOTHER_PLACE: Final = "address_names_another_place"
 #: Reason category (GEO-P1): a word of a business address may be a state's or a country's name or
-#: code, or a town's name (a two-letter code in an address written in one case, a Nigerian state's
-#: bare name, "Washington"), and as a place it contradicts the location.
+#: code, or a town's name (a two-letter code in an address written in one case, or not in capitals,
+#: a Nigerian state's bare name, "Washington"), or the first part a town and a code or a business's
+#: name ("Dallas TX", "ACME SA"; W21-REV-GEO r1 C-1), and as a place it contradicts the location.
 ADDRESS_PLACE_UNCLEAR: Final = "address_place_unclear"
 #: Reason category (GEO-P1): a part of a business address is only a direction ("SE", "NE"), which
 #: may be a street's direction or a state or country code, and as a code it contradicts the
@@ -178,7 +182,9 @@ CLARIFICATIONS: Final[Mapping[str, str]] = MappingProxyType(
             "We couldn't tell whether a word in the business address is a state, province or "
             "country, or the name of a town. If it is the town, enter the same town as the "
             "location's city. If it is a state, province or country, write its full name (for "
-            "example 'Lagos State' or 'Nigeria') after the town, separated by a comma."
+            "example 'Lagos State' or 'Nigeria') after the town, separated by a comma. If it is "
+            "the name of the business or a building, leave it out of the address. Otherwise "
+            "correct or remove it."
         ),
         ADDRESS_DIRECTION_AMBIGUOUS: (
             "We couldn't tell whether a part of the business address that is only a direction "
@@ -346,7 +352,15 @@ def _address_check(
     * a word that may be a town's name (:data:`app.geography.markets.PLACE_UNCLEAR`):
       :data:`ADDRESS_PLACE_UNCLEAR`;
     * a part that is only a direction ("SE", "NE"): read as an ambiguous street reading is (C-14),
-      so explicit geography settles it; otherwise :data:`ADDRESS_DIRECTION_AMBIGUOUS`.
+      so explicit geography settles it; otherwise :data:`ADDRESS_DIRECTION_AMBIGUOUS`;
+    * the first part read as a town and a code (:data:`app.geography.markets.PLACE_FIRST_PART`:
+      "Dallas TX, 1 Main St", "Springfield LA; 1 Main St"; W21-REV-GEO r1 C-1 and ruling R-2): read
+      as D1 reads the first part's ambiguous reading, since it may be a business's name and its
+      legal form ("ACME SA, Calle Mayor 1, 28013 Madrid"). An explicit subdivision of the location's
+      country settles it and an explicit country rules out its readings in other countries, so
+      "ACME SA, ..., Spain" resolves for Madrid and "Dallas TX, 1 Main St, Anchorage, AK" for
+      Anchorage, as on main; otherwise :data:`ADDRESS_PLACE_UNCLEAR`. It is never refused and never
+      agrees.
 
     A name or word that is the location's own city ("Washington, US-DC" for a Washington
     location; "Lebanon, PA" for a Lebanon location) is the town and is not compared: the
@@ -364,11 +378,13 @@ def _address_check(
         if found and all(found):
             return True, "states " + " or ".join(found), None
     towns = _town_keys(city)
+    # W21-REV-GEO r1 C-1: the first part's "town code" is compared whatever the city, as a code is.
+    first_parts = [p for p in reading.places if p.kind == PLACE_FIRST_PART]
     places = [
         p for p in reading.places if p.kind in (PLACE_CODE, PLACE_DIRECTION) or p.text not in towns
     ]
     directions = [p for p in places if p.kind == PLACE_DIRECTION]
-    places = [p for p in places if p.kind != PLACE_DIRECTION]
+    places = [p for p in places if p.kind not in (PLACE_DIRECTION, PLACE_FIRST_PART)]
     contradicting = [(p, found) for p in places if (found := _part_conflicts(p, country, code))]
     agreeing = [
         r
@@ -399,6 +415,13 @@ def _address_check(
             if found and all(found):
                 either = " or ".join(found)
                 return True, f"is ambiguous: a street type or {either}", ADDRESS_SUFFIX_AMBIGUOUS
+        for place in first_parts:
+            # W21-REV-GEO r1 C-1: read as D1 reads the first part's ambiguous reading, since it may
+            # be a business's name and its legal form ("ACME SA"): settled above, never refused.
+            found = _group_conflicts(place.readings, countries, country, code)
+            if found and all(found):
+                either = " or ".join(found)
+                return True, f"is ambiguous: a name or {either}", ADDRESS_PLACE_UNCLEAR
         for place in directions:
             # GEO-P1: read as C-14 reads "St NE": explicit geography settles it (above).
             found = _group_conflicts(place.readings, countries, country, code)
