@@ -88,8 +88,9 @@ test matrix, **not** a launch-market assertion.
 
   **Which rows are `NULL` (added at 5D-W3's integration; operator rulings of 2026-11-08 on
   item 31 and on Q-4).** Exactly two cases, and `NULL` keeps the meaning above in both:
-  (i) a brief or draft written before 5D-W3 captured a jurisdiction (the residual cohort
-  below); and (ii) a brief whose opportunity has **no location** at capture
+  (i) a brief or draft written before 5D-W3 captured a jurisdiction, whether before CF-3 (the
+  residual pre-CF-3 cohort below) or between CF-3 and 5D-W3; and (ii) a brief whose
+  opportunity has **no location** at capture
   (`location_id IS NULL`, for example an opportunity from a workspace-wide scout, or one
   whose location was deleted), which ruling Q-4 allows: no resolution is attempted, so none
   is captured. An existing location that does not resolve is **refused** at capture, before
