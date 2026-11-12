@@ -197,11 +197,7 @@ def test_p3_the_city_never_hides_a_contradiction():
         "US-TX, Ohio, Texas",
         "states subdivision US-TX, but the rest of the address cannot be read with it",
     )
-    _refused(
-        MONTGOMERY,
-        "US-AL, Montgomery, Bavaria",
-        "states subdivision US-AL, but the rest of the address cannot be read with it",
-    )
+    # G-3's twin "US-AL, Montgomery, Bavaria" asks (P3-b-1, below); the city does not resolve it.
     city_field_is_a_code = _location("US-AL", "Alabama", "United States")
     _refused(city_field_is_a_code, "US-AL, 1 Main St, Anchorage, AK", "states subdivision US-AK")
 
@@ -338,3 +334,41 @@ def test_p3_a_town_and_nigerian_only_code_is_that_state():
     assert _resolve(ABEOKUTA, "1 Main St, Springfield OG").code == "NG-OG"
     _refused(MINNA, "1 Main St, Springfield OG", "states subdivision NG-OG")
     _refused(DALLAS, "1 Main St, Springfield AB", "states country CA")
+
+
+# --------------------------------------------------------------------------- #
+# P3-b-1. G-3: a listed code with words that name no listed area (operator ruling)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("location", "address"),
+    [
+        (MONTGOMERY, "US-AL, Downtown, Montgomery"),
+        (_location("Town", "Alabama", "United States"), "US-AL, Downtown, Montgomery"),
+        (MONTGOMERY, "US-AL, Montgomery, Bavaria"),
+    ],
+)
+def test_p3b_the_own_code_with_unplaceable_words_asks(location, address):
+    """The operator amended G-3's criterion: the own form and its twin both ask, since without
+    other countries' subdivision names "Bavaria" cannot be told from "Downtown"."""
+    _clarified(
+        location,
+        address,
+        ADDRESS_PLACE_UNCLEAR,
+        "is ambiguous: subdivision US-AL, but the rest of the address cannot be read with it",
+    )
+
+
+def test_p3b_the_remedy_resolves_and_another_area_is_still_refused():
+    assert _resolve(MONTGOMERY, "Downtown, Montgomery, Alabama").code == "US-AL"
+    _refused(
+        DALLAS,
+        "US-TX, Canada",
+        "states subdivision US-TX, but the rest of the address cannot be read with it",
+    )
+    _refused(
+        ANCHORAGE,
+        "US-AL, Downtown, Montgomery",
+        "states subdivision US-AL, but the rest of the address cannot be read with it",
+    )

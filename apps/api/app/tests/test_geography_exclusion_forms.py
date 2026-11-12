@@ -1432,7 +1432,8 @@ def test_pcn_the_same_forms_for_another_location_are_refused(location, address, 
     [
         ("US-AL, Texas, Montgomery", UNPLACED.format("US-AL")),
         ("US-AL, Montgomery, State of Texas", UNPLACED.format("US-AL")),
-        ("US-AL, Montgomery, Bavaria", UNPLACED.format("US-AL")),
+        # GEO-P3 (G-3, amended by the operator): "US-AL, Montgomery, Bavaria" names no other listed
+        # area, so it now asks, as its own twin does (test_geography_place_knowledge).
         ("US-AL, Alabama, Montgomery, Canada", "states country CA"),
     ],
 )

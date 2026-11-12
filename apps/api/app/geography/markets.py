@@ -505,6 +505,27 @@ def nigerian_readings_of_stated_code(
     return found
 
 
+def parts_naming_an_area(text: str | None) -> int:
+    """GEO-P3 (register G-3): how many parts of a business address name an area: a listed code, a
+    suffixed or prefixed subdivision ("Adamawa State", "State of Texas"), or a name or code that
+    reads as an area or has a listed homonym."""
+    if not text:
+        return 0
+    count = 0
+    for raw in _written_parts(_other_separators("\n".join(text.splitlines()))):
+        folded = _strip_postcode(fold(raw))
+        prefixed = _AREA_PREFIX.sub("", folded) if _AREA_PREFIX.match(folded) else None
+        if (
+            _listed_codes(raw, folded)
+            or _named_subdivision(folded) is not None
+            or (prefixed and _area_candidates(prefixed))
+            or _area_candidates(folded)
+            or _homonym_areas(folded)
+        ):
+            count += 1
+    return count
+
+
 def last_written_part(text: str | None) -> str | None:
     """The last part of a business address that names something, as the reader splits it."""
     if not text:

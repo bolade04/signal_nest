@@ -78,6 +78,7 @@ from app.geography.markets import (
     normalize_country,
     normalize_region,
     own_reading_of_homonym,
+    parts_naming_an_area,
     read_business_address,
     without_town_parts,
 )
@@ -400,6 +401,11 @@ def _address_check(
     asks (:data:`ADDRESS_PLACE_UNCLEAR`: "is ambiguous: country NE or subdivision NG-NI"), after an
     explicit code elsewhere that contradicts is refused. "Minna, Niger State" and "Minna, Niger,
     Nigeria" resolve; for any other location the country reading still refuses.
+
+    GEO-P3 (register G-3, criterion amended by the operator): the location's own listed code that
+    the rest of the address cannot be read with ("US-AL, Downtown, Montgomery", and its twin
+    "US-AL, Montgomery, Bavaria") asks (:data:`ADDRESS_PLACE_UNCLEAR`) when no other part names an
+    area; with another area named ("US-TX, Canada") it is refused, as before.
     """
     result = _reading_check(read_business_address(address), address, country, code, city)
     if result[1] is not None and result[2] is None:
@@ -445,6 +451,15 @@ def _reading_check(
                     for a in agreeing_state
                 )
                 return True, f"is ambiguous: {conflict} or {either}", ADDRESS_PLACE_UNCLEAR
+            if (
+                _stated_subdivision(stated, country) == f"{code}?"
+                and parts_naming_an_area(address) == 1
+            ):
+                # GEO-P3 (register G-3, criterion amended by the operator): the location's own
+                # listed code with words that name no listed area ("US-AL, Downtown, Montgomery";
+                # its twin "US-AL, Montgomery, Bavaria") cannot be placed, and nothing else in the
+                # address names an area: a town or another country's region. Both ask.
+                return True, f"is ambiguous: {conflict}", ADDRESS_PLACE_UNCLEAR
             if stated is reading.stated:
                 agreeing = [
                     MarketIdentity(region=r, country=c, label=stated.label)
