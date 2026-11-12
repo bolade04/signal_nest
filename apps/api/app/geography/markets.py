@@ -76,6 +76,13 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Final
 
+from app.geography.address_aliases import (
+    ADDRESS_ALIASES,
+    ALIAS_ASKS,
+    ALIAS_NAME,
+    ALIAS_READ,
+    AddressAlias,
+)
 from app.geography.places_data import (
     CITY_FIRST_NAMES,
     COUNTRIES,
@@ -460,7 +467,7 @@ def without_town_parts(text: str | None, towns: frozenset[str]) -> str | None:
     structured input the location already holds; this is not a city table."""
     if not text or not towns:
         return None
-    parts = _PART_SEPARATORS.split(_other_separators("\n".join(text.splitlines())))
+    parts = _PART_SEPARATORS.split(_address_text(text))
 
     def explicit(raw: str) -> bool:
         folded = _strip_postcode(fold(raw))
@@ -472,7 +479,7 @@ def without_town_parts(text: str | None, towns: frozenset[str]) -> str | None:
 
     def names_an_area(raw: str) -> bool:
         folded = _strip_postcode(fold(raw))
-        return bool(_area_candidates(folded) or _homonym_areas(folded))
+        return bool(_area_candidates(folded) or _homonym_areas(folded) or _alias_readings(raw))
 
     kept = [
         raw
@@ -493,7 +500,7 @@ def nigerian_readings_of_stated_code(
     "LA-1") keeps its reading."""
     if not text or stated.country is None:
         return []
-    parts = _written_parts(_other_separators("\n".join(text.splitlines())))
+    parts = _written_parts(_address_text(text))
     found = []
     for part in parts[1:] if len(parts) > 1 else parts:
         words = _strip_postcode(fold(part)).split()
@@ -507,12 +514,12 @@ def nigerian_readings_of_stated_code(
 
 def parts_naming_an_area(text: str | None) -> int:
     """GEO-P3 (register G-3): how many parts of a business address name an area: a listed code, a
-    suffixed or prefixed subdivision ("Adamawa State", "State of Texas"), or a name or code that
-    reads as an area or has a listed homonym."""
+    suffixed or prefixed subdivision ("Adamawa State", "State of Texas"), a name or code that reads
+    as an area or has a listed homonym, or a listed alias (G-10: "Ont.", "Korea")."""
     if not text:
         return 0
     count = 0
-    for raw in _written_parts(_other_separators("\n".join(text.splitlines()))):
+    for raw in _written_parts(_address_text(text)):
         folded = _strip_postcode(fold(raw))
         prefixed = _AREA_PREFIX.sub("", folded) if _AREA_PREFIX.match(folded) else None
         if (
@@ -521,6 +528,7 @@ def parts_naming_an_area(text: str | None) -> int:
             or (prefixed and _area_candidates(prefixed))
             or _area_candidates(folded)
             or _homonym_areas(folded)
+            or _alias_readings(raw)
         ):
             count += 1
     return count
@@ -533,7 +541,7 @@ def unread_script_part(text: str | None, towns: frozenset[str]) -> bool:
     or a country that the reader cannot read; accented Latin ("Nigéria", "Québec") is read."""
     if not text:
         return False
-    for raw in _written_parts(_other_separators("\n".join(text.splitlines()))):
+    for raw in _written_parts(_address_text(text)):
         folded = _strip_postcode(fold(raw))
         if not folded or folded in towns or _area_candidates(folded) or _homonym_areas(folded):
             continue
@@ -546,7 +554,7 @@ def last_written_part(text: str | None) -> str | None:
     """The last part of a business address that names something, as the reader splits it."""
     if not text:
         return None
-    parts = _written_parts(_other_separators("\n".join(text.splitlines())))
+    parts = _written_parts(_address_text(text))
     return parts[-1] if parts else None
 
 
@@ -697,6 +705,12 @@ class BusinessAddressReading:
     #: never makes an address agree by itself: when it is the group's only agreeing reading and
     #: nothing settles it, the address asks (RULING-D1-C3).
     homonyms: tuple[MarketIdentity, ...] = ()
+    #: GEO-P3 (register G-10, operator ruling): the readings of each part that is a listed name of
+    #: two or more areas ("Korea": country KR or country KP), one group per part. No reading is
+    #: chosen, and such a group never makes an address agree by itself: the resolver asks when one
+    #: reading agrees and another contradicts, unless the address states one of them, and refuses
+    #: when every reading contradicts.
+    alias_groups: tuple[tuple[MarketIdentity, ...], ...] = ()
 
 
 def _alternatives(text: str) -> tuple[MarketIdentity, ...]:
@@ -760,6 +774,77 @@ def _other_separators(text: str) -> str:
     return _OTHER_SEPARATORS.sub("\n", text)
 
 
+def _alias_key(text: str) -> str:
+    """An alias as :data:`_ALIASES` compares it: accents dropped, case folded, single spaces, and no
+    space after a period ("N. Y." and "n.y." are one key). The periods stay: "Ala" is not "Ala."."""
+    decomposed = unicodedata.normalize("NFKD", text)
+    stripped = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return re.sub(r"\.\s+", ".", " ".join(stripped.casefold().split()))
+
+
+#: GEO-P3 (register G-10, operator ruling of 2026-11-12, option (a)): the bounded alias lists of
+#: :mod:`app.geography.address_aliases`, by :func:`_alias_key`.
+_ALIASES: Final[dict[str, AddressAlias]] = {_alias_key(a.written): a for a in ADDRESS_ALIASES}
+
+
+def _listed_alias(part: str) -> tuple[AddressAlias, str, str] | None:
+    """GEO-P3 (G-10): ``(alias, as written, postcode)`` when ``part`` is, as a whole and before any
+    postcode, a listed alias ("Ala.", "Ont. M5V 2T6", "N. Y. 10001", "Deutschland", "Korea");
+    ``None`` otherwise ("Montgomery Ala.", "Ala", "Miss Jane Doe")."""
+    words = part.split()
+    tail: list[str] = []
+    while len(words) > 1 and _HAS_DIGIT.search(words[-1]):
+        tail.insert(0, words.pop())
+    written = " ".join(words)
+    alias = _ALIASES.get(_alias_key(written)) if written else None
+    return (alias, written, " ".join(tail)) if alias is not None else None
+
+
+def _with_listed_aliases(text: str) -> str:
+    """GEO-P3 (G-10): ``text`` with each part that is a listed alias written as the tables read it:
+    an alias of one area that the tables do not read as that area's name ("Ala." as "Alabama",
+    "Ont. M5V 2T6" as "Ontario M5V 2T6", "Deutschland" as "Germany"); an alias whose letters the
+    tables already read with its initials joined ("N. Y." as "N.Y.", read as "NY" was). A name of
+    two or more areas ("Korea") is kept: it is read as a group (:func:`_alias_readings`). Separators
+    and every other part are kept as written."""
+    pieces = re.split(f"({_PART_SEPARATORS.pattern})", text)
+    for index in range(0, len(pieces), 2):
+        piece = pieces[index]
+        found = _listed_alias(piece)
+        if found is None:
+            continue
+        alias, written, tail = found
+        if alias.handling == ALIAS_NAME and alias.name is not None:
+            body = alias.name
+        elif alias.handling == ALIAS_READ:
+            body = re.sub(r"\.\s+", ".", written)
+        else:
+            continue
+        lead = piece[: len(piece) - len(piece.lstrip())]
+        pieces[index] = lead + body + (f" {tail}" if tail else "")
+    return "".join(pieces)
+
+
+def _alias_readings(part: str) -> tuple[MarketIdentity, ...]:
+    """GEO-P3 (G-10): the readings of a part that is a listed name of two or more areas ("Korea":
+    country KR or country KP; :data:`app.geography.address_aliases.ALIAS_ASKS`); ``()`` otherwise.
+    No reading is chosen: not by the location, not by place knowledge."""
+    found = _listed_alias(part)
+    if found is None or found[0].handling != ALIAS_ASKS:
+        return ()
+    return tuple(
+        MarketIdentity(region=code if "-" in code else None, country=code[:2], label=part.strip())
+        for code in found[0].codes
+    )
+
+
+def _address_text(text: str) -> str:
+    """The text the business-address reader reads: every line break one (W21-REV-GEO r1 C-4), the
+    other separators read as line breaks (GEO-P3, I-2) and the listed aliases written as the tables
+    read them (GEO-P3, G-10)."""
+    return _with_listed_aliases(_other_separators("\n".join(text.splitlines())))
+
+
 def read_business_address(text: str | None) -> BusinessAddressReading:
     """Read a business's own address (a coverage rule's ``business_address``).
 
@@ -812,11 +897,20 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
     GEO-P3 (register G-10, review I-2): a pipe, a tab, a bullet, a middle dot, the full-width and
     ideographic commas, the Arabic semicolon and a spaced dash separate parts too
     (:func:`_other_separators`).
+
+    GEO-P3 (register G-10, operator ruling of 2026-11-12, option (a)): a part that is, as a whole
+    and before any postcode, a listed abbreviation or country alias
+    (:mod:`app.geography.address_aliases`: "Ala.", "Calif.", "Ont.", "Deutschland", "Federal
+    Republic of Nigeria") reads as its area's name ("Alabama", "Germany"), or as the letters the
+    tables already read ("N. Y." as "N.Y."); a name of two or more areas ("Korea") is a group in
+    ``alias_groups`` (:func:`_with_listed_aliases`). The period is part of the alias ("Ala" and
+    "Miss" are not read), and an alias inside a part ("Montgomery Ala.") is not read.
     """
     if text is None:
         return BusinessAddressReading(None)
-    text = "\n".join(text.splitlines())  # W21-REV-GEO r1 C-4: every line break is one
-    text = _other_separators(text)  # GEO-P3 (register G-10, review I-2)
+    # W21-REV-GEO r1 C-4: every line break is one; GEO-P3 (register G-10): the other separators
+    # (review I-2) and the listed aliases (operator ruling, option (a)).
+    text = _address_text(text)
     text = _without_floors(text)
     reading = _read_business_address(text)
     return BusinessAddressReading(
@@ -829,6 +923,7 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
         reading.routes,
         reading.route_groups,
         reading.homonyms,
+        tuple(g for g in (_alias_readings(part) for part in _written_parts(text)) if g),
     )
 
 

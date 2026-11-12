@@ -407,6 +407,15 @@ def _address_check(
     the rest of the address cannot be read with ("US-AL, Downtown, Montgomery", and its twin
     "US-AL, Montgomery, Bavaria") asks (:data:`ADDRESS_PLACE_UNCLEAR`) when no other part names an
     area; with another area named ("US-TX, Canada") it is refused, as before.
+
+    GEO-P3 (register G-10, operator rulings): the reader reads the listed abbreviations and country
+    aliases (:mod:`app.geography.address_aliases`) as their areas' names, so "1 Main St, Montgomery,
+    Ala." agrees with Montgomery, Alabama and is refused for Anchorage, and "..., Deutschland" is
+    refused for Dallas. A listed name of two or more areas ("Korea": KR or KP) is refused when every
+    reading contradicts the location; when one agrees and another contradicts it asks
+    (:data:`ADDRESS_PLACE_UNCLEAR`), unless the address states one of them elsewhere ("Seoul, Korea,
+    Republic of Korea"). A part in another script asks
+    (:func:`app.geography.markets.unread_script_part`).
     """
     result = _reading_check(read_business_address(address), address, country, code, city)
     if result[1] is not None and result[2] is None:
@@ -485,6 +494,12 @@ def _reading_check(
         unsettled = _unsettled_homonym(group, found, reading, explicit, country, code)
         if unsettled is not None:
             return True, f"is ambiguous: {unsettled}", ADDRESS_PLACE_UNCLEAR
+    for group in reading.alias_groups:
+        # GEO-P3 (register G-10): a listed name of two or more areas ("Korea" for Dallas) whose
+        # every reading contradicts the location is refused, as a C-8 group is.
+        found = _group_conflicts(group, (), country, code)
+        if found and all(found):
+            return True, "states " + " or ".join(found), None
     if homonym_ask is not None and not any(
         p.kind == PLACE_CODE and _part_conflicts(p, country, code) for p in reading.places
     ):
@@ -557,6 +572,18 @@ def _reading_check(
         if place.kind == PLACE_NAME:
             return True, f"also names {either}", ADDRESS_NAMES_ANOTHER_PLACE
         return True, f"is ambiguous: a town's name or {either}", ADDRESS_PLACE_UNCLEAR
+    for group in reading.alias_groups:
+        # GEO-P3 (register G-10, operator ruling: "Korea" still asks): one reading agrees and
+        # another contradicts. Only the address itself settles it, by stating one of the readings
+        # elsewhere ("Seoul, Korea, Republic of Korea"); never the location or place knowledge.
+        if not any(_conflict(r, country, code) for r in group):
+            continue
+        if any(_same_area(s, r) for s in explicit for r in group):
+            continue
+        either = " or ".join(
+            f"subdivision {r.region}" if r.region else f"country {r.country}" for r in group
+        )
+        return True, f"is ambiguous: {either}", ADDRESS_PLACE_UNCLEAR
     if unread_script_part(address, towns):
         # GEO-P3 (register G-10, operator ruling): a part in another script may name a state or a
         # country that the tables, which hold Latin names, cannot read: it asks.
@@ -594,6 +621,14 @@ def _unsettled_homonym(
         if found[i] is None
     ]
     return " or ".join([found[i] for i in others if found[i]] + agreeing)
+
+
+def _same_area(stated: MarketIdentity, reading: MarketIdentity) -> bool:
+    """GEO-P3 (G-10): does ``stated`` (an explicit reading of the address) state ``reading``'s area:
+    its country, and its subdivision when ``reading`` names one?"""
+    return stated.country == reading.country and (
+        reading.region is None or stated.region == reading.region
+    )
 
 
 def _town_keys(city: str | None) -> frozenset[str]:

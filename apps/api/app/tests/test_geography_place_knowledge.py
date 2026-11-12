@@ -1,10 +1,12 @@
-"""GEO-P3 (P3-a): place knowledge from the address and the location, without data.
+"""GEO-P3: place knowledge from the address and the location.
 
-Geography register (2026-11-12) items G-2, G-7 and G-10, and review classes I-1, I-2 and I-6, under
-the coordinator's rulings on the GEO-P3 plan (P3-R-1 to P3-R-5): no dataset, city table, geocoder
-or alias list. A contradiction is refused; a code with one agreeing and one contradicting reading
-that nothing settles asks for clarification (RULING-D1-C3); nothing here makes an address agree
-that names another area.
+P3-a: geography register (2026-11-12) items G-2, G-7 and G-10, and review classes I-1, I-2 and I-6,
+under the coordinator's rulings on the GEO-P3 plan (P3-R-1 to P3-R-5): no dataset, city table or
+geocoder. P3-b: the operator's rulings of 2026-11-12 on G-3 (both forms ask), G-10 option (a) (the
+bounded abbreviation and country-alias lists of ``app.geography.address_aliases``; "Korea" asks) and
+other scripts (they ask). A contradiction is refused; a reading with one agreeing and one
+contradicting area that nothing settles asks for clarification (RULING-D1-C3); nothing here makes an
+address agree that names another area.
 
 These tests pin the measured classes; they do not show that arbitrary addresses are validated.
 """
@@ -15,7 +17,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.geography.markets import read_business_address
+from app.geography.address_aliases import (
+    ADDRESS_ALIASES,
+    ALIAS_ASKS,
+    ALIAS_NAME,
+    ALIAS_READ,
+    SOURCES,
+)
+from app.geography.markets import _area_candidates, fold, read_business_address
+from app.geography.places_data import COUNTRIES, SUBDIVISIONS
 from app.jurisdiction.codes import UNRESOLVED
 from app.jurisdiction.resolver import (
     ADDRESS_NAMES_ANOTHER_PLACE,
@@ -397,3 +407,147 @@ def test_p3b_a_part_in_another_script_asks(address):
 
 def test_p3b_accented_latin_is_read():
     assert _resolve(IKEJA, "1 Main St, Ikeja, Nigéria").code == "NG-LA"
+
+
+# --------------------------------------------------------------------------- #
+# P3-b-2. G-10 option (a): the bounded abbreviation and country-alias lists
+# --------------------------------------------------------------------------- #
+
+TORONTO = _location("Toronto", "Ontario", "Canada")
+VANCOUVER = _location("Vancouver", "British Columbia", "Canada")
+BRISBANE = _location("Brisbane", "Queensland", "Australia")
+PERTH = _location("Perth", "Western Australia", "Australia")
+SEOUL = _location("Seoul", None, "South Korea")
+PYONGYANG = _location("Pyongyang", None, "North Korea")
+TBILISI = _location("Tbilisi", None, "Georgia")
+
+
+def _code_area(code: str) -> tuple[str, str | None]:
+    return (code[:2], code) if "-" in code else (code, None)
+
+
+def test_p3b_every_alias_has_a_source_a_valid_code_and_its_handling():
+    """Each entry records its source, its ISO 3166 code and how it is read; the handling it records
+    is the one the tables give it, so the list cannot drift from the reader."""
+    seen = set()
+    for alias in ADDRESS_ALIASES:
+        assert alias.source in SOURCES, alias
+        assert alias.written not in seen, alias
+        seen.add(alias.written)
+        for code in alias.codes:
+            country, region = _code_area(code)
+            assert country in COUNTRIES, alias
+            assert region is None or region[3:] in SUBDIVISIONS[country], alias
+        letters = fold(alias.written.replace(". ", "."))
+        known = _area_candidates(letters)
+        if alias.handling == ALIAS_NAME:
+            assert len(alias.codes) == 1 and not known, alias
+            assert _code_area(alias.codes[0]) in _area_candidates(fold(alias.name)), alias
+        elif alias.handling == ALIAS_READ:
+            assert len(alias.codes) == 1 and _code_area(alias.codes[0]) in known, alias
+        else:
+            assert alias.handling == ALIAS_ASKS and len(alias.codes) >= 2 and not known, alias
+    for source in SOURCES.values():
+        assert source.url.startswith("https://") and len(source.snapshot_sha256) == 64
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "code"),
+    [
+        (MONTGOMERY, "1 Main St, Montgomery, Ala.", "US-AL"),
+        (MONTGOMERY, "1 Main St, Montgomery, ALA. 36104, USA", "US-AL"),
+        (TORONTO, "1 Main St, Toronto, Ont.", "CA-ON"),
+        (TORONTO, "1 Main St, Toronto, Ont. M5V 2T6", "CA-ON"),
+        (BRISBANE, "1 Main St, Brisbane, Qld", "AU-QLD"),
+        (SEATTLE, "1 Main St, Seattle, Wash.", "US-WA"),
+        (
+            _location("New York", "New York", "United States"),
+            "1 Main St, New York, N. Y. 10001",
+            "US-NY",
+        ),
+        (MUNICH, "Marienplatz 1, 80331 Munich, Deutschland", "DE"),
+        (IKEJA, "1 Allen Ave, Ikeja, Federal Republic of Nigeria", "NG-LA"),
+        (
+            _location("Sydney", "New South Wales", "Australia"),
+            "1 George St, Sydney, Commonwealth of Australia",
+            "AU-NSW",
+        ),
+        (
+            _location("Mexico City", None, "Mexico"),
+            "Av. Reforma 1, Mexico City, Estados Unidos Mexicanos",
+            "MX",
+        ),
+    ],
+)
+def test_p3b_a_listed_alias_agrees_with_its_own_location(location, address, code):
+    result = _resolve(location, address)
+    assert result.code == code, (address, result.evidence)
+    assert result.evidence[-1].endswith("agrees"), result.evidence
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "evidence"),
+    [
+        (ANCHORAGE, "1 Main St, Montgomery, Ala.", "states subdivision US-AL"),
+        (ANCHORAGE, "1 Main St, Montgomery, Ala., USA", "states subdivision US-AL"),
+        (VANCOUVER, "1 Main St, Toronto, Ont.", "states subdivision CA-ON"),
+        (PERTH, "1 Main St, Brisbane, Qld", "states subdivision AU-QLD"),
+        (DALLAS, "1 Main St, Dallas, Deutschland", "states country DE"),
+        (DALLAS, "1 Main St, Ikeja, Federal Republic of Nigeria", "states country NG"),
+        (DALLAS, "1 Main St, Seoul, Korea", "states country KR or country KP"),
+        (DALLAS, "US-TX, Dallas, Ont.", "but the rest of the address cannot be read with it"),
+        (TBILISI, "1 Main St, Tbilisi, Ga.", "states country GA or country US"),
+    ],
+)
+def test_p3b_a_listed_alias_that_contradicts_is_refused(location, address, evidence):
+    _refused(location, address, evidence)
+
+
+@pytest.mark.parametrize("location", [SEOUL, PYONGYANG])
+def test_p3b_korea_asks_and_is_never_settled_by_the_location(location):
+    """Its source lists "Korea" as South Korea or North Korea: neither the location nor place
+    knowledge chooses; the address itself may ("Republic of Korea" written)."""
+    _clarified(
+        location,
+        "1 Main St, Seoul, Korea",
+        ADDRESS_PLACE_UNCLEAR,
+        "is ambiguous: country KR or country KP",
+    )
+    reading = read_business_address("1 Main St, Seoul, Korea")
+    assert [[r.country for r in g] for g in reading.alias_groups] == [["KR", "KP"]]
+    assert reading.stated is None or reading.stated.country is None
+
+
+def test_p3b_korea_with_its_country_written_resolves_and_still_refuses_elsewhere():
+    assert _resolve(SEOUL, "1 Main St, Seoul, Korea, Republic of Korea").code == "KR"
+    _refused(PYONGYANG, "1 Main St, Seoul, Korea, Republic of Korea", "states country KR")
+
+
+@pytest.mark.parametrize(
+    ("location", "address"),
+    [
+        # Without the period an abbreviation is a word or a name, and is not read (as before).
+        (ANCHORAGE, "1 Main St, Montgomery, Ala"),
+        (DALLAS, "ACME Car Wash, 1 Main St, Dallas, TX"),
+        (DALLAS, "Miss. Jane Doe, 1 Main St, Dallas, TX"),
+        (_location("Man", None, "Ivory Coast"), "1 Rue du Commerce, Man, Ivory Coast"),
+    ],
+)
+def test_p3b_only_a_whole_part_with_its_period_is_an_alias(location, address):
+    assert _resolve(location, address).code != UNRESOLVED, address
+
+
+def test_p3b_an_alias_whose_letters_were_read_reads_as_before():
+    """By its source "Ga." is Georgia, but its letters are already the code GA (Gabon) or US-GA,
+    read as the C-8 group they were; "La." keeps N-1's Nigerian reading."""
+    assert _resolve(ATLANTA, "1 Main St, Atlanta, Ga.").code == "US-GA"
+    assert _resolve(BATON_ROUGE, "1 Main St, Baton Rouge, La.").code == "US-LA"
+    _clarified(
+        IKEJA,
+        "1 Main St, Ikeja, La.",
+        ADDRESS_PLACE_UNCLEAR,
+        "is ambiguous: country LA or country US or subdivision NG-LA",
+    )
+    assert read_business_address("1 Main St, New York, N. Y.") == read_business_address(
+        "1 Main St, New York, N.Y."
+    )
