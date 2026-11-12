@@ -14,7 +14,9 @@ Read-only: an export writes nothing, not even an audit record. Both shapes carry
   never another account's records) and — Project Phase 5E (W21 CF-3) — the exports it made
   (ids, version, format, jurisdiction, its own snapshot; never the exported text), its own
   in-app notifications (event code, subject id, read and soft-delete instants) and its own
-  notification preferences. No credential, token or digest.
+  notification preferences, and — W21 ADDR — the business-town confirmations it made (the
+  coverage rule, its location and the instant; never the address, which is the
+  organization's). No credential, token or digest.
   The invitations it accepted are bound to it by id and always listed; the others addressed
   to its email address are found by that address, so they are listed only when it is
   verified (:class:`~app.privacy.erasure.EmailScope`); ``email_keyed_data`` says which, in
@@ -54,6 +56,7 @@ from app.db.clock import as_utc
 from app.db.models import Base
 from app.exports.models import Export
 from app.feedback.models import OpportunityFeedback
+from app.locations.models import GeoCoverageRule
 from app.notifications.models import Notification, NotificationPreference
 from app.organizations.models import (
     Organization,
@@ -360,6 +363,21 @@ def export_account(db: Session, *, user: User) -> dict[str, Any]:
             )
             .where(NotificationPreference.user_id == uid)
             .order_by(NotificationPreference.created_at, NotificationPreference.id),
+        ),
+        # W21 ADDR: the confirmations, by this account, that a location's business town lies
+        # within its area (customer-confirmed, not verified). Ids and the instant only: the
+        # town, the city and the address are the organization's business data.
+        "locality_confirmations_made": _rows(
+            db,
+            select(
+                GeoCoverageRule.id,
+                GeoCoverageRule.organization_id,
+                GeoCoverageRule.workspace_id,
+                GeoCoverageRule.location_id,
+                GeoCoverageRule.locality_confirmed_at,
+            )
+            .where(GeoCoverageRule.locality_confirmed_by_user_id == uid)
+            .order_by(GeoCoverageRule.locality_confirmed_at, GeoCoverageRule.id),
         ),
     }
 

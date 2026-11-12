@@ -2513,6 +2513,10 @@ export interface components {
             invitations_sent: {
                 [key: string]: unknown;
             }[];
+            /** Locality Confirmations Made */
+            locality_confirmations_made: {
+                [key: string]: unknown;
+            }[];
             /** Memberships */
             memberships: {
                 [key: string]: unknown;

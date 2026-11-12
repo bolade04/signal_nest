@@ -73,9 +73,9 @@ applies to the table's rows (durations undecided; see below).
 
 ### Tenant business content (customer-provided; may contain personal data of sole traders)
 
-All of these are deleted on organization deletion and untouched by account deletion. None
-has a time-based purge: they live as long as the workspace (they are the customer's
-configuration).
+All of these are deleted on organization deletion and untouched by account deletion (the one
+exception: `geo_coverage_rules.locality_confirmed_by_user_id` is set null, below). None has a
+time-based purge: they live as long as the workspace (they are the customer's configuration).
 
 | Table | Columns that can hold personal or confidential data |
 |---|---|
@@ -84,7 +84,7 @@ configuration).
 | `brands` | `name`, `industry`, `business_type` |
 | `business_profiles` | `company_name`, `website`, `alternative_presence`, `social_links`, `google_business_profile`, `marketplace_links`, `description`, `target_audience`, `ideal_customer_profile`, `compliance_notes`, `sensitive_topics`, `pricing_model`, `buying_process`, … (every free-text column) |
 | `business_locations` | `address`, `city`, `state_province`, `postal_code`, `latitude`, `longitude`, `local_phone`, `local_website_page`, `local_social_links`, `google_business_profile`, `local_competitors`, `local_notes`, `overrides` (and, Project Phase 5D W21 CF-3, `jurisdiction_code`: a normalised country/subdivision code, not personal) |
-| `geo_coverage_rules` | `business_address`, `center_latitude`, `center_longitude`, markets (and `jurisdiction_code`, CF-3) |
+| `geo_coverage_rules` | `business_address`, `center_latitude`, `center_longitude`, markets (and `jurisdiction_code`, CF-3); W21 ADDR: the structured business address `business_address_street`, `_locality`, `_region`, `_postcode`, `_country` (as the customer entered them, not verified), and the locality confirmation (customer-confirmed, not verified): the town and the location's city as confirmed (`locality_confirmed_locality`, `locality_confirmed_city`), the jurisdiction code, the instant (`locality_confirmed_at`) and the confirming account (`locality_confirmed_by_user_id`, set null when that account is deleted; the confirmation is kept). The confirmations an account made are listed in its account export (rule, location and instant; never the address) |
 | `product_profiles`, `audience_profiles`, `competitor_profiles`, `brand_voice_profiles`, `offer_calendar`, `claims_library`, `source_preferences`, `channel_preferences`, `campaigns` | free-text and JSON business context (competitor names and websites are third-party business data; `offer_calendar.promo_code`, `brand_voice_profiles.example_copy`). Project Phase 5D (W21 CF-3): `campaigns.mode` / `status` are closed vocabularies; `claims_library.jurisdiction_codes` lists the jurisdiction codes an entry applies in (codes only) |
 | `campaign_locations` | **none** (Project Phase 5D, W21 CF-3, operator decision `O-8`): one campaign/location id pair of one workspace, back-filled from `campaigns.location_ids`; ids only; deleted with its campaign, location, workspace or organization |
 | `scout_requests` | `name`, `keywords`, `notes`, `resolved_market`, `stats` |
@@ -266,7 +266,8 @@ An operator can reproduce the same export with `curl` loops (`privacy-operations
 sessions, tokens' metadata, the invitations, feedback, overrides and audit events that account
 produced, the recommendation briefs it authored, the creative drafts it generated, the
 approval decisions it made and — Project Phase 5E, W21 CF-3 — the exports it made, its own
-in-app notifications and its notification preferences), which one account's activity bounds;
+in-app notifications and its notification preferences, and — W21 ADDR — the business-town
+confirmations it made, without the address), which one account's activity bounds;
 it does not carry tenant tables (a brief's model-derived content and a draft's generated text
 are in the organization export, not the author's), and no `llm_usage_events` row.
 

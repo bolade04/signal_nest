@@ -182,6 +182,14 @@
             "title": "Invitations Sent",
             "type": "array"
           },
+          "locality_confirmations_made": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Locality Confirmations Made",
+            "type": "array"
+          },
           "memberships": {
             "items": {
               "additionalProperties": true,
@@ -255,7 +263,8 @@
           "drafts_authored",
           "exports_performed",
           "notifications_received",
-          "notification_preferences"
+          "notification_preferences",
+          "locality_confirmations_made"
         ],
         "title": "AccountExportOut",
         "type": "object"
