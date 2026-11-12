@@ -82,7 +82,14 @@ const str = (v: unknown): string | null =>
   typeof v === 'string' && v.trim() ? v : null;
 const arr = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : []);
 
-const claimKindOptions = { approved: 'Approved', restricted: 'Restricted', prohibited: 'Prohibited' };
+// The API's closed set of claim kinds (D-N4 item 36). A stored kind outside it (one written
+// before the set was closed) is shown as it is and is never sent unless the user picks one of these.
+const claimKindOptions = {
+  approved: 'Approved',
+  restricted: 'Restricted',
+  blocked: 'Blocked',
+  required_disclaimer: 'Required disclaimer',
+};
 const riskOptions = { low: 'Low', medium: 'Medium', high: 'High' };
 const campaignModeOptions = {
   same_for_all: 'Same for all locations',
@@ -177,7 +184,12 @@ const KINDS: KindConfig[] = [
     subtitle: (r) => {
       const kind = str(r.kind);
       const risk = str(r.risk_level);
-      return [kind && titleCase(kind), risk && `${titleCase(risk)} risk`].filter(Boolean).join(' · ') || null;
+      const kindLabel =
+        kind &&
+        (Object.prototype.hasOwnProperty.call(claimKindOptions, kind)
+          ? claimKindOptions[kind as keyof typeof claimKindOptions]
+          : titleCase(kind));
+      return [kindLabel, risk && `${titleCase(risk)} risk`].filter(Boolean).join(' · ') || null;
     },
     fields: [
       { key: 'text', label: 'Claim text', type: 'textarea', required: true, colSpan: true },

@@ -2146,9 +2146,8 @@
             "type": "array"
           },
           "kind": {
-            "default": "approved",
-            "title": "Kind",
-            "type": "string"
+            "$ref": "#/components/schemas/ClaimKind",
+            "default": "approved"
           },
           "notes": {
             "anyOf": [
@@ -2178,6 +2177,16 @@
         "title": "ClaimIn",
         "type": "object"
       },
+      "ClaimKind": {
+        "enum": [
+          "approved",
+          "restricted",
+          "blocked",
+          "required_disclaimer"
+        ],
+        "title": "ClaimKind",
+        "type": "string"
+      },
       "ClaimPatch": {
         "properties": {
           "category": {
@@ -2200,8 +2209,7 @@
             "type": "array"
           },
           "kind": {
-            "title": "Kind",
-            "type": "string"
+            "$ref": "#/components/schemas/ClaimKind"
           },
           "notes": {
             "anyOf": [

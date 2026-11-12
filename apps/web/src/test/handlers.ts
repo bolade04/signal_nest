@@ -1043,7 +1043,8 @@ export const CONTEXT_FIELD_RULES: ContextRules = {
   // API refuses a value outside the jurisdiction-code grammar, which no screen sends yet.
   claims: {
     text: 'string+',
-    kind: 'string',
+    // D-N4 item 36: the closed set of claim kinds (the API answers any other kind with 422).
+    kind: 'enum approved|restricted|blocked|required_disclaimer',
     category: 'string?',
     risk_level: 'string',
     notes: 'string?',

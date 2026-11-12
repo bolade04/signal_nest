@@ -58,10 +58,13 @@ from app.db.base import Base
 from app.tests._auth2_support import pg_database, require_postgres
 
 API_DIR = Path(__file__).resolve().parents[2]
-#: The code head (Project Phase 5D 5D-W1, W21 Amendment D-1: the campaign-location data repair;
-#: data only, so the schema at head is CF-3's).
-HEAD = "d5f616c0ec97"
-#: One below head (Project Phase 5 CF-3, W21: campaign hardening and ``campaign_locations``,
+#: The code head (D-N4 item 36, W21: the closed claim kinds; data only: the ``prohibited`` alias
+#: becomes ``blocked``, so the schema at head is CF-3's).
+HEAD = "1574637e56d3"
+#: One below head (Project Phase 5D 5D-W1, W21 Amendment D-1: the campaign-location data repair;
+#: data only).
+REPAIR = "d5f616c0ec97"
+#: Two below head (Project Phase 5 CF-3, W21: campaign hardening and ``campaign_locations``,
 #: the jurisdiction columns, ``exports``, ``notifications`` / ``notification_preferences``,
 #: the ``deleted_at`` retention markers, and the widened capability-override CHECK).
 BELOW_HEAD = "c3f8e1a6d2b9"
@@ -298,19 +301,25 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     assert {"jurisdiction_code", "deleted_at"} <= _columns(pg_url, "creative_drafts")
     assert "jurisdiction_code" in _columns(pg_url, "business_locations")
 
-    # One guarded step down undoes exactly the head revision: 5D-W1's data-only repair, so no
-    # table or column goes; the spent token does not authorize the next step, and the base
-    # token minted at head is refused from the moved source.
+    # One guarded step down undoes exactly the head revision: D-N4 item 36's data-only claim-kind
+    # migration, so no table or column goes; the spent token does not authorize the next step,
+    # and the base token minted at head is refused from the moved source.
     base_token_at_head = _confirmation(pg_url, "base")
     step_token = _confirmation(pg_url, "-1")
     schema_at_head = {t: _columns(pg_url, t) for t in _tables(pg_url)}
     _alembic(pg_url, "-x", f"confirm={step_token}", "downgrade", "-1")
-    assert _version(pg_url) == [BELOW_HEAD]
+    assert _version(pg_url) == [REPAIR]
     assert {t: _columns(pg_url, t) for t in _tables(pg_url)} == schema_at_head
     spent = _run(["-x", f"confirm={step_token}", "downgrade", "-1"], pg_url)
-    assert spent.returncode != 0 and _version(pg_url) == [BELOW_HEAD]
+    assert spent.returncode != 0 and _version(pg_url) == [REPAIR]
     stale = _run(["-x", f"confirm={base_token_at_head}", "downgrade", "base"], pg_url)
-    assert stale.returncode != 0 and _version(pg_url) == [BELOW_HEAD]
+    assert stale.returncode != 0 and _version(pg_url) == [REPAIR]
+
+    # The next guarded step undoes 5D-W1's data-only repair: no table or column goes.
+    repair_token = _confirmation(pg_url, "-1")
+    _alembic(pg_url, "-x", f"confirm={repair_token}", "downgrade", "-1")
+    assert _version(pg_url) == [BELOW_HEAD]
+    assert {t: _columns(pg_url, t) for t in _tables(pg_url)} == schema_at_head
 
     # The next guarded step undoes exactly CF-3.
     cf3_token = _confirmation(pg_url, "-1")

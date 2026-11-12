@@ -73,6 +73,8 @@ from app.tests._auth2_support import (
 
 API_DIR = Path(__file__).resolve().parents[2]
 REPAIR = "d5f616c0ec97"
+#: The code head above the repair (D-N4 item 36: the closed claim kinds, data only).
+CLAIM_KINDS_HEAD = "1574637e56d3"
 CF3 = "c3f8e1a6d2b9"
 CF2 = "a7d2e9f4c1b8"
 MIGRATION = next((API_DIR / "alembic" / "versions").glob(f"*-{REPAIR}_*.py"))
@@ -485,7 +487,7 @@ class Repaired:
 def _repair(db: Db) -> Repaired:
     campaigns = _state_world(db)
     before, crossing = db.snapshot(), _crossing(db)
-    output = db.ok("upgrade", "head")
+    output = db.ok("upgrade", REPAIR)
     return Repaired(db, campaigns, before, db.snapshot(), output, crossing)
 
 
@@ -511,12 +513,13 @@ def _lines(output: str, marker: str) -> list[str]:
 # --------------------------------------------------------------------------- #
 # The chain
 # --------------------------------------------------------------------------- #
-def test_the_repair_is_the_single_head_on_cf3_and_data_only() -> None:
+def test_the_repair_follows_cf3_below_the_single_head_and_is_data_only() -> None:
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
-    assert [r.revision for r in script.get_revisions("heads")] == [REPAIR]
+    assert [r.revision for r in script.get_revisions("heads")] == [CLAIM_KINDS_HEAD]
+    assert script.get_revision(CLAIM_KINDS_HEAD).down_revision == REPAIR
     assert script.get_revision(REPAIR).down_revision == CF3
     source = MIGRATION.read_text()
     for ddl in (
@@ -611,7 +614,7 @@ def test_without_the_repair_5dw1_answers_the_backfill_and_the_next_patch_loses_t
 
 def test_with_the_repair_5dw1_answers_the_intended_membership_and_a_patch_keeps_it(db):
     _edited_after_the_backfill(db)
-    output = db.ok("upgrade", "head")
+    output = db.ok("upgrade", REPAIR)
     assert db.version() == [REPAIR]
     assert f"{PREFIX}: S1 inserted: 1 campaigns=[edited]" in output, output
     with _api(db) as (client, headers):
@@ -858,7 +861,7 @@ def test_a_row_of_another_workspace_is_replaced_where_only_sqlite_can_hold_it(db
         loose.dispose()
     assert _crossing(db) == [("r", "la1"), ("u", "la1"), ("u", "la2")]
     before = db.identity()
-    out = db.ok("upgrade", "head")
+    out = db.ok("upgrade", REPAIR)
     after = db.identity()
     assert db.memberships() == {"r": {"la1"}, "u": {"la1", "la1b"}}
     assert _crossing(db) == []
@@ -907,7 +910,7 @@ def test_a_failure_after_deletes_and_inserts_leaves_everything_as_it_was(db: Db)
     for statement in _PG_POISON if db.pg else _SQLITE_POISON:
         db.execute(sa.text(statement))
     before = db.snapshot()
-    failed = db.alembic("upgrade", "head")
+    failed = db.alembic("upgrade", REPAIR)
     out = failed.stdout + failed.stderr
     assert failed.returncode != 0
     assert "injected mid-run failure" in out, out
@@ -918,7 +921,7 @@ def test_a_failure_after_deletes_and_inserts_leaves_everything_as_it_was(db: Db)
     assert db.version() == [CF3]
     for statement in _PG_CURE if db.pg else _SQLITE_CURE:
         db.execute(sa.text(statement))
-    db.ok("upgrade", "head")
+    db.ok("upgrade", REPAIR)
     assert db.version() == [REPAIR]
     for campaign_id in before[1]:
         members, _ = EXPECTED[campaign_id]
@@ -1064,7 +1067,7 @@ def test_upgrade_noop_downgrade_upgrade_changes_nothing(repaired: Repaired) -> N
     db.ok("downgrade", "-1")
     assert db.version() == [CF3]
     assert db.snapshot()[:2] == repaired.after[:2]  # the downgrade wrote nothing
-    again = db.ok("upgrade", "head")
+    again = db.ok("upgrade", REPAIR)
     assert db.version() == [REPAIR]
     assert db.snapshot() == repaired.after
     assert (
@@ -1075,6 +1078,6 @@ def test_upgrade_noop_downgrade_upgrade_changes_nothing(repaired: Repaired) -> N
 
 def test_an_empty_database_goes_from_base_to_head_with_no_report(db: Db) -> None:
     out = db.ok("upgrade", "head")
-    assert db.version() == [REPAIR]
+    assert db.version() == [CLAIM_KINDS_HEAD]  # through the repair to the code head
     assert PREFIX not in out, out
     assert db.ok("check")

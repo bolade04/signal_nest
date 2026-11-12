@@ -3,9 +3,10 @@
 Through the real Alembic CLI on a throwaway SQLite database (as CI validates migrations), with
 the plumbing of ``test_cf1_contract_migration``:
 
-* this revision follows CF-2's ``a7d2e9f4c1b8`` and is followed by the single head, 5D-W1's
-  campaign-location data repair ``d5f616c0ec97`` (data only; tested in
-  ``test_campaign_locations_repair``), so the cases below upgrade to THIS revision explicitly;
+* this revision follows CF-2's ``a7d2e9f4c1b8`` and is followed by 5D-W1's campaign-location
+  data repair ``d5f616c0ec97`` (data only; tested in ``test_campaign_locations_repair``) and
+  then by the single head, D-N4 item 36's closed claim kinds ``1574637e56d3`` (data only; tested
+  in ``test_claim_kinds``), so the cases below upgrade to THIS revision explicitly;
   ``upgrade head`` then ``alembic check`` reports no drift (Phase 5 plan §6.2.0);
 * **the migrated CHECKs equal their Python authorities, in both directions** — campaign mode
   and status (``CampaignMode`` / ``CampaignStatus``), export format (``ExportFormat``), the
@@ -65,8 +66,10 @@ from app.tests.test_cf1_contract_migration import (
 API_DIR = Path(__file__).resolve().parents[2]
 #: This revision (W21 CF-3).
 CF3 = "c3f8e1a6d2b9"
-#: The code head (5D-W1's campaign-location data repair, Amendment D-1), which follows it.
-HEAD = "d5f616c0ec97"
+#: 5D-W1's campaign-location data repair (Amendment D-1), which follows it.
+REPAIR = "d5f616c0ec97"
+#: The code head (D-N4 item 36's closed claim kinds, data only), which follows the repair.
+HEAD = "1574637e56d3"
 CF2 = "a7d2e9f4c1b8"
 OVERRIDES = "workspace_capability_overrides"
 NEW_TABLES = {"campaign_locations", "exports", "notifications", "notification_preferences"}
@@ -149,7 +152,8 @@ def test_the_head_is_single_and_follows_cf2() -> None:
 
     script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
     assert [r.revision for r in script.get_revisions("heads")] == [HEAD]
-    assert script.get_revision(HEAD).down_revision == CF3
+    assert script.get_revision(HEAD).down_revision == REPAIR
+    assert script.get_revision(REPAIR).down_revision == CF3
     assert script.get_revision(CF3).down_revision == CF2
 
 

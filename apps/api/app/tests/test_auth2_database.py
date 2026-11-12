@@ -118,7 +118,9 @@ CF2 = "a7d2e9f4c1b8"
 # exports, notifications, retention markers, capability CHECK widened.
 CF3 = "c3f8e1a6d2b9"
 # Project Phase 5D 5D-W1 (W21, Amendment D-1): the campaign-location data repair (data only).
-CODE_HEAD = "d5f616c0ec97"
+REPAIR = "d5f616c0ec97"
+# D-N4 item 36: the closed claim kinds (data only: the 'prohibited' alias to 'blocked').
+CODE_HEAD = "1574637e56d3"
 
 
 # --------------------------------------------------------------------------- #
@@ -270,7 +272,8 @@ def _insert(con, table: str, id_: str, *, user: str = "u-1", **kw) -> None:
 def test_this_revision_follows_invitations_and_precedes_the_single_head() -> None:
     script = _script()
     assert [r.revision for r in script.get_revisions("heads")] == [CODE_HEAD]
-    assert script.get_revision(CODE_HEAD).down_revision == CF3
+    assert script.get_revision(CODE_HEAD).down_revision == REPAIR
+    assert script.get_revision(REPAIR).down_revision == CF3
     assert script.get_revision(CF3).down_revision == CF2
     assert script.get_revision(CF2).down_revision == CF1
     assert script.get_revision(CF1).down_revision == FINDING
