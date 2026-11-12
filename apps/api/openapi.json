@@ -3424,7 +3424,7 @@
         "type": "string"
       },
       "GeoCoverageBase": {
-        "description": "The coverage PUT's body. The structured business-address fields are written only when\nthe request names them (an explicit ``null`` clears one); a value must be readable as what\nit is, and is never compared with the location here (the action does that).",
+        "description": "The coverage PUT's body. The structured business-address fields are written only when\nthe request names them (an explicit ``null`` clears one); a value must be readable as what\nit is, and is never compared with the location here (the action does that). The readability\nvalidators belong to this request model only: ``GeoCoverageOut`` does not inherit them, so a\nstored value that no longer reads never turns a GET into a response-validation error.",
         "properties": {
           "business_address": {
             "anyOf": [

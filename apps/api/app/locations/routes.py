@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends
+from fastapi.exceptions import RequestValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -38,6 +39,7 @@ from app.locations.schemas import (
     LocalityConfirmationIn,
     LocationBase,
     LocationOut,
+    unreadable_address_fields,
 )
 
 router = APIRouter(tags=["locations"])
@@ -294,7 +296,8 @@ def get_geo_coverage(
     rule = _rule_of(db, workspace_id, location_id)
     if not rule:
         raise NotFoundError(_NO_RULE)
-    location = db.get(BusinessLocation, location_id)
+    # The rule's own location, loaded once the rule is found (the 404s are unchanged).
+    location = db.get(BusinessLocation, rule.location_id) if rule.location_id else None
     if location is not None and location.workspace_id != workspace_id:
         location = None  # never another workspace's location, even for a computed field
     return _coverage_out(rule, location)
@@ -326,6 +329,23 @@ def upsert_geo_coverage(
             organization_id=ctx.organization.id,
             workspace_id=workspace_id,
             location_id=location_id,
+        )
+    # Readability of the values the rule WILL hold: the stored ones for fields the request does
+    # not name, merged with the named ones, so two partial PUTs cannot store a state of another
+    # country (review d1 C-4). Checked before anything is written; a 422 like the body's own.
+    merged = {
+        key: getattr(body, key) if key in body.model_fields_set else getattr(rule, key, None)
+        for key in BUSINESS_ADDRESS_FIELDS
+    }
+    unreadable = unreadable_address_fields(
+        merged["business_address_country"], merged["business_address_region"]
+    )
+    if unreadable:
+        raise RequestValidationError(
+            [
+                {"type": "value_error", "loc": ("body", field), "msg": f"Value error, {message}"}
+                for field, message in unreadable
+            ]
         )
     for key, value in body.model_dump(exclude=set(BUSINESS_ADDRESS_FIELDS)).items():
         setattr(rule, key, value)

@@ -255,6 +255,38 @@ def test_the_messages_fit_the_web_clients_bound_whole() -> None:
         assert len(f"Value error, {message}") <= 80
 
 
+def test_two_partial_puts_cannot_store_a_state_of_another_country(w: W) -> None:
+    """Review d1 C-4: readability is checked on the values the rule will hold, the stored ones
+    merged with those the request names."""
+    assert _put(w, {"business_address_region": "Texas"}).status_code == 200  # no country yet
+    before, audits = w.row(GeoCoverageRule, "geo-a1"), _audits(w)
+    r = _put(w, {"business_address_country": "Nigeria"})
+    assert _validation(r) == [
+        (["body", "business_address_region"], f"Value error, {UNKNOWN_REGION}")
+    ]
+    assert w.row(GeoCoverageRule, "geo-a1") == before and _audits(w) == audits
+    # Naming both, with a state of that country (or none), is accepted.
+    assert _put(w, {"business_address_country": "Nigeria",
+                    "business_address_region": "Lagos"}).status_code == 200
+    assert _put(w, {"business_address_country": "US",
+                    "business_address_region": None}).status_code == 200
+
+
+def test_a_stored_value_that_no_longer_reads_is_answered_and_asks_at_the_action(w: W) -> None:
+    """Review d1 C-4: the response model does not inherit the request's validators. A value
+    that does not read (written directly, or after a reader change) is answered by the GET as
+    stored, and the action asks for the business address (row 5c)."""
+    assert _put_clean(w, {"business_address_region": "Texas",
+                          "business_address_country": "US"}).status_code == 200
+    with w.make() as s:
+        s.get(GeoCoverageRule, "geo-a1").business_address_country = "Narnia"
+        s.commit()
+    got = w.coverage("GET", "ws-a1", "loc-a1")
+    assert got.status_code == 200, got.text
+    assert got.json()["business_address_country"] == "Narnia"
+    assert _action(w).reason == "business_address_incomplete"
+
+
 def test_too_long_a_value_is_refused_without_its_text(w: W) -> None:
     r = _put(w, {"business_address_locality": SENTINEL * 20})
     [(where, _msg)] = _validation(r)

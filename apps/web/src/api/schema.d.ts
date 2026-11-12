@@ -3748,7 +3748,9 @@ export interface components {
          * GeoCoverageBase
          * @description The coverage PUT's body. The structured business-address fields are written only when
          *     the request names them (an explicit ``null`` clears one); a value must be readable as what
-         *     it is, and is never compared with the location here (the action does that).
+         *     it is, and is never compared with the location here (the action does that). The readability
+         *     validators belong to this request model only: ``GeoCoverageOut`` does not inherit them, so a
+         *     stored value that no longer reads never turns a GET into a response-validation error.
          */
         GeoCoverageBase: {
             /** Business Address */

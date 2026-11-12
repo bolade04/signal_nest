@@ -58,6 +58,23 @@ UNKNOWN_COUNTRY = "Enter a country by name or two-letter code, such as Nigeria o
 UNKNOWN_REGION = "Enter a state or province of that country, such as Texas or TX."
 
 
+def unreadable_address_fields(
+    country: str | None, region: str | None
+) -> list[tuple[str, str]]:
+    """The structured business-address fields whose values do not read, with their fixed
+    messages: a country that is not a country, and a state or province that is not one of a
+    US/CA/AU/NG country's subdivisions. Readability only: never compared with the location.
+    The coverage PUT applies it to the values the rule will hold (review d1 C-4)."""
+    found: list[tuple[str, str]] = []
+    code = country_code_of(country) if country is not None else None
+    if country is not None and code is None:
+        found.append(("business_address_country", UNKNOWN_COUNTRY))
+    if region is not None and code in SUBDIVISION_JURISDICTIONS:
+        if subdivision_code_of(code, region) is None:
+            found.append(("business_address_region", UNKNOWN_REGION))
+    return found
+
+
 class GeoCoverageFields(BaseModel):
     """The fields a coverage rule holds, as stored and answered."""
 
@@ -109,7 +126,9 @@ class GeoCoverageFields(BaseModel):
 class GeoCoverageBase(GeoCoverageFields):
     """The coverage PUT's body. The structured business-address fields are written only when
     the request names them (an explicit ``null`` clears one); a value must be readable as what
-    it is, and is never compared with the location here (the action does that)."""
+    it is, and is never compared with the location here (the action does that). The readability
+    validators belong to this request model only: ``GeoCoverageOut`` does not inherit them, so a
+    stored value that no longer reads never turns a GET into a response-validation error."""
 
     @field_validator(*BUSINESS_ADDRESS_FIELDS, mode="before")
     @classmethod
@@ -122,17 +141,16 @@ class GeoCoverageBase(GeoCoverageFields):
     @field_validator("business_address_country")
     @classmethod
     def _readable_country(cls, v: str | None) -> str | None:
-        if v is not None and country_code_of(v) is None:
+        if any(f == "business_address_country" for f, _ in unreadable_address_fields(v, None)):
             raise ValueError(UNKNOWN_COUNTRY)
         return v
 
     @field_validator("business_address_region")
     @classmethod
     def _readable_region(cls, v: str | None, info: ValidationInfo) -> str | None:
-        country = country_code_of(info.data.get("business_address_country"))
-        if v is not None and country in SUBDIVISION_JURISDICTIONS:
-            if subdivision_code_of(country, v) is None:
-                raise ValueError(UNKNOWN_REGION)
+        country = info.data.get("business_address_country")
+        if any(f == "business_address_region" for f, _ in unreadable_address_fields(country, v)):
+            raise ValueError(UNKNOWN_REGION)
         return v
 
 
