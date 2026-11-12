@@ -329,6 +329,25 @@ def test_only_the_four_sanctioned_writers_mark_their_transaction() -> None:
     assert callers == SANCTIONED_WRITERS
 
 
+def test_only_erasure_and_retention_import_the_writer() -> None:
+    """Review W21-REV-DN4-37 r1, N-1: the call-site pin above follows calls by name, so an aliased
+    import (``from app.privacy.writer import mark_privacy_writer as _x``) would slip past it.
+    Only the two modules of the four writers may import from :mod:`app.privacy.writer` at all,
+    in any form."""
+    importers = set()
+    for rel, tree, _ in _production_modules():
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                if node.module == "app.privacy.writer" or (
+                    node.module == "app.privacy" and any(a.name == "writer" for a in node.names)
+                ):
+                    importers.add(rel)
+            elif isinstance(node, ast.Import):
+                if any(a.name.startswith("app.privacy.writer") for a in node.names):
+                    importers.add(rel)
+    assert importers == {"app/privacy/erasure.py", "app/privacy/retention.py"}
+
+
 def test_only_the_writer_module_names_the_setting() -> None:
     """The setting is named (as its literal or its constant) by :mod:`app.privacy.writer` only,
     so nothing else can set the mark; and no production statement disables or drops a trigger
@@ -1418,3 +1437,71 @@ def test_a_takedown_that_reaches_no_append_only_record_still_purges(engine, tmp_
         assert r.json()["verified"] is True
         assert r.json()["purged"]["opportunities_deleted"] == 1
         assert env.rows(Opportunity, Opportunity.id == "a1-opp") == []
+
+
+def test_a_brief_inserted_while_a_campaign_is_deleted_still_gets_the_409(fresh) -> None:
+    """37-R-1's lock (review W21-REV-DN4-37 r1, C-1). A second connection holds an uncommitted
+    brief naming the campaign (its foreign-key check holds ``KEY SHARE`` on the campaign row).
+    The deletion's ``SELECT … FOR UPDATE`` must wait on it; after the commit the check sees the
+    brief and answers the 409, so the trigger is never reached. Without the lock the deletion
+    waits at its ``DELETE`` instead, and the cascade's ``SET NULL`` on the brief hits SNA01: a
+    500. READ COMMITTED, the application's isolation level."""
+    import threading
+    import time
+
+    from fastapi.testclient import TestClient
+
+    from app.main import app as fastapi_app
+
+    client = TestClient(fastapi_app, raise_server_exceptions=False)
+    headers = fresh.auth(ALICE)
+    holder = fresh.engine.connect()
+    watcher = fresh.witness.connect()
+    answers: list = []
+    try:
+        holder_pid = holder.execute(select(func.pg_backend_pid())).scalar_one()
+        held = holder.begin()
+        holder.execute(
+            insert(RecommendationBrief.__table__).values(
+                _brief_row(
+                    "race-brief",
+                    ws=WS_A,
+                    org=ORG_A,
+                    opportunity="a1-opp",
+                    intel="a1-intel",
+                    campaign_id="a1-campaign",
+                )
+            )
+        )
+        deleter = threading.Thread(
+            target=lambda: answers.append(
+                client.delete(f"{API}/workspaces/{WS_A}/campaigns/a1-campaign", headers=headers)
+            )
+        )
+        deleter.start()
+        blocked = []
+        deadline = time.monotonic() + 30
+        while not blocked and time.monotonic() < deadline and deleter.is_alive():
+            watcher.execute(select(func.pg_stat_clear_snapshot()))
+            blocked = watcher.execute(
+                text(
+                    "SELECT pid FROM pg_stat_activity WHERE datname = current_database()"
+                    " AND wait_event_type = 'Lock' AND :holder = ANY(pg_blocking_pids(pid))"
+                ),
+                {"holder": holder_pid},
+            ).all()
+            if not blocked:
+                time.sleep(0.05)
+        assert blocked, "the deletion never waited on the uncommitted brief"
+        held.commit()
+        deleter.join(timeout=60)
+        assert not deleter.is_alive()
+    finally:
+        holder.close()
+        watcher.close()
+
+    [r] = answers
+    assert _error(r) == (409, CAMPAIGN_IN_USE_CODE, CAMPAIGN_IN_USE), r.text
+    assert fresh.rows(Campaign, Campaign.id == "a1-campaign")  # kept
+    [brief] = fresh.rows(RecommendationBrief, RecommendationBrief.id == "race-brief")
+    assert brief["campaign_id"] == "a1-campaign"  # unchanged

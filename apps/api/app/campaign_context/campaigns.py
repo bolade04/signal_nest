@@ -153,7 +153,10 @@ def _refuse_if_referenced(db: Session, campaign: Campaign) -> None:
     and which SQLite would let through. The campaign row is first locked ``FOR UPDATE``, which
     the ``KEY SHARE`` check of a concurrent brief or draft insert naming it waits on, so no such
     row can appear between this check and the delete; a campaign deleted meanwhile is not
-    found."""
+    found. This holds under READ COMMITTED, the application's isolation level (none is set in
+    ``app/``): after the lock is granted, the check's own statement sees a brief or draft that
+    committed while it waited (pinned by a PostgreSQL race test in
+    ``test_append_only_backstop_postgres``)."""
     locked = db.scalar(
         select(Campaign.id)
         .where(Campaign.id == campaign.id, Campaign.workspace_id == campaign.workspace_id)

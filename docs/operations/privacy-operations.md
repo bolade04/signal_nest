@@ -378,11 +378,14 @@ account deletion, invitee erasure (`erase-email`) and the retention purge (the s
 - it names the transaction, and the trigger compares it with the current transaction's id, so
   a value left behind any other way (a session-level `SET`, or `on`) grants nothing.
 
-So the procedures above need nothing new: the CLI commands, the API deletions and the service
-functions named in §4 mark their own transactions. Calling an inner helper on its own (an
-`anonymise_*` function, or `delete_rows`) is refused on PostgreSQL. **Never set
-`signalnest.privacy_writer` by hand.** A refusal in the logs means an unsanctioned path tried
-to change or remove a compliance record: investigate it; do not work around it.
+So the procedures in §1–§3 need nothing new: the API deletions, `erase-email`, and the retention sweep and job mark their own transactions. **After a restore (§4)**, an organization deletion can be repeated with `app.privacy.erasure.erase_organization` (it marks its own transaction), but no operator path repeats an *account* deletion: `delete_account` needs the account's current password, and calling the helpers by hand is refused on PostgreSQL. Re-applying account deletions after a restore is therefore an open operator item; a sanctioned operator writer for it would widen the ruled exception and needs the operator's decision.
+
+Calling an inner helper on its own (an `anonymise_*` function, or `delete_rows`) is refused on
+PostgreSQL. **Never set `signalnest.privacy_writer` by hand.** A refusal means an unsanctioned
+path tried to change or remove a compliance record: investigate it; do not work around it. The
+SQLSTATE `SNA01` and its message appear in the **PostgreSQL server log**; the application's log
+records only `unhandled_error` with `error_class=DatabaseError` (it never logs a driver's
+message).
 
 **What it does not protect against.** The runtime database role owns these tables. A deliberate
 table owner can switch the backstop off (`ALTER TABLE … DISABLE TRIGGER`, `DROP TRIGGER`,
