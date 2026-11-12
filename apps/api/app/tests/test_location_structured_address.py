@@ -545,11 +545,40 @@ GUARDED = (
 )
 
 
+#: Product files the package shares with text that rightly says "verif" (e-mail verification, the
+#: erasure verifier): only the package's own spans are guarded, each from its first words to its
+#: end marker. A span whose words move fails here, so it is re-anchored rather than lost.
+GUARDED_SPANS = (
+    ("apps/web/src/api/endpoints.ts",
+     "W21 ADDR: confirm (or withdraw)", "{ method: 'PUT', body },"),
+    ("apps/web/src/api/types.ts", "W21 ADDR: confirm or withdraw", "S['LocalityConfirmationIn'];"),
+    ("apps/web/src/pages/locations/LocationDialog.tsx",
+     "The structured business address (W21 ADDR)", "];"),
+    ("apps/web/src/pages/locations/LocationDialog.tsx",
+     "W21 ADDR: exactly what was typed", "stored(coverage[key])"),
+    ("apps/web/src/pages/locations/LocationDialog.tsx",
+     "W21 ADDR: the confirmation acts on what is SAVED", "'Could not update the confirmation.'"),
+    ("apps/web/src/pages/locations/LocationDialog.tsx",
+     "Address for jurisdiction</legend>", "</fieldset>"),
+    ("apps/api/app/privacy/export.py",
+     "W21 ADDR — the business-town confirmations", "No credential"),
+    ("apps/api/app/privacy/export.py", "# W21 ADDR: the confirmations, by this account",
+     ".order_by(GeoCoverageRule.locality_confirmed_at"),
+    ("apps/api/app/privacy/schemas.py", "W21 ADDR: the confirmations the account made",
+     "locality_confirmations_made:"),
+)
+
+
 def test_no_product_text_about_customer_address_data_says_verified() -> None:
     root = Path(__file__).resolve().parents[4]
     for relative in GUARDED:
         text = (root / relative).read_text()
         assert "verif" not in text.lower(), relative
+    for relative, first, last in GUARDED_SPANS:
+        text = (root / relative).read_text()
+        start = text.index(first)
+        span = text[start:text.index(last, start) + len(last)]
+        assert "verif" not in span.lower(), (relative, first)
     inventory = (root / "docs/operations/data-inventory.md").read_text().splitlines()
     [row] = [line for line in inventory if line.startswith("| `geo_coverage_rules` |")]
     assert "verif" not in row.lower()

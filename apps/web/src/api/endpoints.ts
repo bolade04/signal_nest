@@ -411,7 +411,7 @@ export const upsertGeoCoverage = (
 /**
  * W21 ADDR: confirm (or withdraw) that the SAVED business town lies within this location's
  * area. The API binds what is stored, never what the dialog shows; a confirmation is the
- * customer's own statement and is not verified.
+ * customer's own statement, recorded as confirmed by the customer.
  */
 export const setLocalityConfirmation = (
   workspaceId: string,
