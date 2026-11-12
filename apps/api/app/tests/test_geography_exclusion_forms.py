@@ -1168,15 +1168,18 @@ def test_fue_a_country_after_the_town_must_agree_with_the_code():
 def test_fue_uk_nations_and_comma_free_forms_read_as_the_review_measured():
     """UK nations resolve by country, so a nation code before the town agrees with any UK
     location and contradicts one abroad, as before. A code and a town with no comma between
-    them ("US-CT Hartford") is not read as a code here, as on the current release and D1: it
-    agrees with Hartford and does not contradict Dallas (a characterisation, not a ruling)."""
+    them ("US-CT Hartford") agrees with Hartford. The qualifier rules do not read it as a code,
+    as on the current release and D1, but GEO-P1 reads a listed code wherever it is written, so
+    it contradicts Dallas (this was a characterisation, not a ruling)."""
     assert _resolve(LONDON_LOCATION, "GB-ENG, London").code == "GB"
     assert _resolve(LONDON_LOCATION, "GB-SCT, Edinburgh").code == "GB"
     toronto = _resolve(TORONTO_LOCATION, "GB-ENG, London")
     assert toronto.code == UNRESOLVED
     assert toronto.evidence[-1].endswith("states country GB")
     assert _resolve(HARTFORD_LOCATION, "US-CT Hartford").code == "US-CT"
-    assert _resolve(DALLAS_LOCATION, "US-CT Hartford").code == "US-TX"
+    dallas = _resolve(DALLAS_LOCATION, "US-CT Hartford")
+    assert dallas.code == UNRESOLVED
+    assert dallas.evidence[-1].endswith("states subdivision US-CT"), dallas.evidence
 
 
 def test_fue_only_the_business_address_reads_the_town():

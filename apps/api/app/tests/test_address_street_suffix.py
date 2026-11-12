@@ -77,6 +77,9 @@ from app.geography.geocoder import fixture_geocode
 from app.geography.markets import parse_business_address, parse_market, parse_observed
 from app.jurisdiction.codes import UNRESOLVED
 from app.jurisdiction.resolver import (
+    ADDRESS_DIRECTION_AMBIGUOUS,
+    ADDRESS_NAMES_ANOTHER_PLACE,
+    ADDRESS_PLACE_UNCLEAR,
     ADDRESS_SUFFIX_AMBIGUOUS,
     CLARIFICATIONS,
     jurisdiction_permits,
@@ -543,9 +546,15 @@ def test_an_address_whose_later_parts_are_only_units_reads_as_its_first_part(add
 
 
 def test_only_an_ambiguous_suffix_carries_a_reason():
-    """Clear lines, explicit contradictions and unresolvable fields carry no reason; the one
-    reason category has exactly one fixed message."""
-    assert set(CLARIFICATIONS) == {ADDRESS_SUFFIX_AMBIGUOUS}
+    """Clear lines, explicit contradictions and unresolvable fields carry no reason; D1's reason
+    category has exactly one fixed message. GEO-P1 adds three categories for parts read wherever
+    they stand (their messages are pinned in ``test_geography_part_places.py``)."""
+    assert set(CLARIFICATIONS) == {
+        ADDRESS_SUFFIX_AMBIGUOUS,
+        ADDRESS_NAMES_ANOTHER_PLACE,
+        ADDRESS_PLACE_UNCLEAR,
+        ADDRESS_DIRECTION_AMBIGUOUS,
+    }
     assert CLARIFICATIONS[ADDRESS_SUFFIX_AMBIGUOUS] == (
         "We couldn't tell whether the end of the business address is a street type or a "
         "state or country. Write the street type or direction in full (for example "
