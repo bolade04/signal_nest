@@ -1113,6 +1113,18 @@ function asContextKind(value: unknown): ContextKind | null {
   return CONTEXT_KINDS.find((k) => k === value) ?? null;
 }
 
+/**
+ * A stored row as the API answers it. Campaigns are served by 5D-W1's dedicated router, which
+ * projects `CampaignOut`: no `organization_id` or `workspace_id` (5D exit criterion 2). The
+ * other eight kinds keep the generic factory's full row, as the API does (5d §2). I-5D: this
+ * mock used to echo the tenant fields for campaigns too (W21-REV-5DW4 r3 INFO-2).
+ */
+function contextAnswer(kind: ContextKind, row: StoredContextRow): Record<string, unknown> {
+  if (kind !== 'campaigns') return { ...row };
+  const { organization_id: _org, workspace_id: _ws, ...projected } = row;
+  return projected;
+}
+
 /** One Pydantic error item exactly as the API publishes it (core/errors.py allowlist). */
 interface ContextFieldError {
   type: string;
@@ -2286,7 +2298,17 @@ export const handlers = [
     if (!kind) return HttpResponse.json({ detail: 'Not found' }, { status: 404 });
     // No `limit`: every row of this workspace, oldest first, with the total (P6-PLAT-12).
     const rows = contextRows[kind].filter((r) => r.workspace_id === String(params.ws));
-    return HttpResponse.json(rows, { headers: { 'X-Total-Count': String(rows.length) } });
+    return HttpResponse.json(
+      rows.map((r) => contextAnswer(kind, r)),
+      { headers: { 'X-Total-Count': String(rows.length) } },
+    );
+  }),
+  // 5D-W1's GET one (campaigns only): the projected campaign of this workspace, or the router's
+  // uniform 404 for a campaign of any other workspace.
+  http.get(P('/workspaces/:ws/campaigns/:id'), ({ params }) => {
+    const row = contextRows.campaigns.find((r) => r.id === params.id && r.workspace_id === String(params.ws));
+    if (!row) return modelError(404, 'not_found', 'Item not found in this workspace.');
+    return HttpResponse.json(contextAnswer('campaigns', row));
   }),
   // P6-PLAT-9: PATCH changes only the fields sent (apps/api/app/campaign_context/routes.py
   // `_update`). The order of refusals is the API's: the tenancy gate above (403 for a
@@ -2336,8 +2358,18 @@ export const handlers = [
     }
     const row = contextRows[kind].find((r) => r.id === params.id && r.workspace_id === String(params.ws));
     if (!row) return modelError(404, 'not_found', 'Item not found in this workspace.');
+    if (kind === 'campaigns' && Array.isArray(body.location_ids)) {
+      // 5D-W1: a sent `location_ids` replaces the membership whole; every id must be a location
+      // of this workspace (404 otherwise), and the answer lists them in location-id order.
+      const own = new Set(locations.filter((l) => l.workspace_id === String(params.ws)).map((l) => l.id));
+      const ids = body.location_ids as string[];
+      if (ids.some((id) => !own.has(id))) {
+        return modelError(404, 'not_found', 'Location not found in this workspace.');
+      }
+      body.location_ids = [...new Set(ids)].sort();
+    }
     for (const key of Object.keys(rules)) if (key in body) row[key] = body[key];
     row.updated_at = '2026-07-01T00:00:00Z';
-    return HttpResponse.json({ ...row });
+    return HttpResponse.json(contextAnswer(kind, row));
   }),
 ];
