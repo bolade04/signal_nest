@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '@/App';
 import { ApiError } from '@/api/client';
 import { API_PREFIX } from '@/api/config';
+import type { CampaignOut } from '@/api/types';
 import * as api from '@/api/endpoints';
 import { useAuth } from '@/auth/AuthContext';
 import { CONTEXT_ROW_DEFAULTS, orgModel, type ModelRole } from '@/test/handlers';
@@ -21,7 +22,8 @@ import { useWorkspace } from '@/workspace/WorkspaceContext';
  * buttons and all nine campaign-context kinds exercised inside their rows — no
  * "one representative button" shortcut. Since W21 CF-2 the claims library is
  * steward-only, so each of the three campaign-context sites is two rows: the eight
- * editor kinds, and the claims library under its own policy (22 rows).
+ * editor kinds, and the claims library under its own policy (22 rows). Since I-5D the
+ * mounted campaign pages add four rendered entry sites (C12-C14), so 26 rows.
  *
  * The oracle is the BACKEND policy, written out literally here rather than read
  * from the frontend's role helper: a test that asked lib/roles.ts what to expect
@@ -33,6 +35,9 @@ import { useWorkspace } from '@/workspace/WorkspaceContext';
  *   CLAIMS_STEWARD = require_exact_roles(OWNER, ADMIN, COMPLIANCE_REVIEWER), the claims
  *               library's /claims writes (apps/api/app/campaign_context/routes.py:88-92,
  *               W21 CF-2)
+ *   EDITOR also covers the dedicated campaigns router's writes (create, PATCH, DELETE:
+ *               apps/api/app/campaign_context/campaigns.py, EDITORS = require_role(OWNER,
+ *               ADMIN, MARKETER), 5D-W1); every member reads a campaign.
  *
  * The role is configured in the stateful backend model before render, so /auth/me
  * answers it like the server would. Every absence assertion waits for two witnesses
@@ -84,6 +89,23 @@ const SCHEDULE_404 = http.get(P('/workspaces/:ws/scout-requests/:id/schedule'), 
 const NO_LOCATIONS = http.get(P('/workspaces/:ws/locations'), () => HttpResponse.json([]));
 const NO_SCOUTS = http.get(P('/workspaces/:ws/scout-requests'), () => HttpResponse.json([]));
 const NO_OPPORTUNITIES = http.get(P('/workspaces/:ws/opportunities'), () => HttpResponse.json([]));
+// One stored campaign, as 5D-W1's router answers it (the projected CampaignOut).
+const MATRIX_CAMPAIGN = {
+  id: 'cmp-matrix-1',
+  brand_id: 'brand-1',
+  name: 'Matrix spring launch',
+  goal: null,
+  mode: 'per_location',
+  location_ids: [],
+  status: 'active',
+  created_at: '2026-06-01T00:00:00Z',
+  updated_at: '2026-06-01T00:00:00Z',
+} satisfies CampaignOut;
+const ONE_CAMPAIGN = [
+  http.get(P('/workspaces/:ws/campaigns'), () => HttpResponse.json([MATRIX_CAMPAIGN])),
+  http.get(P('/workspaces/:ws/campaigns/:id'), () => HttpResponse.json(MATRIX_CAMPAIGN)),
+];
+const NO_CAMPAIGNS = http.get(P('/workspaces/:ws/campaigns'), () => HttpResponse.json([]));
 const RUNNING_JOB = http.get(P('/workspaces/:ws/jobs'), () =>
   HttpResponse.json({
     items: [
@@ -458,6 +480,43 @@ const ROWS: Row[] = [
     ready: (s) => s.findByText(/demo org · 1 workspace/i),
     check: single(/^(\+\s*)?new( workspace)?$/i, 1),
   },
+  // I-5D: the campaign pages (5D-W3), mounted at /campaigns and /campaigns/:campaignId.
+  {
+    id: 'C12 New campaign (page header)',
+    site: 'campaigns/CampaignsPage.tsx:109',
+    policy: EDITOR,
+    route: '/campaigns',
+    handlers: ONE_CAMPAIGN,
+    ready: (s) => s.findByRole('link', { name: 'Matrix spring launch' }),
+    check: single(/^new campaign$/i, 1),
+  },
+  {
+    id: 'C12 New campaign (empty state)',
+    site: 'campaigns/CampaignsPage.tsx:70',
+    policy: EDITOR,
+    route: '/campaigns',
+    handlers: [NO_CAMPAIGNS],
+    ready: (s) => s.findByText(/no campaigns yet/i),
+    check: single(/^new campaign$/i, 1),
+  },
+  {
+    id: 'C13 Edit campaign',
+    site: 'campaigns/CampaignDetailPage.tsx:169',
+    policy: EDITOR,
+    route: '/campaigns/cmp-matrix-1',
+    handlers: ONE_CAMPAIGN,
+    ready: (s) => s.findByRole('heading', { level: 1, name: 'Matrix spring launch' }),
+    check: single(/^edit campaign$/i, 1),
+  },
+  {
+    id: 'C14 Delete campaign',
+    site: 'campaigns/CampaignDetailPage.tsx:172',
+    policy: EDITOR,
+    route: '/campaigns/cmp-matrix-1',
+    handlers: ONE_CAMPAIGN,
+    ready: (s) => s.findByRole('heading', { level: 1, name: 'Matrix spring launch' }),
+    check: single(/^delete campaign$/i, 1),
+  },
 ];
 
 beforeEach(() => {
@@ -472,10 +531,11 @@ describe('formerly ungated mutation controls × six roles (§53)', () => {
   it('covers every rendered entry site of the inventory exactly once', () => {
     // M3 INVENTORY.md unit U3: 19 entry sites (C01-C11); since W21 CF-2 the three
     // campaign-context sites are each split into the eight editor kinds and the
-    // steward-only claims library, so 22 rows. A row added or dropped without the
-    // inventory changing is a coverage defect.
-    expect(ROWS).toHaveLength(22);
-    expect(new Set(ROWS.map((r) => r.site)).size).toBe(22);
+    // steward-only claims library, so 22 rows; since I-5D the campaign pages add four
+    // (C12 New campaign in the header and in the empty state, C13 Edit, C14 Delete), so
+    // 26. A row added or dropped without the inventory changing is a coverage defect.
+    expect(ROWS).toHaveLength(26);
+    expect(new Set(ROWS.map((r) => r.site)).size).toBe(26);
     // The split covers all nine kinds exactly once: eight editor kinds plus claims.
     expect(EDITOR_TABS).toHaveLength(8);
     expect(CONTEXT_TABS).toContainEqual(CLAIMS_TAB);
@@ -612,6 +672,14 @@ const SWITCH_PAGES: SwitchPage[] = [
         await screen.user.click(screen.getByRole('button', { name: /save & continue/i }));
       }
     },
+  },
+  {
+    // I-5D: the campaigns page's create control follows the ACTIVE organization's role.
+    page: 'Campaigns',
+    route: '/campaigns',
+    handlers: [NO_CAMPAIGNS],
+    ready: (s) => s.findByText(/no campaigns yet/i),
+    controls: [/^new campaign$/i],
   },
   {
     page: 'Settings (workspace New)',
