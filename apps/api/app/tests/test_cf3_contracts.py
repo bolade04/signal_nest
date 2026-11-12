@@ -209,7 +209,12 @@ def test_the_additive_columns_exist_and_are_nullable() -> None:
     ("dependency", "allowed"),
     [
         (require_exporter, {Role.OWNER, Role.ADMIN, Role.MARKETER}),
-        (require_export_history_reader, {Role.OWNER, Role.ADMIN, Role.MARKETER, Role.REVIEWER}),
+        # Operator ruling D-N4 item 32 (2026-11-12): the history read gains
+        # COMPLIANCE_REVIEWER; export creation and analytics keep their CF-3 sets.
+        (
+            require_export_history_reader,
+            {Role.OWNER, Role.ADMIN, Role.MARKETER, Role.REVIEWER, Role.COMPLIANCE_REVIEWER},
+        ),
         (require_analytics_reader, {Role.OWNER, Role.ADMIN, Role.MARKETER, Role.REVIEWER}),
     ],
 )
@@ -225,9 +230,29 @@ def test_each_policy_admits_exactly_its_roles(dependency, allowed) -> None:
 
 def test_the_role_sets_are_named_and_exact() -> None:
     assert EXPORTER_ROLES == frozenset({Role.OWNER, Role.ADMIN, Role.MARKETER})
-    assert EXPORT_HISTORY_READER_ROLES == ANALYTICS_READER_ROLES == frozenset(
+    assert ANALYTICS_READER_ROLES == frozenset(
         {Role.OWNER, Role.ADMIN, Role.MARKETER, Role.REVIEWER}
     )
+    assert EXPORT_HISTORY_READER_ROLES == frozenset(
+        {Role.OWNER, Role.ADMIN, Role.MARKETER, Role.REVIEWER, Role.COMPLIANCE_REVIEWER}
+    )
+
+
+def test_export_history_is_the_analytics_set_plus_the_compliance_reviewer() -> None:
+    """D-N4 item 32: COMPLIANCE_REVIEWER reads the export history (what left the system, as
+    the audit read already admits it), but neither exports nor reads analytics; VIEWER reads
+    none of the three."""
+    assert EXPORT_HISTORY_READER_ROLES - ANALYTICS_READER_ROLES == {Role.COMPLIANCE_REVIEWER}
+    assert ANALYTICS_READER_ROLES < EXPORT_HISTORY_READER_ROLES
+    assert Role.COMPLIANCE_REVIEWER not in EXPORTER_ROLES
+    assert Role.COMPLIANCE_REVIEWER not in ANALYTICS_READER_ROLES
+    for roles in (EXPORTER_ROLES, EXPORT_HISTORY_READER_ROLES, ANALYTICS_READER_ROLES):
+        assert Role.VIEWER not in roles
+    compliance = SimpleNamespace(role=Role.COMPLIANCE_REVIEWER)
+    assert require_export_history_reader(ctx=compliance) is compliance
+    for refusing in (require_exporter, require_analytics_reader):
+        with pytest.raises((PermissionDeniedError, HTTPException)):
+            refusing(ctx=compliance)
 
 
 def test_the_emission_interface_signature_is_frozen() -> None:
