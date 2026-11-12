@@ -396,3 +396,29 @@ def test_r1_c3_a_unit_label_before_a_long_number_is_a_unit(location, address, co
 def test_r1_c3_fl_before_a_zip_code_is_florida():
     _refused(ATLANTA, "FL 33101, 1 Main St", "states subdivision US-FL")
     _refused(HARTFORD, "1 Main St, Miami, FL 33101, Suite 200", "states subdivision US-FL")
+
+
+# --------------------------------------------------------------------------- #
+# Review W21-REV-GEO P2 r1 C-4: rows for the review's surviving mutants X2, X4, X7 and X8
+# --------------------------------------------------------------------------- #
+
+
+def test_r1_c4_a_designators_two_area_group_is_checked():
+    """X2: "1000 CA 9" is a route, California or Canada: for London it asks, never resolves."""
+    _clarified(
+        LONDON,
+        "1000 CA 9",
+        ADDRESS_ROUTE_AMBIGUOUS,
+        "is ambiguous: a route or country CA or country US",
+    )
+
+
+def test_r1_c4_rt_is_a_route_word():
+    """X4: "4400 US Rt 75" is a United States route, refused for London."""
+    _refused(LONDON, "4400 US Rt 75", "states country US")
+
+
+@pytest.mark.parametrize("address", ["123 Main St, Fl 3A", "123 Main St, Fl #3"])
+def test_r1_c4_a_floor_with_a_letter_or_a_hash_is_a_floor(address):
+    """X7, X8: "Fl 3A" and "Fl #3" are floors, never Florida."""
+    assert _resolve(DALLAS, address).code == "US-TX"
