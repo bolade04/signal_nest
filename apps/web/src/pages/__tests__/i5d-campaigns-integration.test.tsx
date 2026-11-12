@@ -1,12 +1,15 @@
 import { within } from '@testing-library/react';
+import { http, HttpResponse } from 'msw';
 import { useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { App } from '@/App';
 import { setAuthToken } from '@/api/client';
+import { API_PREFIX } from '@/api/config';
 import * as api from '@/api/endpoints';
 import { navItems } from '@/components/layout/nav';
 import { CAMPAIGNS_PATH, campaignPath } from '@/pages/campaigns/campaignVocabulary';
 import { contextModel, orgModel, type ModelRole } from '@/test/handlers';
+import { server } from '@/test/server';
 import { renderApp } from '@/test/utils';
 
 /**
@@ -71,6 +74,39 @@ describe('I-5D: the campaign pages are mounted', () => {
     const screen = renderApp(app, { route: campaignPath('cmp-not-here') });
     expect(await screen.findByText(/not in this workspace/i)).toBeInTheDocument();
     expect(screen.getByRole('navigation', { name: 'Primary' })).toBeInTheDocument();
+  });
+});
+
+// The demo user that renderApp signs in is a platform operator (src/test/handlers.ts). Every
+// customer is not, so the live entry is also judged for a member who is not an operator, in
+// every organization role (W21-REV-5D-INTEG r1 C-1; its mutant RV-W2 made the entry
+// operator-only and no other test noticed).
+describe('I-5D: the Campaigns entry for a member who is not a platform operator', () => {
+  it.each(ROLES)('%s (not an operator): the Campaigns entry is shown and opens the page', async (role) => {
+    server.use(
+      http.get(`*${API_PREFIX}/auth/me`, () =>
+        HttpResponse.json({
+          access_token: 'test-token',
+          token_type: 'bearer',
+          user: {
+            id: 'user-2',
+            email: 'customer@signalnest.dev',
+            full_name: 'Customer',
+            is_operator: false,
+            email_verified: true,
+          },
+          memberships: [{ organization_id: 'org-1', role }],
+        }),
+      ),
+    );
+    const screen = renderApp(app, { route: '/' });
+    await screen.findByRole('heading', { level: 1, name: 'Overview' });
+    const nav = screen.getByRole('navigation', { name: 'Primary' });
+    // Liveness: this session really is not an operator (the operator-only entry is absent).
+    expect(within(nav).queryByRole('link', { name: 'Operations' })).toBeNull();
+    await screen.user.click(within(nav).getByRole('link', { name: 'Campaigns' }));
+    expect(await screen.findByRole('heading', { level: 1, name: 'Campaigns' })).toBeInTheDocument();
+    expect(screen.getByTestId('router-location').textContent).toBe(CAMPAIGNS_PATH);
   });
 });
 
