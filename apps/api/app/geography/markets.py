@@ -518,8 +518,9 @@ class PartPlace:
 
     * :data:`PLACE_CODE`: a listed subdivision code, anywhere in the part ("US-AL", "us al",
       "Hartford US-CT", "US-CT Hartford", "Lekki NG-LA"), or a subdivision named with its suffix or
-      prefix ("Ogun State", "Federal Capital Territory", "State of Alabama"). No town or business
-      is written so, so it is explicit wherever it stands.
+      prefix ("Ogun State", "Federal Capital Territory", "State of Alabama"; a prefixed Nigerian
+      code has its Nigerian reading too, "State of PL" is Poland or Plateau State). No town or
+      business is written so, so it is explicit wherever it stands, the first part included.
     * :data:`PLACE_NAME`: a country's or a state's or province's name ("Nigeria", "Texas",
       "Kenya", "Georgia"), or a code of two or three letters written in capitals in an address
       that mixes capitals and small letters ("ACME, NG, Lagos"). It is explicit, as the reader
@@ -802,22 +803,30 @@ def _part_places(text: str) -> tuple[PartPlace, ...]:
             continue
         if _CODE_TOKEN.search(raw):
             continue  # "US-9", "GA-400", "AL-AIN", "DE-BY": no listed code (C-1, C-9)
-        if index == 0 and len(raw_parts) > 1 and not _designator(raw):
-            # W21-REV-GEO r1 C-1: "Dallas TX, 1 Main St". A designator keeps D1's first-part
-            # reading (C-16: "1 SR 520, Redmond").
-            found = _first_part_readings(raw, folded)
-            if found:
-                places += [PartPlace(PLACE_FIRST_PART, folded, readings) for readings in found]
-                continue
         named = _named_subdivision(folded)
         prefixed = _AREA_PREFIX.sub("", folded) if _AREA_PREFIX.match(folded) else None
         if named is not None:
             area = (named.country, named.region)
             places.append(PartPlace(PLACE_CODE, folded, identities([area])))
             continue
-        if prefixed and (areas := _area_candidates(prefixed) + _homonym_areas(prefixed)):
-            places.append(PartPlace(PLACE_CODE, folded, identities(areas)))
-            continue
+        if prefixed:
+            areas = _area_candidates(prefixed) + _homonym_areas(prefixed)
+            coded = _JURISDICTION_CODE_AREAS.get(prefixed)
+            if coded is not None and coded not in areas:
+                # W21-REV-GEO r2 C-9: "State of PL" is Poland or Plateau State, as "PL" is (C-2).
+                areas.append(coded)
+            if areas:
+                places.append(PartPlace(PLACE_CODE, folded, identities(areas)))
+                continue
+        if index == 0 and len(raw_parts) > 1 and not _designator(raw):
+            # W21-REV-GEO r1 C-1: "Dallas TX, 1 Main St". A designator keeps D1's first-part
+            # reading (C-16: "1 SR 520, Redmond"). W21-REV-GEO r2 C-9: it comes after the suffixed
+            # and prefixed readings above, which are explicit in the first part as elsewhere
+            # ("State of WA, 1 Main St, Dallas, TX" is refused for Dallas).
+            found = _first_part_readings(raw, folded)
+            if found:
+                places += [PartPlace(PLACE_FIRST_PART, folded, readings) for readings in found]
+                continue
         areas = _area_candidates(folded)
         coded = _JURISDICTION_CODE_AREAS.get(folded)
         if coded is not None and coded not in areas:

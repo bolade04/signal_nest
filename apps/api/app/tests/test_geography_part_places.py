@@ -577,6 +577,16 @@ def test_c1_explicit_geography_settles_a_first_part_town_and_code():
     _clarified(ANCHORAGE, us, ADDRESS_PLACE_UNCLEAR, "a name or subdivision US-TX")
 
 
+def test_c9_a_suffixed_or_prefixed_first_part_stays_explicit():
+    """W21-REV-GEO r2 C-9: the first part's town-and-code reading comes after the suffixed and
+    prefixed readings, so a prefixed code in the first part is explicit there as elsewhere, and a
+    prefixed Nigerian code has its Nigerian reading (as C-2 gives the bare code one)."""
+    _refused(DALLAS, "State of WA, 1 Main St, Dallas, TX", "states subdivision US-WA or country AU")
+    _refused(DALLAS, "Province of ON, 1 Main St, Dallas, TX", "states country CA or country NG")
+    jos = _location("Jos", "Plateau", "Nigeria")
+    assert _resolve(jos, "State of PL, 1 Main St, Nigeria").code == "NG-PL"
+
+
 def test_c1_a_first_part_designator_keeps_d1s_reading():
     """D1's C-16 keeps a first-part designator's reading ("1 SR 520, Redmond"): it is not read as a
     town and a code."""
