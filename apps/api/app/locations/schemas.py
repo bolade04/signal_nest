@@ -51,15 +51,11 @@ BUSINESS_ADDRESS_FIELDS: Final = (
     "business_address_postcode",
 )
 _AS_ENTERED = "As entered by the customer; not verified against any external source."
-#: The fixed 422 messages of the structured fields (they never repeat what was sent).
-UNKNOWN_COUNTRY = (
-    "Enter a country we recognise for the business country, by name or two-letter code (for "
-    "example 'Nigeria' or 'NG')."
-)
-UNKNOWN_REGION = (
-    "Enter a state or province of the business country, by name or code (for example 'Texas' "
-    "or 'TX')."
-)
+#: The fixed 422 messages of the structured fields (they never repeat what was sent). Short
+#: enough that the web client shows them whole beside the field's name (its 80-character bound
+#: on one field message, "Value error, " included).
+UNKNOWN_COUNTRY = "Enter a country by name or two-letter code, such as Nigeria or NG."
+UNKNOWN_REGION = "Enter a state or province of that country, such as Texas or TX."
 
 
 class GeoCoverageFields(BaseModel):

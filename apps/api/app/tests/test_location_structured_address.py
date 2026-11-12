@@ -239,6 +239,13 @@ def test_an_unreadable_value_is_a_fixed_422_at_its_field(w: W, fields, loc, mess
     assert w.row(GeoCoverageRule, "geo-a1") == before and _audits(w) == audits
 
 
+def test_the_messages_fit_the_web_clients_bound_whole() -> None:
+    """The web client shows one field message clamped to 80 characters (``apps/web/src/api/
+    client.ts`` MAX_SEGMENT), "Value error, " included: these fit, so it never cuts them."""
+    for message in (UNKNOWN_COUNTRY, UNKNOWN_REGION):
+        assert len(f"Value error, {message}") <= 80
+
+
 def test_too_long_a_value_is_refused_without_its_text(w: W) -> None:
     r = _put(w, {"business_address_locality": SENTINEL * 20})
     [(where, _msg)] = _validation(r)
