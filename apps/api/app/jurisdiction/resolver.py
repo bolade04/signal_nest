@@ -74,6 +74,7 @@ from app.geography.markets import (
     address_part_key,
     fold,
     last_written_part,
+    nigerian_readings_of_stated_code,
     normalize_country,
     normalize_region,
     own_reading_of_homonym,
@@ -421,9 +422,29 @@ def _reading_check(
     explicit = [s for s in (reading.stated, *reading.parts) if s is not None and s.country]
     homonym_ask = None
     last = last_written_part(address)
+    nigeria_stated = any(s.country == "NG" for s in explicit)
+    code_contradicts = any(
+        p.kind == PLACE_CODE and _part_conflicts(p, country, code) for p in reading.places
+    )
     for stated in list(explicit):
         conflict = _conflict(stated, country, code)
         if conflict is not None:
+            agreeing_state = [
+                a
+                for a in nigerian_readings_of_stated_code(stated, address)
+                if _conflict(a, country, code) is None
+            ]
+            if agreeing_state:
+                # GEO-P3 (review I-6): "Springfield AB" is Alberta or Abia State. Nigeria written
+                # settles it, and an explicit code elsewhere that contradicts is refused below;
+                # otherwise one reading agrees, one contradicts, and the address asks.
+                if nigeria_stated or code_contradicts:
+                    continue
+                either = " or ".join(
+                    f"subdivision {_stated_subdivision(a, country) or a.region}"
+                    for a in agreeing_state
+                )
+                return True, f"is ambiguous: {conflict} or {either}", ADDRESS_PLACE_UNCLEAR
             if stated is reading.stated:
                 agreeing = [
                     MarketIdentity(region=r, country=c, label=stated.label)

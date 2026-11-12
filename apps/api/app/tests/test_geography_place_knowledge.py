@@ -62,6 +62,10 @@ MUNICH = _location("Munich", "Bavaria", "Germany")
 MUMBAI = _location("Mumbai", "Maharashtra", "India")
 OSLO = _location("Oslo", None, "Norway")
 ATLANTA = _location("Atlanta", "Georgia", "United States")
+UMUAHIA = _location("Umuahia", "Abia", "Nigeria")
+CALGARY = _location("Calgary", "Alberta", "Canada")
+ABEOKUTA = _location("Abeokuta", "Ogun", "Nigeria")
+BATON_ROUGE = _location("Baton Rouge", "Louisiana", "United States")
 
 
 # --------------------------------------------------------------------------- #
@@ -294,3 +298,43 @@ def test_p3_a_code_before_georgia_is_read_in_the_listed_country():
     )
     assert _resolve(ATLANTA, "Springfield, GA, Georgia, 1 Main St").code == "US-GA"
     _refused(DALLAS, "Mumbai, MH, India", "states country IN")
+
+
+# --------------------------------------------------------------------------- #
+# 6. A later-part or one-part town and Nigerian code (review I-6)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "evidence"),
+    [
+        (UMUAHIA, "1 Main St, Springfield AB", "is ambiguous: country CA or subdivision NG-AB"),
+        (UMUAHIA, "Springfield AB", "is ambiguous: country CA or subdivision NG-AB"),
+        (
+            IKEJA,
+            "1 Main St, Ikeja LA",
+            "is ambiguous: country LA or country US or subdivision NG-LA",
+        ),
+        (IKEJA, "Baton Rouge LA", "is ambiguous: country US or subdivision NG-LA"),
+        (ABEOKUTA, "Munich DE OG", "is ambiguous: country DE or subdivision NG-OG"),
+    ],
+)
+def test_p3_a_town_and_shared_nigerian_code_asks(location, address, evidence):
+    """ "AB" is Alberta or Abia State and "LA" Laos, Louisiana or Lagos State: for a location in
+    the Nigerian state only that reading agrees, and nothing settles it, so the address asks. It
+    was refused. "Baton Rouge LA" for Lagos asks too (P3-R-2): Baton Rouge is in no table."""
+    _clarified(location, address, ADDRESS_PLACE_UNCLEAR, evidence)
+
+
+def test_p3_nigeria_written_or_the_other_reading_settles_it():
+    assert _resolve(UMUAHIA, "1 Main St, Springfield AB, Nigeria").code == "NG-AB"
+    assert _resolve(CALGARY, "1 Main St, Calgary AB").code == "CA-AB"
+    assert _resolve(BATON_ROUGE, "Baton Rouge LA").code == "US-LA"
+
+
+def test_p3_a_town_and_nigerian_only_code_is_that_state():
+    """ "OG" names only Ogun State: it agrees for an Ogun location and is refused elsewhere; it
+    stated nothing before."""
+    assert _resolve(ABEOKUTA, "1 Main St, Springfield OG").code == "NG-OG"
+    _refused(MINNA, "1 Main St, Springfield OG", "states subdivision NG-OG")
+    _refused(DALLAS, "1 Main St, Springfield AB", "states country CA")

@@ -484,6 +484,27 @@ def without_town_parts(text: str | None, towns: frozenset[str]) -> str | None:
     return ", ".join(raw.strip() for raw in kept if raw.strip())
 
 
+def nigerian_readings_of_stated_code(
+    stated: MarketIdentity, text: str | None
+) -> list[MarketIdentity]:
+    """GEO-P3 (review I-6): when ``stated`` is D1's explicit reading of the code that ends a later
+    part, or a one-part address ("1 Main St, Springfield AB": Alberta), the Nigerian state that code
+    also names (Abia State), for each such part; ``[]`` otherwise. A code form or road ("US-LA",
+    "LA-1") keeps its reading."""
+    if not text or stated.country is None:
+        return []
+    parts = _written_parts(_other_separators("\n".join(text.splitlines())))
+    found = []
+    for part in parts[1:] if len(parts) > 1 else parts:
+        words = _strip_postcode(fold(part)).split()
+        if len(words) < 2 or _code_form_part(part):
+            continue
+        coded = _JURISDICTION_CODE_AREAS.get(words[-1])
+        if coded is not None and (stated.country, stated.region) in _area_candidates(words[-1]):
+            found.append(MarketIdentity(region=coded[1], country=coded[0], label=part.strip()))
+    return found
+
+
 def last_written_part(text: str | None) -> str | None:
     """The last part of a business address that names something, as the reader splits it."""
     if not text:
@@ -866,6 +887,7 @@ def _read_business_address(text: str) -> BusinessAddressReading:
             ambiguous_groups, groups = ambiguous_groups + groups, ()
             stated = MarketIdentity(city=stated.city, label=stated.label) if stated else None
         groups, homonyms = _with_nigerian_homonym(tuple(groups), text)
+        groups, homonyms = _with_town_and_nigerian_code(groups, homonyms, [text])
         return BusinessAddressReading(
             stated,
             (),
@@ -920,6 +942,7 @@ def _read_business_address(text: str) -> BusinessAddressReading:
     if stated is not None and stated.country in shadowed:
         stated = MarketIdentity(city=stated.city, label=stated.label)
     with_homonym, homonyms = _with_nigerian_homonym(tuple(groups), raw_parts[-1])
+    with_homonym, homonyms = _with_town_and_nigerian_code(with_homonym, homonyms, raw_parts[1:])
     return BusinessAddressReading(
         stated,
         tuple(parts),
@@ -977,6 +1000,63 @@ def _with_unlisted_form_country(
         return stated
     city = stated.city if stated is not None else None
     return MarketIdentity(city=city, country=country, label=text.strip())
+
+
+def town_and_nigerian_code(part: str) -> MarketIdentity | None:
+    """GEO-P3 (review I-6): the Nigerian reading of a part that is a town and a two-letter Nigerian
+    code ("Ikeja LA", "Springfield OG", "Springfield AB 100001"), as GEO-P1's C-2 reads the code as
+    a part place and C-1b in the first part; ``None`` for a street line, a city-first name, a part
+    that names an area as a whole, a route designator, or a code form or road ("US-LA", "LA-1")."""
+    folded = _strip_postcode(fold(part))
+    if (
+        len(folded.split()) < 2
+        or _street_kind(part) is not None
+        or folded in CITY_FIRST_NAMES
+        or _area_candidates(folded)
+        or _designator(part)
+    ):
+        return None
+    return _nigerian_homonym(part)
+
+
+def _with_town_and_nigerian_code(
+    groups: tuple[tuple[MarketIdentity, ...], ...],
+    homonyms: tuple[MarketIdentity, ...],
+    targets: list[str],
+) -> tuple[tuple[tuple[MarketIdentity, ...], ...], tuple[MarketIdentity, ...]]:
+    """GEO-P3 (review I-6; register G-1, G-9 class of GEO-P3): D1's later-part and one-part readings
+    of a town and a code knew no Nigerian code. A shared code's group gains its Nigerian reading
+    ("1 Main St, Ikeja LA": Laos, Louisiana or Lagos State), and a Nigerian-only code becomes a
+    group of its own ("1 Main St, Springfield OG": Ogun State; "Munich DE OG": Germany or Ogun
+    State, C-12's pair). Each added reading is listed in ``homonyms``: it never makes an address
+    agree by itself where another reading of the code contradicts (RULING-D1-C3)."""
+    parts = [part.strip() for part in targets]
+    added = list(homonyms)
+    out, done = [], set()
+    for group in groups:
+        label = (group[0].label or "").strip() if group else ""
+        reading = town_and_nigerian_code(label) if label in parts else None
+        # A group that already reads Nigeria ("Ikeja NG LA", C-12's spaced form) keeps its readings.
+        if reading is not None and all(r.country != reading.country for r in group):
+            group = (*group, reading)
+            added.append(reading)
+            done.add(label)
+        out.append(group)
+    for part in parts:
+        reading = town_and_nigerian_code(part)
+        if reading is None or part in done:
+            continue
+        if any(r.region == reading.region for group in out for r in group):
+            continue
+        if _area_candidates(_strip_postcode(fold(part)).split()[-1]):
+            continue  # D1 reads the code as something else here: its reading stands
+        spaced = _spaced_code_form(part)
+        if spaced is not None:
+            out.append((MarketIdentity(country=spaced[0], label=part), reading))
+        else:
+            out.append((reading,))
+        added.append(reading)
+    return tuple(out), tuple(added)
 
 
 def _code_form_part(part: str) -> bool:
