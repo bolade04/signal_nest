@@ -659,7 +659,10 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
     floor and never Florida (:func:`_without_floors`, :data:`_FLOOR`); an address that is only a
     route designator ("1 SR 520") has its code reading in ``routes``, and one that is only a street
     with no house number written as a street ("Main St", "NE 45th St") in ``ambiguous``
-    (:func:`_numberless_street`); a code inside a route's name ("4400 US Hwy 75") is a part place.
+    (:func:`_numberless_street`); a code inside a route's name ("4400 US Hwy 75") is a part place;
+    a last part that is only a direction after a street line ("1200 Pennsylvania Ave, SE") is a part
+    place that is only a direction, never the qualifier's code (review W21-REV-GEO r1 I-3,
+    :func:`_trailing_direction`).
     """
     if text is None:
         return BusinessAddressReading(None)
@@ -720,6 +723,24 @@ def _numberless_street(text: str) -> bool:
     return not mixed or not written[-1].isupper()
 
 
+def _trailing_direction(raw_parts: list[str], index: int) -> bool:
+    """GEO-P2 (review W21-REV-GEO r1 I-3, register G-8): is part ``index`` only a direction ("SE")
+    after a street line, with only units or postcodes between them and no named part after it
+    ("1200 Pennsylvania Ave, SE"; "1200 Pennsylvania Ave, Suite 5, SE, 20003")? It may be the
+    street's direction, as "Ave SE" is (C-15), or a code, so the qualifier rules do not read it as
+    Sweden: it is a part place that is only a direction (:data:`PLACE_DIRECTION`), which explicit
+    geography settles and which otherwise asks. After a town it stays the qualifier's code
+    ("Washington, SE")."""
+    if index == 0 or _strip_postcode(fold(raw_parts[index])) not in _DIRECTION_PARTS:
+        return False
+    before = [part for part in raw_parts[:index] if not _unit_or_postcode(part)]
+    return (
+        bool(before)
+        and _street_kind(before[-1]) is not None
+        and not any(_is_named(address_part_key(part)) for part in raw_parts[index + 1 :])
+    )
+
+
 def _read_business_address(text: str) -> BusinessAddressReading:
     """:func:`read_business_address` as D1 and the exclusion fix read it, without ``places``."""
     raw_parts = _written_parts(text)
@@ -761,13 +782,15 @@ def _read_business_address(text: str) -> BusinessAddressReading:
         )
     kept, parts, ambiguous = [raw_parts[0]], [], []
     groups, ambiguous_groups = [], []
-    for part in raw_parts[1:]:
+    for index, part in enumerate(raw_parts[1:], 1):
         folded = _strip_postcode(fold(part))
         if all(_HAS_DIGIT.search(word) for word in folded.split()) or _FLOOR.fullmatch(
             part.strip()
         ):
             # A postcode alone; GEO-P2 (G-6, FU-B): a floor ("Fl 3") is no qualifier, never Florida.
             continue
+        if _trailing_direction(raw_parts, index):
+            continue  # GEO-P2 (I-3): "1200 Pennsylvania Ave, SE" is a direction part, not Sweden
         kept.append(part)
         stated_here, maybe = _part_reading(part)
         explicit_here, ambiguous_here = _part_groups(part)

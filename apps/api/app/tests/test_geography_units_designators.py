@@ -12,7 +12,8 @@ where the evidence is insufficient or ambiguous") and the C-3 ruling of 2026-11-
   they ask for clarification instead of being refused for the business's own location; a code
   inside a route's name ("4400 US Hwy 75") names its country, so it is refused for a location
   elsewhere; a two-area state after an unlisted town keeps D1's clarification (C-8, C-16), and
-  writing the state in full resolves it.
+  writing the state in full resolves it; a last part that is only a direction after a street line
+  ("1200 Pennsylvania Ave, SE") is a direction part, not Sweden (review W21-REV-GEO r1 I-3).
 
 These tests pin the measured classes; they do not show that arbitrary addresses are validated.
 """
@@ -26,6 +27,7 @@ import pytest
 from app.geography.markets import read_business_address
 from app.jurisdiction.codes import UNRESOLVED
 from app.jurisdiction.resolver import (
+    ADDRESS_DIRECTION_AMBIGUOUS,
     ADDRESS_PLACE_UNCLEAR,
     ADDRESS_ROUTE_AMBIGUOUS,
     ADDRESS_SUFFIX_AMBIGUOUS,
@@ -272,3 +274,39 @@ def test_only_a_whole_address_designator_takes_the_route_reason():
     assert result.reason == ADDRESS_SUFFIX_AMBIGUOUS
     assert read_business_address("Suite 5, 12000 FM 1960").routes == ()
     assert [r.country for r in read_business_address("12000 FM 1960").routes] == ["FM"]
+
+
+# --------------------------------------------------------------------------- #
+# G-8, review W21-REV-GEO r1 I-3: a trailing direction after a street line
+# --------------------------------------------------------------------------- #
+
+WASHINGTON_DC = _location("Washington", "District of Columbia", "United States")
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "1200 Pennsylvania Ave, SE",
+        "1200 Pennsylvania Ave; SE",
+        "1200 Pennsylvania Ave\nSE",
+        "1200 Pennsylvania Ave, SE, 20003",
+        "1200 Pennsylvania Ave, Suite 5, SE",
+        "1200 PENNSYLVANIA AVE, SE",
+    ],
+)
+def test_i3_a_trailing_direction_after_a_street_line_is_a_direction(address):
+    """I-3: the qualifier rules read a last part "SE" as Sweden, so "1200 Pennsylvania Ave, SE" was
+    refused for a Washington, DC location ("states country SE"), on main and at GEO-P1. After a
+    street line it may be the street's direction, as "Ave SE" is (C-15): it is read as GEO-P1 reads
+    a part that is only a direction. Explicit geography settles it; otherwise it asks."""
+    _clarified(WASHINGTON_DC, address, ADDRESS_DIRECTION_AMBIGUOUS, "a direction or country SE")
+    stockholm = _location("Stockholm", None, "Sweden")
+    assert _resolve(stockholm, address).code == "SE"
+
+
+def test_i3_explicit_geography_settles_a_trailing_direction_and_a_town_does_not_hide_it():
+    assert _resolve(WASHINGTON_DC, "1200 Pennsylvania Ave, SE, Washington, DC").code == "US-DC"
+    assert _resolve(WASHINGTON_DC, "1200 Pennsylvania Avenue Southeast").code == "US-DC"
+    # After a town, "SE" is the qualifier's code, as on main.
+    _refused(WASHINGTON_DC, "1200 Pennsylvania Ave, Washington, SE", "states country SE")
+    _refused(WASHINGTON_DC, "Washington, SE", "states country SE")

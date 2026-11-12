@@ -426,8 +426,11 @@ def test_a_part_that_is_only_a_direction_is_read_as_d1_reads_st_ne():
         ADDRESS_DIRECTION_AMBIGUOUS,
         "country SE",
     )
-    # As the last part, the qualifier rules already read "SE" as Sweden, as on main: unchanged.
-    _refused(WASHINGTON_DC, "1200 Pennsylvania Ave, SE", "states country SE")
+    # As the last part after a street line it is a direction part too (GEO-P2, review I-3); on
+    # main and at GEO-P1 the qualifier rules read it as Sweden and refused it.
+    _clarified(
+        WASHINGTON_DC, "1200 Pennsylvania Ave, SE", ADDRESS_DIRECTION_AMBIGUOUS, "country SE"
+    )
 
 
 def test_a_floor_or_unit_label_before_its_number_is_left_to_the_unit_rules():
