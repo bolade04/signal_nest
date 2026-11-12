@@ -22,8 +22,8 @@ location, only to find a contradiction:
 * a name or word equal to the location's own city is the town.
 
 Review W21-REV-GEO r1 (CONDITIONAL on 62677168) added, under the coordinator's rulings R-1 and R-2:
-the first part "<town> <code>" read as an ambiguous reading that explicit geography settles
-(C-1), a Nigerian code's Nigerian reading (C-2), a short code that case
+the first part "<town> <code>" read as an ambiguous reading that explicit geography settles (C-1,
+and C-1b for a Nigerian code), a Nigerian code's Nigerian reading (C-2), a short code that case
 does not settle asks (C-3), every Unicode line break separates parts (C-4), and the
 ``address_place_unclear`` remedies for a business's or building's name (C-6).
 
@@ -573,6 +573,26 @@ def test_c1_a_first_part_designator_keeps_d1s_reading():
     assert read_business_address("1 SR 520, Redmond").places == ()
     redmond = _location("Redmond", "Washington", "United States")
     assert _resolve(redmond, "1 SR 520, Redmond").code == "US-WA"
+
+
+def test_c1b_a_first_part_town_and_nigerian_code_asks_for_clarification():
+    """C-1b (ruling R-2): the first part's reading takes C-2's Nigerian table for a trailing
+    two-letter code that names nothing else ("Springfield AN"; 192 such rows were refused before
+    D1). Settled the same way: never refused, never agreeing."""
+    bauchi = _location("Bauchi", "Bauchi", "Nigeria")
+    awka = _location("Awka", "Anambra", "Nigeria")
+    for separator in (", ", "; ", "\n", " / "):
+        address = separator.join(["Springfield AN", "1 Main St"])
+        _clarified(bauchi, address, ADDRESS_PLACE_UNCLEAR, "a name or subdivision NG-AN")
+        assert _resolve(awka, address).code == "NG-AN"
+    assert _resolve(bauchi, "Springfield AN, 1 Main St, Bauchi State").code == "NG-BA"
+    # A code alone stays a short part (C-2: refused), and a code that names something else keeps
+    # D1's reading ("12 Allen Pl" is a street line; PL is Poland and Plateau State).
+    _refused(MINNA, "OG, Abeokuta, 1 Main St", "states subdivision NG-OG")
+    assert _resolve(IKEJA, "12 Allen Pl, Ikeja").code == "NG-LA"
+    # Its cost: "Oy" is a Finnish legal form and Oyo State's code. The country written resolves it.
+    _clarified(MADRID, "ACME Oy, Calle Mayor 1, 28013 Madrid", ADDRESS_PLACE_UNCLEAR, "country NG")
+    assert _resolve(MADRID, "ACME Oy, Calle Mayor 1, 28013 Madrid, Spain").code == "ES"
 
 
 def test_c2_a_bare_nigerian_code_has_its_nigerian_reading():

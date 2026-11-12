@@ -533,7 +533,7 @@ class PartPlace:
     * :data:`PLACE_DIRECTION`: a part that is only a direction ("ACME, NE, Omaha"), which may be a
       street's direction or a code, as "St NE" may (C-14, C-15).
     * :data:`PLACE_FIRST_PART` (W21-REV-GEO r1 C-1): the first part of an address of two or more
-      parts read as a town and a code ("Dallas TX, 1 Main St"; "Springfield LA; 1 Main St"), as
+      parts read as a town and a code ("Dallas TX, 1 Main St"; "Springfield AN; 1 Main St"), as
       D1 reads a later part. It may as well be a business's name and its legal form ("ACME SA",
       "ACME AB", "Jane Doe MD"), so it is an ambiguous reading, never an explicit one.
 
@@ -783,7 +783,7 @@ def _part_places(text: str) -> tuple[PartPlace, ...]:
     W21-REV-GEO r1: a Nigerian two-letter code has its Nigerian reading beside any other (C-2,
     :data:`_JURISDICTION_CODE_AREAS`); a short code that case does not settle is unclear, never a
     word (C-3); and the first part of an address of two or more parts is read as D1 reads a later
-    part, "Dallas TX" or "Springfield LA" (C-1, :func:`_first_part_readings`), except a
+    part, "Dallas TX" or "Springfield AN" (C-1 and C-1b, :func:`_first_part_readings`), except a
     route designator ("1 SR 520, Redmond"), whose first-part reading D1 keeps (C-16)."""
     letters = [ch for ch in text if ch.isalpha()]
     mixed = any(ch.isupper() for ch in letters) and any(ch.islower() for ch in letters)
@@ -865,7 +865,9 @@ def _first_part_readings(raw: str, folded: str) -> list[tuple[MarketIdentity, ..
     each: D1's explicit reading of a later part (:func:`_part_reading`: "Dallas TX") and its
     explicit C-8 and C-12 groups (:func:`_part_groups`: "Dallas GA", "Munich DE BY"), each with the
     Nigerian reading of a two-letter code (C-2: "Springfield LA" is Louisiana, Laos or Lagos
-    State). Empty for what D1 does not read as a town and a code."""
+    State). C-1b (coordinator ruling R-2): a word and a Nigerian code that names nothing else
+    ("Springfield AN", where D1 reads "Springfield TX"), with that code's reading alone. Empty for
+    anything else."""
     explicit, _ = _part_reading(raw)
     groups, _ = _part_groups(raw)
     found = [(reading,) for reading in explicit] + [tuple(group) for group in groups]
@@ -874,7 +876,13 @@ def _first_part_readings(raw: str, folded: str) -> list[tuple[MarketIdentity, ..
     if coded is None:
         return found
     nigerian = MarketIdentity(region=coded[1], country=coded[0], label=raw)
-    return [(*readings, nigerian) for readings in found]
+    if found:
+        return [(*readings, nigerian) for readings in found]
+    if len(words) < 2 or _area_candidates(words[-1]) or _spaced_code_form(raw) is not None:
+        # "OG" alone is a short part (C-2); "12 Allen Pl" is D1's street line ("PL" is Poland
+        # too); "Munich DE OG" is a C-12 code form.
+        return []
+    return [(nigerian,)]
 
 
 def _part_groups(

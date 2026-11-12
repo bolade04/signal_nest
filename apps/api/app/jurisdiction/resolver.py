@@ -354,7 +354,7 @@ def _address_check(
     * a part that is only a direction ("SE", "NE"): read as an ambiguous street reading is (C-14),
       so explicit geography settles it; otherwise :data:`ADDRESS_DIRECTION_AMBIGUOUS`;
     * the first part read as a town and a code (:data:`app.geography.markets.PLACE_FIRST_PART`:
-      "Dallas TX, 1 Main St", "Springfield LA; 1 Main St"; W21-REV-GEO r1 C-1 and ruling R-2): read
+      "Dallas TX, 1 Main St", "Springfield AN; 1 Main St"; W21-REV-GEO r1 C-1 and ruling R-2): read
       as D1 reads the first part's ambiguous reading, since it may be a business's name and its
       legal form ("ACME SA, Calle Mayor 1, 28013 Madrid"). An explicit subdivision of the location's
       country settles it and an explicit country rules out its readings in other countries, so
