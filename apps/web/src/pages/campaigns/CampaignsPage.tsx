@@ -19,7 +19,7 @@ import { useCampaignList } from './useCampaigns';
  * each linking to its own page; editors (owner, admin, marketer: the campaigns router's
  * `EDITORS`, `canEditWorkspace`) can add one. Every member may read.
  *
- * Not mounted before the I-5D integration cycle (Phase 5 plan §6.3); see `CAMPAIGNS_PATH`.
+ * Mounted at `CAMPAIGNS_PATH` by the I-5D integration cycle (Phase 5 plan §6.3).
  */
 function CampaignList({ workspaceId }: { workspaceId: string }) {
   const { organizationId } = useWorkspace();

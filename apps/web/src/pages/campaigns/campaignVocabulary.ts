@@ -48,10 +48,9 @@ export const modeLabel = (mode: string | null | undefined) => label(campaignMode
 export const statusLabel = (status: string | null | undefined) => label(campaignStatusLabels, status);
 
 /**
- * Where the campaign pages live once they are mounted. Nothing is mounted until the I-5D
- * integration cycle (Phase 5 plan §6.3), which adds the `App.tsx` routes and the `nav.ts`
- * entry for exactly these paths: `CAMPAIGNS_PATH` for `CampaignsPage` and
- * `${CAMPAIGNS_PATH}/:campaignId` for `CampaignDetailPage`.
+ * Where the campaign pages live. The I-5D integration cycle (Phase 5 plan §6.3) mounted them
+ * with `App.tsx` routes and a `nav.ts` entry for exactly these paths: `CAMPAIGNS_PATH` for
+ * `CampaignsPage` and `${CAMPAIGNS_PATH}/:campaignId` for `CampaignDetailPage`.
  */
 export const CAMPAIGNS_PATH = '/campaigns';
 export const campaignPath = (campaignId: string) =>

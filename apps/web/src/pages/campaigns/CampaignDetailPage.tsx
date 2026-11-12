@@ -251,8 +251,7 @@ function CampaignView({ workspaceId, campaignId }: { workspaceId: string; campai
  * One campaign: its goal, location mode, status and locations, read by every member.
  * Editors (owner, admin, marketer) can edit it in place and delete it after confirming.
  *
- * Not mounted before the I-5D integration cycle (Phase 5 plan §6.3); the route it expects is
- * `${CAMPAIGNS_PATH}/:campaignId`.
+ * Mounted at `${CAMPAIGNS_PATH}/:campaignId` by the I-5D integration cycle (Phase 5 plan §6.3).
  */
 export function CampaignDetailPage() {
   const { campaignId = '' } = useParams<{ campaignId: string }>();

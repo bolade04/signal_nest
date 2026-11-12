@@ -5,6 +5,7 @@ import {
   LayoutDashboard,
   ListChecks,
   MapPin,
+  Megaphone,
   PenLine,
   Settings,
   Sparkles,
@@ -59,6 +60,13 @@ export const navItems: NavItem[] = [
     label: 'Campaign Context',
     icon: Target,
     description: 'Products, audiences, claims and rules',
+  },
+  {
+    // Phase 5D (mounted at I-5D): every member reads; owners, admins and marketers edit.
+    to: '/campaigns',
+    label: 'Campaigns',
+    icon: Megaphone,
+    description: 'Campaigns with their location mode, status and locations',
   },
   {
     to: '/scout-requests',

@@ -521,6 +521,12 @@ route (`apps/web/src/App.tsx:22-41`)~~ 13 after 6B-3B (#182, `079528d`) added th
 `/forgot-password`, `/reset-password` and `/verify-email` routes
 (`apps/web/src/App.tsx:32-34`); 8 sidebar entries, one
 operator-only (`apps/web/src/components/layout/nav.ts`).
+*(I-5D, 2026-11-12, W21: the Phase 5D campaign pages are mounted at `/campaigns` and
+`/campaigns/:id`, with a **Campaigns** sidebar entry, so the inventoried routes are **18** plus
+the catch-all (`apps/web/src/pages/__tests__/route-inventory.test.tsx`). No flag gates them:
+the dedicated campaigns router they call is live. The flag-gated routes mounted at I-5B
+(`/approvals`) and I-5C (`/creative`, `/creative/:briefId`), and their sidebar entries, are
+not in this inventory; their own integration suites cover them.)*
 
 | Route | Page | Auth | Role | In nav | Backend dependency | Flag | State |
 |---|---|---|---|---|---|---|---|
@@ -533,6 +539,8 @@ operator-only (`apps/web/src/components/layout/nav.ts`).
 | `/` | `pages/Overview.tsx` | yes | any | ✅ | opportunities + scout-requests | — | **WORKING_WITH_FIXTURE_DATA** |
 | `/onboarding` | `pages/Onboarding.tsx` | yes | any | ✅ | `POST /workspaces/{id}/onboarding` | — | **WORKING** |
 | `/context` | `pages/CampaignContext.tsx` | yes | any | ✅ | 9 context collections (27 ops; 36 since #235 added `PATCH`) | — | ~~**PARTIAL** — create + delete only; no edit (`P6-PLAT-9`)~~ **WORKING** (by test) — every row has an Edit control since #280 (`52b2ef54`); not re-audited live *(2026-11-07, W21 tracking pass: `P6-PLAT-9` closed)* |
+| `/campaigns` | `pages/campaigns/CampaignsPage.tsx` | yes | any (add: owner, admin, marketer) | ✅ | `GET`/`POST /workspaces/{id}/campaigns` (the 5D-W1 campaigns router) | — | **WORKING** (by test) — mounted at I-5D (2026-11-12); not audited live |
+| `/campaigns/:id` | `pages/campaigns/CampaignDetailPage.tsx` | yes | any (edit, delete: owner, admin, marketer) | — | `GET`/`PATCH`/`DELETE /workspaces/{id}/campaigns/{id}`, locations | — | **WORKING** (by test) — mounted at I-5D (2026-11-12); not audited live |
 | `/locations` | `pages/Locations.tsx` | yes | any | ✅ | locations + geo-coverage | — | **WORKING** |
 | `/scout-requests` | `pages/ScoutRequests.tsx` | yes | any | ✅ | scout-requests | — | **WORKING_WITH_FIXTURE_DATA** |
 | `/scout-requests/:id` | `pages/ScoutRequestDetail.tsx` | yes | any | — | scout-request, runs, schedule | `scout_scheduling_enabled` | **PARTIAL** — run history empty (`P6-UI-009`, 6U-2). The schedule panel is now gated on `scout_scheduling_enabled` and withholds the mutation affordances while dark (`P6-UI-002` closed in 6U-1G) |
