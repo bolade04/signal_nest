@@ -18,6 +18,7 @@ import { API_PREFIX } from '@/api/config';
 import type {
   ApprovalHistoryOut,
   CreativeDraftListOut,
+  CreativeDraftOut,
   OpportunityDetail,
   RecommendationBriefListOut,
   RecommendationBriefOut,
@@ -302,14 +303,18 @@ function approvedHistory(approved = true) {
 
 /**
  * The drafts page of brief 1. Its `location_id` follows the opportunity's, as the capture
- * copies the record's (the scout's) location onto both; `approved` is its decision history, and
- * `readable` whether the page can read the brief at all.
+ * copies the record's (the scout's) location onto both; `approved` is its decision history,
+ * `readable` whether the page can read the brief at all, and `drafts` the drafts it lists.
  */
 function draftsPage(
   role: string,
   refusal?: { code: string; message: string; status?: number },
   located = false,
-  { approved = true, readable = true }: { approved?: boolean; readable?: boolean } = {},
+  {
+    approved = true,
+    readable = true,
+    drafts = [],
+  }: { approved?: boolean; readable?: boolean; drafts?: CreativeDraftOut[] } = {},
 ) {
   asRole(role);
   const shown = brief(1, { location_id: located ? 'loc-dallas' : null });
@@ -323,7 +328,12 @@ function draftsPage(
         : HttpResponse.json({ error: { code: 'not_found', message: 'Brief not found.' } }, { status: 404 }),
     ),
     http.get(DRAFTS, () =>
-      HttpResponse.json({ items: [], total: 0, limit: 100, offset: 0 } satisfies CreativeDraftListOut),
+      HttpResponse.json({
+        items: drafts,
+        total: drafts.length,
+        limit: 100,
+        offset: 0,
+      } satisfies CreativeDraftListOut),
     ),
     http.post(DRAFTS, async ({ request }) => {
       posts.push(await request.json());
@@ -552,5 +562,60 @@ describe('Q-4: the drafts page of a brief with no location', () => {
     await new Promise((r) => setTimeout(r, 50));
     expect(screen.queryByText(RECOMMENDATIONS_ONLY)).toBeNull();
     expect(screen.getByText(Q1_INHERITS)).toBeInTheDocument();
+  });
+});
+
+// --------------------------------------------------------------------------------------------
+// Q-4 on the drafts page when the brief already lists drafts (W21-REV-5DW3 r4 part (2), F-7:
+// its C-d). Drafts can exist beside a brief with no jurisdiction only as legacy rows (written
+// before 5D-W3 captured one; item 31 refuses every new one), but the limitation is a fact about
+// the brief, not about the empty state, so it is said whether or not drafts are listed.
+// --------------------------------------------------------------------------------------------
+const LEGACY_BODY = 'A legacy draft written before jurisdictions were recorded.';
+
+function legacyDraft(located: boolean): CreativeDraftOut {
+  return {
+    id: 'draft-legacy-1',
+    brief_id: BRIEF,
+    opportunity_id: OPP,
+    location_id: located ? 'loc-dallas' : null,
+    campaign_id: null,
+    draft_version: 1,
+    parent_draft_id: null,
+    channel: 'sms',
+    headline: null,
+    body: LEGACY_BODY,
+    call_to_action: null,
+    prompt_name: 'generate_creative',
+    prompt_version: '1.0.0',
+    model_identifier: 'mock-1',
+    is_simulated: true,
+    created_by: 'user-1',
+    created_by_snapshot: 'user-1 Dana Marketer <dana@example.com>',
+    created_at: '2026-10-01T09:00:00Z',
+    review: null,
+  } satisfies CreativeDraftOut;
+}
+
+describe('Q-4: the drafts page of a brief with no location that lists drafts (r4 F-7, C-d)', () => {
+  for (const role of ['marketer', 'viewer'] as const) {
+    it(`a ${role}: the note is said beside the listed drafts`, async () => {
+      const { screen } = draftsPage(role, undefined, false, { drafts: [legacyDraft(false)] });
+      expect(await screen.findByText(LEGACY_BODY)).toBeInTheDocument();
+      const note = await screen.findByText(RECOMMENDATIONS_ONLY);
+      expect(note).toHaveTextContent(NO_LOCATION);
+      expect(note).toHaveTextContent(NO_DRAFTS);
+      expect(note.textContent ?? '').not.toMatch(CODE);
+      expect(screen.queryByText(Q1_INHERITS)).toBeNull();
+      expect(screen.queryByText(/No drafts yet/)).toBeNull();
+    });
+  }
+
+  it('a brief with a location that lists drafts (the control): no Q-4 note', async () => {
+    const { screen } = draftsPage('marketer', undefined, true, { drafts: [legacyDraft(true)] });
+    expect(await screen.findByText(LEGACY_BODY)).toBeInTheDocument();
+    await screen.findByRole('button', { name: 'Generate draft' });
+    expect(screen.getByText(Q1_INHERITS)).toBeInTheDocument();
+    expect(screen.queryByText(RECOMMENDATIONS_ONLY)).toBeNull();
   });
 });
