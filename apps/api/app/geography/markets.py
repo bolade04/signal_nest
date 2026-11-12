@@ -526,6 +526,22 @@ def parts_naming_an_area(text: str | None) -> int:
     return count
 
 
+def unread_script_part(text: str | None, towns: frozenset[str]) -> bool:
+    """GEO-P3 (register G-10, other scripts; operator ruling): does a part of a business address
+    hold letters outside the Latin script ("Техас", "テキサス州", "США") and read as no area and as
+    no town of the location's? The tables hold Latin names only, so such a part may name a state
+    or a country that the reader cannot read; accented Latin ("Nigéria", "Québec") is read."""
+    if not text:
+        return False
+    for raw in _written_parts(_other_separators("\n".join(text.splitlines()))):
+        folded = _strip_postcode(fold(raw))
+        if not folded or folded in towns or _area_candidates(folded) or _homonym_areas(folded):
+            continue
+        if any(ch.isalpha() and "LATIN" not in unicodedata.name(ch, "") for ch in raw):
+            return True
+    return False
+
+
 def last_written_part(text: str | None) -> str | None:
     """The last part of a business address that names something, as the reader splits it."""
     if not text:

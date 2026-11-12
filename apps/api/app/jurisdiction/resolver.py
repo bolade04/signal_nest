@@ -80,6 +80,7 @@ from app.geography.markets import (
     own_reading_of_homonym,
     parts_naming_an_area,
     read_business_address,
+    unread_script_part,
     without_town_parts,
 )
 from app.jurisdiction.codes import UNRESOLVED, is_jurisdiction_code
@@ -556,6 +557,10 @@ def _reading_check(
         if place.kind == PLACE_NAME:
             return True, f"also names {either}", ADDRESS_NAMES_ANOTHER_PLACE
         return True, f"is ambiguous: a town's name or {either}", ADDRESS_PLACE_UNCLEAR
+    if unread_script_part(address, towns):
+        # GEO-P3 (register G-10, operator ruling): a part in another script may name a state or a
+        # country that the tables, which hold Latin names, cannot read: it asks.
+        return True, "is ambiguous: letters outside the Latin script", ADDRESS_PLACE_UNCLEAR
     return bool(explicit), None, None
 
 

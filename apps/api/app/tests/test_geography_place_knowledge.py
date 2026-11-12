@@ -372,3 +372,28 @@ def test_p3b_the_remedy_resolves_and_another_area_is_still_refused():
         "US-AL, Downtown, Montgomery",
         "states subdivision US-AL, but the rest of the address cannot be read with it",
     )
+
+
+# --------------------------------------------------------------------------- #
+# P3-b-3. Other scripts ask (register G-10; operator ruling)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "address",
+    ["1 Main St, Dallas, Техас", "1 Main St, Dallas, テキサス州", "1 Main St, Dallas, США"],
+)
+def test_p3b_a_part_in_another_script_asks(address):
+    """The tables hold Latin names, so a state or country in another script cannot be read: the
+    address asks, for its own location too (disclosed), and is never accepted elsewhere."""
+    for location in (DALLAS, ANCHORAGE):
+        _clarified(
+            location,
+            address,
+            ADDRESS_PLACE_UNCLEAR,
+            "is ambiguous: letters outside the Latin script",
+        )
+
+
+def test_p3b_accented_latin_is_read():
+    assert _resolve(IKEJA, "1 Main St, Ikeja, Nigéria").code == "NG-LA"
