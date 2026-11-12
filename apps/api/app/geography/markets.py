@@ -615,6 +615,30 @@ def _groups(*texts: str) -> tuple[tuple[MarketIdentity, ...], ...]:
     return tuple(g for g in (_alternatives(t) for t in texts) if g)
 
 
+#: GEO-P3 (register G-10, review W21-REV-GEO r1 I-2): separators a business address may use that the
+#: reader did not split on: a pipe, a tab, a bullet, a middle dot, the full-width and ideographic
+#: commas, the Arabic semicolon, and a dash with a space on each side. Each is a line break.
+_OTHER_SEPARATORS: Final = re.compile(
+    r"\s*[|\t\u2022\u00b7\uff0c\u3001\u061b]\s*|\s+[-\u2013\u2014]\s+"
+)
+#: A country's two-letter code, a dash with spaces and one to three letters ("NG - LA"): a code
+#: form written with spaces, which stays one ("NG-LA") and is not split at its dash.
+_SPACED_DASH_CODE: Final = re.compile(
+    r"(?<![A-Za-z])([A-Za-z]{2})\s+[-\u2013\u2014]\s+([A-Za-z]{1,3})(?![A-Za-z0-9])"
+)
+
+
+def _other_separators(text: str) -> str:
+    """GEO-P3 (G-10, I-2): ``text`` with :data:`_OTHER_SEPARATORS` read as line breaks, except the
+    dash of a code form written with spaces ("NG - LA" stays "NG-LA"; "Montgomery AL - 1 Main St"
+    is two parts). Before this, "Alabama | Montgomery | 1 Main St" was one part that named nothing,
+    and a line merged across the separators that ended in "St" was refused as Sao Tome."""
+    text = _SPACED_DASH_CODE.sub(
+        lambda m: f"{m[1]}-{m[2]}" if m[1].upper() in COUNTRIES else m[0], text
+    )
+    return _OTHER_SEPARATORS.sub("\n", text)
+
+
 def read_business_address(text: str | None) -> BusinessAddressReading:
     """Read a business's own address (a coverage rule's ``business_address``).
 
@@ -663,10 +687,15 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
     a last part that is only a direction after a street line ("1200 Pennsylvania Ave, SE") is a part
     place that is only a direction, never the qualifier's code (review W21-REV-GEO r1 I-3,
     :func:`_trailing_direction`).
+
+    GEO-P3 (register G-10, review I-2): a pipe, a tab, a bullet, a middle dot, the full-width and
+    ideographic commas, the Arabic semicolon and a spaced dash separate parts too
+    (:func:`_other_separators`).
     """
     if text is None:
         return BusinessAddressReading(None)
     text = "\n".join(text.splitlines())  # W21-REV-GEO r1 C-4: every line break is one
+    text = _other_separators(text)  # GEO-P3 (register G-10, review I-2)
     text = _without_floors(text)
     reading = _read_business_address(text)
     return BusinessAddressReading(
