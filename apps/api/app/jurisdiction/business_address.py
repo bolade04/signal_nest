@@ -8,25 +8,32 @@ jurisdiction-dependent brief or draft actions". :func:`resolve_for_action` is th
 pure, like :mod:`app.jurisdiction.resolver`, and it is for jurisdiction-dependent actions only:
 Scout searches, Locations CRUD and every other path never call it.
 
-**The steps, in a fixed order; the first that fails decides** (design v2 §4.1):
+**The steps, in a fixed order** (design v3 §4.1). Each step is applied to every rule, in the
+caller's order, before the next: the first failing step decides, and within it the first failing
+rule.
 
 1. **The location.** :func:`~app.jurisdiction.resolver.resolve_jurisdiction` with no rules: its
    country, and its state or province where the jurisdiction is one (item 33). Otherwise
    :data:`LOCATION_UNRESOLVED`.
 2. **Structured contradiction.** A rule's country, read with
    :func:`~app.jurisdiction.resolver.country_code_of`, is another country than the location's;
-   or, in a country of :data:`~app.jurisdiction.subdivisions.SUBDIVISION_JURISDICTIONS`, its
-   state or province, read with :func:`~app.jurisdiction.resolver.subdivision_code_of`, is
-   another subdivision. A refusal (:data:`BUSINESS_ADDRESS_CONFLICT`); never confirmable.
-3. **Free-text refusal.** The merged free-text reader (``resolve_jurisdiction`` with the rules)
-   refused the text as an explicit contradiction: :data:`BUSINESS_ADDRESS_TEXT_CONFLICT`. It
-   runs whether or not the fields are complete; it can only refuse, never make the action
-   resolve, so a known contradiction is never turned into a request to fill something in.
+   or its country reads as the location's, that country is in
+   :data:`~app.jurisdiction.subdivisions.SUBDIVISION_JURISDICTIONS`, and its state or province,
+   read with :func:`~app.jurisdiction.resolver.subdivision_code_of` in that country, is another
+   subdivision. A region is never read without the rule's own readable country (a region with
+   no country is incomplete, step 4). A refusal (:data:`BUSINESS_ADDRESS_CONFLICT`); never
+   confirmable.
+3. **Free-text refusal.** The merged free-text reader, run on each rule's text on its own
+   (``resolve_jurisdiction(location, (rule,))``), refused a text as an explicit contradiction:
+   :data:`BUSINESS_ADDRESS_TEXT_CONFLICT`. It runs whether or not the fields are complete; it
+   can only refuse, never make the action resolve, so a known contradiction is never turned
+   into a request to fill something in.
 4. **Completeness.** No rule at all, or a field of :data:`MANDATORY_FIELDS` missing, or the
    country or a required state or province unreadable: :data:`BUSINESS_ADDRESS_INCOMPLETE`.
    Empty fields stop here: the text's agreement or silence is never consulted for them ("Empty
    new fields must not fall back to “town alone states nothing.”").
-5. **Free-text clarification.** The reader's ambiguity category, unchanged (the structured
+5. **Free-text clarification.** The first reading, in rule order, that is UNRESOLVED with a
+   category: the reader's ambiguity category, unchanged (the structured
    fields do not settle it: RULING-D1-C3), with the remedy sentence of
    :data:`ACTION_CLARIFICATIONS`.
 6. **The town.** The business town and the location's city differ after
@@ -292,50 +299,73 @@ def _unresolved(evidence: Sequence[str], category: str, why: str) -> Jurisdictio
     )
 
 
+#: The steps after the location's own (module docstring), in order. Each step is applied to every
+#: rule, in the caller's order (``created_at``, ``id``), before the next: the first failing step
+#: decides, and within it the first failing rule (design v3 §4.1, review d1 C-2).
+STEP_CONFLICT: Final = 2
+STEP_TEXT_REFUSAL: Final = 3
+STEP_INCOMPLETE: Final = 4
+STEP_TEXT_CLARIFY: Final = 5
+STEP_TOWN: Final = 6
+
+
 def resolve_for_action(
     location: LocationFacts | None, coverage_rules: Sequence[StructuredAddressFacts] = ()
 ) -> JurisdictionResolution:
     """The jurisdiction a jurisdiction-dependent action may use, or UNRESOLVED with a category
     of :data:`ACTION_CLARIFICATIONS` (the module docstring gives the steps). ``coverage_rules``
-    are the location's own rules, selected by the caller within its tenant."""
+    are the location's own rules, selected by the caller within its tenant, in its order.
+
+    Each rule's free text is read on its own (``resolve_jurisdiction(location, (rule,))``), so
+    one rule's ambiguity can never hide another rule's explicit contradiction."""
     base = resolve_jurisdiction(location, ())
     if not base.is_resolved:
         return _unresolved(base.evidence[:-1], LOCATION_UNRESOLVED, "the location's own fields")
     code = base.code
-    evidence = list(base.evidence)
     rules = list(coverage_rules)
-
-    statuses = [structured_status(rule, code) for rule in rules]
-    if "conflict" in statuses:
-        return _unresolved(evidence, BUSINESS_ADDRESS_CONFLICT, "structured address conflicts")
-
-    text = None
-    if any(_text(rule, "business_address") for rule in rules):
-        text = resolve_jurisdiction(location, rules)
-        if not text.is_resolved and text.reason is None:
-            return _unresolved(
-                evidence, BUSINESS_ADDRESS_TEXT_CONFLICT, "business address text contradicts"
-            )
-
-    if not rules or "incomplete" in statuses:
-        return _unresolved(evidence, BUSINESS_ADDRESS_INCOMPLETE, "structured address incomplete")
-    evidence.append("structured business address agrees")
-
-    if text is not None and not text.is_resolved:
-        return _unresolved(evidence, text.reason, "business address text is ambiguous")
-    if text is not None:
-        evidence.append("business address text states nothing against it")
-
     city = getattr(location, "city", None)
-    for rule in rules:
-        if locality_differs(_text(rule, "business_address_locality"), city):
-            if not confirmation_applies(rule, city, code):
-                return _unresolved(
-                    evidence, BUSINESS_ADDRESS_LOCALITY_UNCONFIRMED, "town differs, unconfirmed"
-                )
-            evidence.append(
-                "town or locality customer-confirmed within the location's area (not verified)"
+
+    failures: list[tuple[int, int, str, str]] = []
+    if not rules:
+        failures.append((STEP_INCOMPLETE, 0, BUSINESS_ADDRESS_INCOMPLETE, "no coverage rule"))
+    texts = confirmed = 0
+    for index, rule in enumerate(rules):
+        status = structured_status(rule, code)
+        if status == "conflict":
+            failures.append(
+                (STEP_CONFLICT, index, BUSINESS_ADDRESS_CONFLICT, "structured address conflicts")
             )
+        elif status == "incomplete":
+            failures.append(
+                (STEP_INCOMPLETE, index, BUSINESS_ADDRESS_INCOMPLETE, "structured incomplete")
+            )
+        if _text(rule, "business_address"):
+            texts += 1
+            reading = resolve_jurisdiction(location, (rule,))
+            if not reading.is_resolved and reading.reason is None:
+                failures.append(
+                    (STEP_TEXT_REFUSAL, index, BUSINESS_ADDRESS_TEXT_CONFLICT, "text contradicts")
+                )
+            elif not reading.is_resolved:
+                failures.append((STEP_TEXT_CLARIFY, index, reading.reason, "text is ambiguous"))
+        if locality_differs(_text(rule, "business_address_locality"), city):
+            if confirmation_applies(rule, city, code):
+                confirmed += 1
+            else:
+                failures.append(
+                    (STEP_TOWN, index, BUSINESS_ADDRESS_LOCALITY_UNCONFIRMED, "town differs")
+                )
+    if failures:
+        step, index, category, why = min(failures, key=lambda f: (f[0], f[1]))
+        return _unresolved(base.evidence, category, f"coverage rule {index}: {why}")
+
+    evidence = [*base.evidence, "structured business address agrees"]
+    if texts:
+        evidence.append("business address text states nothing against it")
+    if confirmed:
+        evidence.append(
+            "town or locality customer-confirmed within the location's area (not verified)"
+        )
     return JurisdictionResolution(
         code=code, codes=base.codes, confidence=base.confidence, evidence=tuple(evidence)
     )

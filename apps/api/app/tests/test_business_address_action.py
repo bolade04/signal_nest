@@ -238,6 +238,16 @@ def test_a_region_with_no_country_is_never_read_in_the_locations_country(region)
     )
 
 
+def test_anchorage_with_region_alabama_and_no_country_asks_and_is_never_refused() -> None:
+    """Review d1 C-1 (P1): step 2 reads a region only in the rule's own readable country. Read
+    in the location's country, "Alabama" would contradict Alaska; it is never so read."""
+    got = answer(ANCHORAGE, rule(region="Alabama"))
+    assert got == BUSINESS_ADDRESS_INCOMPLETE and got != BUSINESS_ADDRESS_CONFLICT
+    assert ba.structured_status(rule(region="Alabama"), "US-AK") == "incomplete"
+    # With the country it reads, the same region is the contradiction it is.
+    assert answer(ANCHORAGE, rule(country="US", region="Alabama")) == BUSINESS_ADDRESS_CONFLICT
+
+
 @pytest.mark.parametrize(
     "fields", [{"country": "Narnia", "region": "Texas"}, {"country": "US", "region": "Bavaria"},
                {"country": "US", "region": "Lagos"}],
@@ -376,6 +386,32 @@ def test_an_agreeing_text_is_recorded_and_changes_nothing() -> None:
 # --------------------------------------------------------------------------- #
 # U-19: several rules (not creatable through the API)
 # --------------------------------------------------------------------------- #
+def test_a_known_contradiction_in_a_later_rule_is_never_hidden_by_an_earlier_ambiguity() -> None:
+    """Review d1 C-2 (P2): each rule's text is read on its own, so rule 0's suffix ambiguity
+    cannot hide rule 1's explicit contradiction; the refusal (step 3) comes first."""
+    complete = {"country": "US", "region": "TX"}
+    assert answer(DALLAS, rule("1500 Broadway Hartford CT", **complete),
+                  rule("1 Main St, Toronto, Canada", **complete)) == BUSINESS_ADDRESS_TEXT_CONFLICT
+    assert answer(DALLAS, rule("1 Main St, Toronto, Canada", **complete),
+                  rule("1500 Broadway Hartford CT", **complete)) == BUSINESS_ADDRESS_TEXT_CONFLICT
+
+
+def test_each_step_runs_over_every_rule_before_the_next() -> None:
+    """Review d1 C-2 (P3): step-major. Rule 0 is empty (step 4) and rule 1 contradicts (step
+    2): the contradiction decides, whatever the rules' order."""
+    assert answer(DALLAS, rule(), rule(country="Canada", region="Ontario")) == (
+        BUSINESS_ADDRESS_CONFLICT
+    )
+    assert answer(DALLAS, rule(country="Canada", region="Ontario"), rule()) == (
+        BUSINESS_ADDRESS_CONFLICT
+    )
+    # Within one step, the first failing rule in the caller's order decides.
+    assert answer(DALLAS, rule("1500 Broadway Hartford CT", country="US", region="TX"),
+                  rule("1 Spring Hill St NE", country="US", region="TX")) == (
+        resolve_jurisdiction(DALLAS, [rule("1500 Broadway Hartford CT")]).reason
+    )
+
+
 def test_every_rule_must_pass_each_step_refusals_first() -> None:
     complete = rule(country="US", region="TX")
     assert answer(DALLAS, complete, rule()) == BUSINESS_ADDRESS_INCOMPLETE
