@@ -12,7 +12,10 @@ transaction it:
    signals, their location evidence and intelligence records;
 3. deletes each opportunity built only from that source's signals (with its scores,
    validation evidence and the customers' feedback on it) and, for an opportunity that
-   also cites other sources, removes the source's entries from its observed evidence;
+   also cites other sources, removes the source's entries from its observed evidence.
+   It refuses the whole takedown (409 :data:`TAKEDOWN_BLOCKED_CODE`) when an opportunity
+   it would delete, or an intelligence record of the source's signals, is referenced by an
+   append-only recommendation brief or creative draft (D-N4 item 37);
 4. writes one audit entry in every affected workspace, naming what was removed there,
    who did it (``actor_user_id``), a fixed generic explanation and the opaque
    ``case_id`` of the request. That audit row — under the audit log's own retention —
@@ -53,11 +56,13 @@ from sqlalchemy.orm import Session
 
 from app.audit.actions import AuditAction
 from app.audit.service import record_audit
+from app.briefs.models import RecommendationBrief
 from app.connectors.feedcache import feed_cache
 from app.connectors.models import SourceTakedown, SourceTakedownCase
 from app.connectors.sources import APPROVED_SOURCES, SOURCE_KEY_PATTERN
-from app.core.errors import NotFoundError, ValidationDomainError
+from app.core.errors import ConflictError, NotFoundError, ValidationDomainError
 from app.core.logging import get_logger
+from app.creative.models import CreativeDraft
 from app.feedback.models import OpportunityFeedback
 from app.intelligence.records import SignalIntelligenceRecord
 from app.opportunities.models import Opportunity
@@ -76,6 +81,13 @@ AUDIT_ACTION = AuditAction.DATA_SOURCE_TAKEN_DOWN
 _AUDIT_REASON = (
     "The platform operator took down a data source; content it supplied was removed "
     "from this workspace."
+)
+#: The refusal of a takedown whose purge would delete or change an append-only record (D-N4
+#: item 37, coordinator ruling 37-R-2): fixed code and message, naming no source, row or text.
+TAKEDOWN_BLOCKED_CODE = "takedown_blocked_by_append_only_records"
+TAKEDOWN_BLOCKED = (
+    "This source cannot be taken down: an opportunity or signal record its purge would delete "
+    "is referenced by an append-only recommendation brief or creative draft. Nothing was changed."
 )
 #: Most opportunity ids one audit entry lists per kind (the counts are always exact).
 _AUDIT_MAX_IDS = 500
@@ -305,6 +317,8 @@ def _purge(db: Session, source_key: str) -> tuple[dict[str, int], dict[_TenantKe
                 tenant = tenants[(opp.organization_id, opp.workspace_id)]
                 tenant["opportunities_deleted"] += 1
                 tenant["deleted_ids"].append(opp.id)
+    # Before the first write of the purge: refuse one that would reach an append-only record.
+    _refuse_append_only_references(db, doomed, norm_ids)
     for opp in _opportunities_citing(db, source_key):
         if opp.id in doomed:
             continue
@@ -365,6 +379,38 @@ def _purge(db: Session, source_key: str) -> tuple[dict[str, int], dict[_TenantKe
                 counts["clusters_deleted"] += 1
     db.flush()
     return counts, dict(tenants)
+
+
+def _refuse_append_only_references(
+    db: Session, opportunity_ids: list[str], normalized_signal_ids: list[str]
+) -> None:
+    """Refuse (409, :data:`TAKEDOWN_BLOCKED`) a purge that would reach an append-only record
+    (D-N4 item 37, coordinator ruling 37-R-2), before it writes anything.
+
+    The purge deletes the opportunities built only from the source and the intelligence
+    records of the source's signals. A recommendation brief or creative draft of such an
+    opportunity, or a brief of such an intelligence record (which may belong to an opportunity
+    the purge keeps), is ``ON DELETE CASCADE`` from them: deleting them would delete the brief
+    or draft (and its review) and clear the approvals' and exports' links to it. Those records
+    are append-only: the PostgreSQL backstop refuses that cascade (an unhandled error) and SQLite
+    would let it through. The takedown is not a sanctioned privacy writer; whether it may become
+    one is the operator's decision."""
+    for chunk in _chunks(sorted(opportunity_ids)):
+        for model in (RecommendationBrief, CreativeDraft):
+            found = db.scalar(select(model.id).where(model.opportunity_id.in_(chunk)).limit(1))
+            if found is not None:
+                raise ConflictError(TAKEDOWN_BLOCKED, code=TAKEDOWN_BLOCKED_CODE)
+    for chunk in _chunks(normalized_signal_ids):
+        records = select(SignalIntelligenceRecord.id).where(
+            SignalIntelligenceRecord.normalized_signal_id.in_(chunk)
+        )
+        found = db.scalar(
+            select(RecommendationBrief.id)
+            .where(RecommendationBrief.intelligence_record_id.in_(records))
+            .limit(1)
+        )
+        if found is not None:
+            raise ConflictError(TAKEDOWN_BLOCKED, code=TAKEDOWN_BLOCKED_CODE)
 
 
 def _audit_tenants(

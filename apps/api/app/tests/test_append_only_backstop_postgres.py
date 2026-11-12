@@ -82,17 +82,22 @@ from sqlalchemy.pool import QueuePool
 from app.approvals.models import Approval
 from app.audit.models import AuditLog
 from app.briefs.models import RecommendationBrief
+from app.campaign_context.campaigns import CAMPAIGN_IN_USE, CAMPAIGN_IN_USE_CODE
+from app.campaign_context.models import Campaign
+from app.connectors.takedown import TAKEDOWN_BLOCKED, TAKEDOWN_BLOCKED_CODE
 from app.core.actor_snapshot import ERASED_ACTOR_SNAPSHOT, actor_snapshot
 from app.core.config import Settings
 from app.creative.models import ContentReview, CreativeDraft
 from app.db.append_only import AppendOnlyViolation, is_append_only
 from app.db.models import Base
 from app.exports.models import Export
+from app.opportunities.models import Opportunity
 from app.organizations.models import User
 from app.privacy import cli, erasure, retention
 from app.privacy.inventory import RetentionClass
 from app.privacy.verification import verify_organization_erased, verify_subject_erased
 from app.privacy.writer import APPEND_ONLY_SQLSTATE, PRIVACY_WRITER_SETTING, mark_privacy_writer
+from app.signals.models import NormalizedSignal, RawSignal
 from app.tests._auth2_support import pg_database, require_postgres
 from app.tests._privacy_support import (
     ALICE,
@@ -107,9 +112,12 @@ from app.tests._privacy_support import (
     PASSWORD,
     WORKSPACES,
     WS_A,
+    WS_A2,
     WS_B,
+    WS_C,
     PrivacyEnv,
     _built,
+    privacy_world,
 )
 from app.tests.test_cf1_append_only_bulk_paths import _seed
 from app.tests.test_postgres_migration_proof import _alembic, _confirmation, _version
@@ -1154,3 +1162,259 @@ def test_the_revision_upgrades_downgrades_and_upgrades_again_on_postgresql() -> 
             _alembic(url, "check")
         finally:
             engine.dispose()
+
+
+# --------------------------------------------------------------------------- #
+# Coordinator rulings 37-R-1 and 37-R-2: the two live paths that would reach a guarded row
+# through a referential action refuse first, with a fixed 409, on both engines
+# --------------------------------------------------------------------------- #
+ENGINES = ["sqlite", "postgresql"]
+
+
+@contextmanager
+def _either(engine: str, tmp_path: Path, prefix: str) -> Iterator[PrivacyEnv]:
+    """The P6-PRIV-1 world on SQLite (``create_all``; no trigger) or on a migrated PostgreSQL
+    database (the backstop's triggers)."""
+    if engine == "sqlite":
+        with privacy_world(tmp_path / f"{prefix}.db") as env:
+            yield env
+        return
+    with _migrated_world(prefix) as env:
+        yield env
+
+
+def _error(response) -> tuple[int, str, str]:
+    body = response.json()["error"]
+    return response.status_code, body["code"], body["message"]
+
+
+def _brief_row(row_id: str, *, ws: str, org: str, opportunity: str, intel: str, **extra) -> dict:
+    return dict(
+        id=row_id,
+        organization_id=org,
+        workspace_id=ws,
+        opportunity_id=opportunity,
+        intelligence_record_id=intel,
+        brief_version=next(_versions),
+        analysis_version="1",
+        scoring_version="1",
+        prompt_name="recommendation_brief",
+        prompt_version="1.0.0",
+        model_identifier="mock",
+        input_hash="0" * 64,
+        is_simulated=True,
+        created_by_snapshot="x",
+        summary="s",
+        rationale="r",
+        recommended_actions=[],
+        suggested_angles=[],
+        risk_notes=[],
+        evidence_refs=[],
+        **extra,
+    )
+
+
+def _draft_row(row_id: str, *, ws: str, org: str, opportunity: str, brief: str, **extra) -> dict:
+    return dict(
+        id=row_id,
+        organization_id=org,
+        workspace_id=ws,
+        brief_id=brief,
+        opportunity_id=opportunity,
+        draft_version=1,
+        channel="email",
+        body="b",
+        prompt_name="generate_creative",
+        prompt_version="1.0.0",
+        model_identifier="mock",
+        input_hash="0" * 64,
+        is_simulated=True,
+        input_tokens=0,
+        output_tokens=0,
+        estimated_cost_usd=0,
+        created_by_snapshot="x",
+        **extra,
+    )
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_deleting_a_campaign_a_brief_or_draft_names_is_refused_with_a_fixed_409(
+    engine, tmp_path
+) -> None:
+    """37-R-1: the check runs before the delete, so neither the trigger nor a 500 is reached
+    on PostgreSQL, and SQLite no longer clears the brief's or draft's ``campaign_id``."""
+    with _either(engine, tmp_path, "sn_bsc") as env:
+        with env.engine.begin() as conn:
+            conn.execute(
+                insert(RecommendationBrief.__table__).values(
+                    _brief_row(
+                        "cd-brief",
+                        ws=WS_A,
+                        org=ORG_A,
+                        opportunity="a1-opp",
+                        intel="a1-intel",
+                        campaign_id="a1-campaign",
+                    )
+                )
+            )
+            conn.execute(
+                insert(RecommendationBrief.__table__).values(
+                    _brief_row(
+                        "cd-brief2",
+                        ws=WS_A2,
+                        org=ORG_A,
+                        opportunity="a2-opp",
+                        intel="a2-intel",
+                    )
+                )
+            )
+            conn.execute(
+                insert(CreativeDraft.__table__).values(
+                    _draft_row(
+                        "cd-draft",
+                        ws=WS_A2,
+                        org=ORG_A,
+                        opportunity="a2-opp",
+                        brief="cd-brief2",
+                        campaign_id="a2-campaign",
+                    )
+                )
+            )
+        headers = env.auth(ALICE)
+        before = env.snapshot()
+        for ws, campaign in ((WS_A, "a1-campaign"), (WS_A2, "a2-campaign")):
+            r = env.client.delete(f"{API}/workspaces/{ws}/campaigns/{campaign}", headers=headers)
+            assert _error(r) == (409, CAMPAIGN_IN_USE_CODE, CAMPAIGN_IN_USE), r.text
+            assert env.snapshot() == before, campaign  # nothing changed, memberships included
+        # A campaign nothing names is still deleted.
+        r = env.client.delete(f"{API}/workspaces/{WS_C}/campaigns/c1-campaign", headers=headers)
+        assert r.status_code == 204, r.text
+        assert env.rows(Campaign, Campaign.id == "c1-campaign") == []
+
+
+TAKEDOWN_KEY = "bs-taken"
+
+
+def _make_a1_the_sources(env: PrivacyEnv) -> None:
+    """The seeded a1 chain (raw and normalized signal, its cluster, opportunity ``a1-opp`` and
+    intelligence record ``a1-intel``) becomes :data:`TAKEDOWN_KEY`'s; BOB is an operator."""
+    with env.engine.begin() as conn:
+        conn.execute(
+            update(RawSignal.__table__)
+            .where(RawSignal.id == "a1-raw")
+            .values(source_key=TAKEDOWN_KEY)
+        )
+        conn.execute(
+            update(NormalizedSignal.__table__)
+            .where(NormalizedSignal.id == "a1-norm")
+            .values(source_key=TAKEDOWN_KEY)
+        )
+        conn.execute(update(User.__table__).where(User.id == BOB).values(is_operator=True))
+
+
+def _keep_a1_opportunity(env: PrivacyEnv) -> None:
+    """A second signal, of another source, in ``a1-opp``'s cluster: the purge keeps the
+    opportunity (it only redacts it) but still deletes ``a1-intel``."""
+    request = {"organization_id": ORG_A, "workspace_id": WS_A, "scout_request_id": "a1-scout"}
+    with env.engine.begin() as conn:
+        conn.execute(
+            insert(RawSignal.__table__).values(
+                id="bs-raw2",
+                source_type="rss",
+                author="x",
+                content="other",
+                **request,
+            )
+        )
+        conn.execute(
+            insert(NormalizedSignal.__table__).values(
+                id="bs-norm2",
+                raw_signal_id="bs-raw2",
+                cluster_id="a1-cluster",
+                source_type="rss",
+                author="x",
+                excerpt="other",
+                content_hash="1" * 64,
+                **request,
+            )
+        )
+
+
+def _take_down(env: PrivacyEnv):
+    return env.client.post(
+        f"{API}/internal/system/data-sources/{TAKEDOWN_KEY}/takedown",
+        headers=env.auth(BOB),
+        json={"reason": "Publisher request", "external_reference": "T-1"},
+    )
+
+
+TAKEDOWN_CASES = {
+    # A brief of an opportunity the purge deletes (the cascade would delete it).
+    "brief of a purged opportunity": lambda env: [
+        (
+            RecommendationBrief,
+            _brief_row("td-brief", ws=WS_A, org=ORG_A, opportunity="a1-opp", intel="a1-intel"),
+        ),
+    ],
+    # A brief of an opportunity the purge keeps, whose intelligence record it deletes.
+    "brief of a purged intelligence record": lambda env: (
+        _keep_a1_opportunity(env),
+        [
+            (
+                RecommendationBrief,
+                _brief_row("td-brief", ws=WS_A, org=ORG_A, opportunity="a1-opp", intel="a1-intel"),
+            ),
+        ],
+    )[1],
+    # Defensive: a draft whose own opportunity is purged while its brief's is not.
+    "draft of a purged opportunity": lambda env: [
+        (
+            RecommendationBrief,
+            _brief_row("td-brief", ws=WS_B, org=ORG_B, opportunity="b1-opp", intel="b1-intel"),
+        ),
+        (
+            CreativeDraft,
+            _draft_row("td-draft", ws=WS_A, org=ORG_A, opportunity="a1-opp", brief="td-brief"),
+        ),
+    ],
+}
+
+
+@pytest.mark.parametrize("case", list(TAKEDOWN_CASES))
+@pytest.mark.parametrize("engine", ENGINES)
+def test_a_takedown_that_would_reach_an_append_only_record_is_refused_with_a_fixed_409(
+    engine, case, tmp_path
+) -> None:
+    """37-R-2: the takedown is not a sanctioned writer; its purge is refused before it writes
+    anything, so no takedown, case record or purge is left behind."""
+    with _either(engine, tmp_path, "sn_bst") as env:
+        _make_a1_the_sources(env)
+        with env.engine.begin() as conn:
+            for model, row in TAKEDOWN_CASES[case](env):
+                conn.execute(insert(model.__table__).values(row))
+        env.auth(BOB)  # the session row the request will use exists before the snapshot
+        before = env.snapshot()
+
+        r = _take_down(env)
+
+        assert _error(r) == (409, TAKEDOWN_BLOCKED_CODE, TAKEDOWN_BLOCKED), r.text
+        after = env.snapshot()
+        assert {t: v for t, v in after.items() if t != "auth_sessions"} == {
+            t: v for t, v in before.items() if t != "auth_sessions"
+        }
+        assert after["source_takedowns"] == () and after["source_takedown_cases"] == ()
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_a_takedown_that_reaches_no_append_only_record_still_purges(engine, tmp_path) -> None:
+    """The control: with no brief or draft on what it purges, the takedown runs as before, on
+    PostgreSQL too (its audit entries are inserts)."""
+    with _either(engine, tmp_path, "sn_bsk") as env:
+        _make_a1_the_sources(env)
+
+        r = _take_down(env)
+
+        assert r.status_code == 200, r.text
+        assert r.json()["verified"] is True
+        assert r.json()["purged"]["opportunities_deleted"] == 1
+        assert env.rows(Opportunity, Opportunity.id == "a1-opp") == []

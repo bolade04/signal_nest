@@ -631,6 +631,10 @@ export interface paths {
          *     affected workspace's audit log gets a fixed generic explanation, the acting operator
          *     and the case's opaque ``case_id`` — never the reason. The suppression record itself
          *     holds only the source key, the time and counts.
+         *
+         *     Refused with 409 ``takedown_blocked_by_append_only_records``, changing nothing, when the
+         *     purge would delete an opportunity or intelligence record that an append-only
+         *     recommendation brief or creative draft refers to.
          */
         post: operations["take_down_data_source_api_v1_internal_system_data_sources__source_key__takedown_post"];
         delete?: never;
@@ -1399,6 +1403,10 @@ export interface paths {
         /**
          * Delete Campaigns
          * @description Delete a campaign and its location memberships.
+         *
+         *     Refused with 409 ``campaign_referenced_by_brief_or_draft`` while a recommendation brief or
+         *     a creative draft names the campaign: those records are append-only, and deleting the
+         *     campaign would clear their ``campaign_id``. Nothing is changed.
          */
         delete: operations["delete_campaigns_api_v1_workspaces__workspace_id__campaigns__item_id__delete"];
         options?: never;

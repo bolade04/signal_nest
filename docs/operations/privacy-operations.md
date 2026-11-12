@@ -394,15 +394,16 @@ infrastructure change that is not built (no database-role change is authorized).
 
 **SQLite (local mode)** has no trigger; the application guard is its only control.
 
-**Two paths it refuses on PostgreSQL that write these tables today.** Both go through a
-referential action outside a privacy writer, so the whole operation is refused and nothing
-changes:
+**Two existing paths that would reach these tables through a referential action** are
+refused by the application first, on both engines, with a fixed 409 that changes nothing:
 
-- a source takedown (`app/connectors/takedown.py`) whose purge deletes an opportunity that a
-  brief or a creative draft hangs off (the cascade would delete them);
+- a source takedown (`app/connectors/takedown.py`) whose purge would delete an opportunity, or
+  an intelligence record, that a brief or a creative draft refers to (the cascade would delete
+  them): `takedown_blocked_by_append_only_records`. The takedown is not a sanctioned privacy
+  writer; whether it may become one is an operator decision, recorded as a gate before Phase 5
+  activation;
 - deleting a campaign that a brief or a creative draft names (the `SET NULL` would change
-  them).
+  them): `campaign_referenced_by_brief_or_draft`.
 
 Neither occurs while the Phase 5 features stay disabled, because nothing then creates a brief
-or a draft. How they should behave is an open decision before Phase 5 activation; until it is
-made, they fail closed.
+or a draft.
