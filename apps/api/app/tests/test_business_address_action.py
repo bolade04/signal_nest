@@ -313,6 +313,16 @@ def test_unreadable_values_ask(fields) -> None:
     assert answer(DALLAS, rule(**fields)) == BUSINESS_ADDRESS_INCOMPLETE
 
 
+@pytest.mark.parametrize("code", ["GB", "KE"])
+def test_an_unreadable_country_asks_for_a_country_class_location_too(code: str) -> None:
+    """With no state or province to read, an unreadable business country (a stored value that
+    no longer reads, row 5c) must still ask: it never agrees (mutant MK3)."""
+    location, fields = OWN[code]
+    unreadable = rule(**{**fields, "country": "Narnia"})
+    assert answer(location, unreadable) == BUSINESS_ADDRESS_INCOMPLETE
+    assert ba.structured_status(unreadable, code, location.city) == "incomplete"
+
+
 def test_the_location_is_checked_first() -> None:
     for location in (loc("Dallas", None, "US"), loc("X", None, None), loc("X", None, "Narnia"),
                      None):
