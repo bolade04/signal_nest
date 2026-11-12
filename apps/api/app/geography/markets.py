@@ -450,6 +450,40 @@ def _written_words(text: str) -> list[str]:
 _PART_SEPARATORS: Final = re.compile(r"[,;/\r\n]")
 
 
+def without_town_parts(text: str | None, towns: frozenset[str]) -> str | None:
+    """GEO-P3 (register G-2): ``text`` without its parts that are the location's town (``towns``:
+    folded keys of the location's city field) but that the reader would take for an area
+    ("Washington" is also Washington State, "Minna" a region of the country Niger), joined by
+    commas; ``None`` when no such part is left out or nothing that names anything is left. A listed
+    code or a suffixed or prefixed subdivision is never left out (a city field "US-AL" must not
+    hide the code "US-AL"), and a part that names no area is kept. The location's city is
+    structured input the location already holds; this is not a city table."""
+    if not text or not towns:
+        return None
+    parts = _PART_SEPARATORS.split(_other_separators("\n".join(text.splitlines())))
+
+    def explicit(raw: str) -> bool:
+        folded = _strip_postcode(fold(raw))
+        return (
+            bool(_listed_codes(raw, folded))
+            or _named_subdivision(folded) is not None
+            or bool(_AREA_PREFIX.match(folded))
+        )
+
+    def names_an_area(raw: str) -> bool:
+        folded = _strip_postcode(fold(raw))
+        return bool(_area_candidates(folded) or _homonym_areas(folded))
+
+    kept = [
+        raw
+        for raw in parts
+        if address_part_key(raw) not in towns or explicit(raw) or not names_an_area(raw)
+    ]
+    if len(kept) == len(parts) or not any(address_part_key(raw) for raw in kept):
+        return None
+    return ", ".join(raw.strip() for raw in kept if raw.strip())
+
+
 def _written_parts(text: str) -> list[str]:
     """The parts of ``text`` as written that name something (the parts :func:`_clean_parts`
     keeps), separated by :data:`_PART_SEPARATORS` ("123 MAIN ST\nDALLAS" reads as "123 MAIN ST,

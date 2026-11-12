@@ -76,6 +76,7 @@ from app.geography.markets import (
     normalize_country,
     normalize_region,
     read_business_address,
+    without_town_parts,
 )
 from app.jurisdiction.codes import UNRESOLVED, is_jurisdiction_code
 from app.jurisdiction.subdivisions import SUBDIVISION_JURISDICTIONS
@@ -381,8 +382,32 @@ def _address_check(
     A name or word that is the location's own city ("Washington, US-DC" for a Washington
     location; "Lebanon, PA" for a Lebanon location) is the town and is not compared: the
     location's city is structured input, not a city table. A code is compared whatever the city.
+
+    GEO-P3 (register G-2): the location's city also settles a part that the qualifier rules read
+    as an area. When the address is refused, it is read again without its parts that are the
+    location's town but name an area (:func:`app.geography.markets.without_town_parts`: "US-DC,
+    Washington" for Washington, DC, where "Washington" is also Washington State); the second
+    reading stands only when it states the location's own area and nothing contradicts it. A
+    listed code or a suffixed or prefixed subdivision is never left out.
     """
-    reading = read_business_address(address)
+    result = _reading_check(read_business_address(address), address, country, code, city)
+    if result[1] is not None and result[2] is None:
+        trimmed = without_town_parts(address, _town_keys(city))
+        if trimmed is not None:
+            retry = _reading_check(read_business_address(trimmed), trimmed, country, code, city)
+            if retry[0] and retry[1] is None:
+                return retry
+    return result
+
+
+def _reading_check(
+    reading: BusinessAddressReading,
+    address: str | None,
+    country: str,
+    code: str,
+    city: str | None,
+) -> tuple[bool, str | None, str | None]:
+    """:func:`_address_check` for one reading of the address."""
     explicit = [s for s in (reading.stated, *reading.parts) if s is not None and s.country]
     for stated in explicit:
         conflict = _conflict(stated, country, code)

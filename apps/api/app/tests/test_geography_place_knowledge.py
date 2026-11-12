@@ -53,6 +53,8 @@ IKEJA = _location("Ikeja", "Lagos", "Nigeria")
 NEW_ORLEANS = _location("New Orleans", "Louisiana", "United States")
 VIENTIANE = _location("Vientiane", None, "Laos")
 ASABA = _location("Asaba", "Delta", "Nigeria")
+WASHINGTON_DC = _location("Washington", "District of Columbia", "United States")
+SEATTLE = _location("Seattle", "Washington", "United States")
 
 
 # --------------------------------------------------------------------------- #
@@ -152,3 +154,42 @@ def test_p3_a_building_name_before_a_nigerian_code_asks():
         ADDRESS_PLACE_UNCLEAR,
         "is ambiguous: country LA or country US or subdivision NG-LA",
     )
+
+
+# --------------------------------------------------------------------------- #
+# 3. The location's city (register G-2)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "US-DC, Washington",
+        "US-DC, Washington, District of Columbia",
+        "District of Columbia, Washington",
+    ],
+)
+def test_p3_the_locations_city_is_the_town_not_washington_state(address):
+    """ "Washington" is also Washington State. For a location whose city is Washington it is the
+    town: the address resolves, where it was refused."""
+    assert _resolve(WASHINGTON_DC, address).code == "US-DC"
+
+
+def test_p3_the_city_never_hides_a_contradiction():
+    _refused(
+        SEATTLE,
+        "US-DC, Washington, District of Columbia",
+        "states subdivision US-DC, but the rest of the address cannot be read with it",
+    )
+    _refused(
+        DALLAS,
+        "US-TX, Ohio, Texas",
+        "states subdivision US-TX, but the rest of the address cannot be read with it",
+    )
+    _refused(
+        MONTGOMERY,
+        "US-AL, Montgomery, Bavaria",
+        "states subdivision US-AL, but the rest of the address cannot be read with it",
+    )
+    city_field_is_a_code = _location("US-AL", "Alabama", "United States")
+    _refused(city_field_is_a_code, "US-AL, 1 Main St, Anchorage, AK", "states subdivision US-AK")
