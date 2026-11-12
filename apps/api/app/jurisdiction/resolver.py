@@ -247,13 +247,19 @@ def _stated_subdivision(stated: MarketIdentity, country: str) -> str | None:
 
 def _conflict(stated: MarketIdentity | None, country: str, code: str) -> str | None:
     """``"country XX"`` or ``"subdivision XX-YY"`` when ``stated`` names another country, or
-    another subdivision of a country that resolves at subdivision level; ``None`` otherwise."""
+    another subdivision of a country that resolves at subdivision level; ``None`` otherwise. A
+    listed code that the rest of the address leaves unplaceable ("US-TX?") is always a conflict."""
     if stated is None or stated.country is None:
         return None
     if stated.country != country:
         return f"country {stated.country}"
     if "-" in code:
         stated_code = _stated_subdivision(stated, country)
+        if stated_code is not None and stated_code.endswith("?"):
+            # A listed code the reader could not place with the rest of the address ("US-TX,
+            # Canada"; markets keys it "US-TX?"): say so in words (W21-REV-5DW2FIX r3 I-1).
+            listed = stated_code[:-1]
+            return f"subdivision {listed}, but the rest of the address cannot be read with it"
         if stated_code is not None and stated_code != code:
             return f"subdivision {stated_code}"
     return None

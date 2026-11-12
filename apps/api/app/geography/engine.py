@@ -10,6 +10,13 @@ substring, and coverage fails closed (P6-DATA-6): a market that cannot be placed
 or a rule that names no place it could be compared with, is outside the scout area.
 Exclusions are evaluated first and bind every rule (Project Phase 5D): an ``online`` /
 ``online_global`` rule admits every market its exclusions do not remove.
+
+An exclusion compares every reading of its text with every plausible reading of the
+observed market (``markets.exclusion_readings`` and ``markets.observed_readings``; operator
+rulings X-1 to X-5, 2026-11-08): an explicit identifier is read as itself only ("NG-LA" is
+Lagos State and cannot overlap a market identified as Kenya), and an ambiguous name as each of
+its places. An inclusion reads its text and the observed market once
+(``markets.inclusion_readings``): ambiguity widens nothing a rule admits.
 """
 
 from __future__ import annotations
@@ -19,10 +26,12 @@ from dataclasses import dataclass, field
 
 from app.geography.markets import (
     MarketIdentity,
+    exclusion_readings,
+    inclusion_readings,
     may_overlap,
     normalize_country,
     normalize_region,
-    parse_market,
+    observed_readings,
     parse_observed,
     text_within,
 )
@@ -98,6 +107,7 @@ def coverage_scopes(rule: CoverageRule) -> list[MarketIdentity]:
     that names no place covers its own location's market at the rule's granularity
     (country, state, or the city itself). A named place that cannot be read, or
     names no country, contributes no scope - it never falls back to the location.
+    A listed market has the readings ``markets.inclusion_readings`` gives it.
     """
     country = _context_country(rule)
     names_state = rule.coverage_type in _STATE_TYPES and bool(rule.state)
@@ -105,9 +115,7 @@ def coverage_scopes(rule: CoverageRule) -> list[MarketIdentity]:
     scopes: list[MarketIdentity] = []
     if rule.included_markets or names_state or names_country:
         for text in rule.included_markets:
-            scope = parse_market(text, default_country=country)
-            if scope is not None:
-                scopes.append(scope)
+            scopes.extend(inclusion_readings(text, default_country=country))
         if names_state:
             region, region_country = normalize_region(rule.state, country)
             if region and region_country:
@@ -138,14 +146,15 @@ def is_excluded(rule: CoverageRule, market: str | None) -> bool:
     Explicit exclusions always win, including over a market they cannot rule out: an
     exclusion removes every market that no known component separates from it (structured
     identity, ``may_overlap``; "York" does not remove "New York"), and a market that
-    cannot be read at all is removed by any exclusion.
+    cannot be read at all is removed by any exclusion. Every reading of the exclusion is
+    compared with every plausible reading of the market (the module docstring).
     """
     country = _context_country(rule)
-    observed = parse_observed(market)
+    observed = observed_readings(market) or [None]
     for text in rule.excluded_markets:
-        excluded = parse_market(text, default_country=country)
-        if excluded is not None and may_overlap(observed, excluded):
-            return True
+        for excluded in exclusion_readings(text, default_country=country):
+            if any(may_overlap(reading, excluded) for reading in observed):
+                return True
     return False
 
 
@@ -155,7 +164,7 @@ def market_in_coverage(rule: CoverageRule, market: str | None) -> bool:
     Exclusions are evaluated **before** any short-circuit (Project Phase 5D §2, exit
     criterion 5): an ``online_global`` rule and an ``online`` rule admit every market
     except the ones their exclusions remove. A rule without exclusions decides exactly as
-    before.
+    before. A jurisdiction form admits what it names ("US-TX" admits Texas).
     """
     if is_excluded(rule, market):
         return False
@@ -195,7 +204,8 @@ def resolve_geo(
         return GeoResolution(resolved_market=None, confidence=0.0)
 
     # Evidence naming the same place in different words ("London, UK" and
-    # "London, United Kingdom") is pooled; the first wording seen is reported.
+    # "London, United Kingdom") is pooled; the first wording seen is reported. Pooling
+    # keeps the word reading: it chooses the reported wording, it decides no coverage.
     keys: dict[str, tuple] = {}
     display: dict[tuple, str] = {}
     per_market: dict[tuple, float] = {}
@@ -203,7 +213,7 @@ def resolve_geo(
     for kind, market in signals:
         text = market.strip()
         if text not in keys:
-            identity = parse_observed(text)
+            identity = parse_observed(text, jurisdiction_forms=False)
             keys[text] = (
                 ("place", identity.city, identity.region, identity.country)
                 if identity is not None and identity.is_qualified

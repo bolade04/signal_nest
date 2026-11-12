@@ -237,8 +237,15 @@ def _grid():
         yield CoverageRule(**shape, excluded_markets=excluded, home_market=home)
 
 
+#: Operator ruling X-1 (2026-11-08; W21 5DW2FIX): "explicit, valid geographic identifiers take
+#: precedence over erroneous legacy interpretations". The CF-3 reading made an excluded
+#: "Texas" of a location outside the US a local place (a city "texas" in that country); it is
+#: now Texas as well. The grid's only non-online decisions that change, each admit -> deny.
+_X1_TEXAS = {(("Texas",), home, "Dallas, TX") for home in (LONDON, LAGOS, NAIROBI)}
+
+
 def test_only_online_decisions_on_excluded_markets_change_and_only_to_deny():
-    changed = 0
+    changed = x1_changed = 0
     for rule in _grid():
         online = rule.online_global or rule.coverage_type == "online"
         for market in _MARKETS:
@@ -247,17 +254,25 @@ def test_only_online_decisions_on_excluded_markets_change_and_only_to_deny():
             if online and is_excluded(rule, market):
                 assert (before, after) == (True, False), (rule, market)
                 changed += 1
+            elif (rule.excluded_markets, rule.home_market, market) in _X1_TEXAS:
+                assert after is False, (rule, market)
+                x1_changed += before
             else:
                 assert after is before, (rule, market)
     assert changed > 0
+    assert x1_changed == 3  # the radius rule that lists "Dallas, TX", for each foreign home
 
 
 def test_is_excluded_is_the_same_test_every_rule_already_applied():
-    """Non-online rules read their exclusions exactly as before: ``is_excluded`` is the
-    CF-3 loop, now shared by both limbs."""
+    """Non-online rules read their exclusions as before (``is_excluded`` is the CF-3 loop,
+    now shared by both limbs), except the X-1 correction above."""
     for rule in _grid():
         if rule.online_global or rule.coverage_type == "online":
             continue
         for market in _MARKETS:
             if is_excluded(rule, market):
-                assert legacy_market_in_coverage(rule, market) is False, (rule, market)
+                assert (
+                    legacy_market_in_coverage(rule, market) is False
+                    or (rule.excluded_markets, rule.home_market, market) in _X1_TEXAS
+                ), (rule, market)
+                assert market_in_coverage(rule, market) is False, (rule, market)
