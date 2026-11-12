@@ -1479,7 +1479,13 @@ def test_q4_an_absent_capture_is_booked_exactly_as_a_resolved_one(
 def _point_record_at_a_missing_location(world: CreativeWorld, record_id: str, ghost: str):
     """Make a record reference a location row that does not exist, bypassing the foreign key
     as only a fault or a manual repair could (``session_replication_role`` needs the
-    superuser role CI's PostgreSQL service gives its user)."""
+    superuser role CI's PostgreSQL service gives its user).
+
+    As a non-superuser the PostgreSQL case fails loudly with ``InsufficientPrivilege``; it
+    never skips. Should CI's test role ever lose superuser, the least-privilege alternative
+    needs no change here: ``GRANT SET ON PARAMETER session_replication_role TO <role>``
+    (PostgreSQL 15 and later), measured to pass for a ``NOSUPERUSER`` role (W21-REV-5DW3 r4
+    part (2), P2-5 and F-8)."""
     table = SignalIntelligenceRecord.__table__
     stmt = update(table).where(table.c.id == record_id).values(location_id=ghost)
     if world.witness.dialect.name == "postgresql":
