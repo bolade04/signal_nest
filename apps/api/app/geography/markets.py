@@ -761,7 +761,7 @@ def _read_business_address(text: str) -> BusinessAddressReading:
         )
         routes: tuple[MarketIdentity, ...] = ()
         route_groups: tuple[tuple[MarketIdentity, ...], ...] = ()
-        if kind is None and _designator(text):
+        if kind is None and _designator(text) and not _us_route(text):
             # GEO-P2 (G-8, FU-H): a route designator as the whole address ("1 SR 520", "12000 FM
             # 1960") may be a road, as C-16 reads it in a later part: ambiguous, never refused.
             routes, route_groups, groups = tuple(_placed(stated)), groups, ()
@@ -1153,6 +1153,14 @@ def _spaced_group(spaced: tuple[str, str], label: str) -> tuple[MarketIdentity, 
 
 #: Words that number a unit ("Flat No 3", "Plot Nr 12").
 _NUMBER_LABELS: Final = frozenset({"no", "nr", "num", "number"})
+
+
+def _us_route(text: str) -> bool:
+    """GEO-P2 (G-8, FU-H): is ``text`` a route designator whose code is "US" ("1000 US-75", "1000
+    us 75")? Its road reading is a United States route and its code reading the United States, so
+    both name the same country: it names the United States, as "4400 US Hwy 75" does, and is not an
+    ambiguous route ("1 SR 520": a road, or Suriname)."""
+    return _designator(text) and _strip_postcode(fold(text)).split()[-1] == "us"
 
 
 def _designator(part: str, unit: bool = False) -> bool:

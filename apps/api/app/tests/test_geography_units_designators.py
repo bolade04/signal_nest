@@ -10,8 +10,9 @@ where the evidence is insufficient or ambiguous") and the C-3 ruling of 2026-11-
 * G-8: a route designator written as the whole address ("1 SR 520", "12000 FM 1960") and a street
   with no house number written as a street ("Main St", "NE 45th St") may be a road or a street, so
   they ask for clarification instead of being refused for the business's own location; a code
-  inside a route's name ("4400 US Hwy 75") names its country, so it is refused for a location
-  elsewhere; a two-area state after an unlisted town keeps D1's clarification (C-8, C-16), and
+  inside a route's name ("4400 US Hwy 75"), or a designator whose code is "US" ("1000 US-75"),
+  names its country, so it is refused for a location elsewhere; a two-area state after an
+  unlisted town keeps D1's clarification (C-8, C-16), and
   writing the state in full resolves it; a last part that is only a direction after a street line
   ("1200 Pennsylvania Ave, SE") is a direction part, not Sweden (review W21-REV-GEO r1 I-3).
 
@@ -159,6 +160,16 @@ def test_g8_a_route_designator_as_the_whole_address_asks(location, address, read
 
 def test_g8_a_route_designator_agrees_where_its_code_is_the_location():
     assert _resolve(PARAMARIBO, "1 SR 520").code == "SR"
+
+
+@pytest.mark.parametrize("address", ["1000 US-75", "1000 us-75", "1000 US 75", "1000 us 75"])
+def test_g8_a_whole_address_us_route_names_its_country(address):
+    """A designator whose code is "US" is a United States route, and "US" is the United States:
+    both readings name one country, so it is read as "4400 US Hwy 75" is, refused for London and
+    resolving for Dallas. "1 SR 520" still asks (a road, or Suriname)."""
+    _refused(LONDON, address, "states country US")
+    assert _resolve(DALLAS, address).code == "US-TX"
+    _clarified(LONDON, "1 SR 520", ADDRESS_ROUTE_AMBIGUOUS, "is ambiguous: a route or country SR")
 
 
 @pytest.mark.parametrize(
