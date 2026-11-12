@@ -857,6 +857,25 @@ def _listed_codes(raw: str, folded: str) -> list[_Form]:
 _ROUTE_WORDS: Final = frozenset({"hwy", "highway", "route", "rte", "rt"})
 
 
+#: A US ZIP code, five digits or ZIP+4 ("33101", "33101-1234").
+_ZIP_CODE: Final = re.compile(r"\d{5}(?:-\d{4})?")
+
+
+def _floor_after_town(raw_parts: list[str], index: int) -> bool:
+    """GEO-P2 (review W21-REV-GEO P2 r1 C-1): is the floor-shaped part at ``index`` right after a
+    bare town and before no street line ("1 Main St, Miami, FL 3")? There it may be a floor or the
+    state with a short postcode. After a street line, a unit, a state or a country ("123 Main St, Fl
+    3", "Dallas, TX 75201, Fl 3"), or before a street line ("Fl 3, 123 Main St"), it is a floor."""
+    before = [part for part in raw_parts[:index] if not _unit_or_postcode(part)]
+    after = [part for part in raw_parts[index + 1 :] if not _unit_or_postcode(part)]
+    if not before or _street_kind(before[-1]) is not None:
+        return False
+    if after and _street_kind(after[0]) is not None:
+        return False
+    town = before[-1]
+    return not _area_candidates(_strip_postcode(fold(town))) and not _part_reading(town)[0]
+
+
 def _route_code(part: str) -> str | None:
     """GEO-P2 (G-8): the two-letter code before a highway word in ``part`` as written ("4400 US Hwy
     75" -> "US", "U.S. Route 1" -> "US"), when it names an area and is not a street type ("St Rt 9"
@@ -869,6 +888,10 @@ def _route_code(part: str) -> str | None:
             and len(word) == 2
             and word.isalpha()
             and folded not in STREET_SUFFIXES
+            # Review W21-REV-GEO P2 r1 C-2: a street's direction ("SE Hwy 212", C-14) or a county
+            # road ("CO Hwy 5") is no route code.
+            and folded not in _DIRECTION_PARTS
+            and folded != "co"
             and _area_candidates(folded)
         ):
             return word
@@ -973,14 +996,14 @@ def _part_places(text: str) -> tuple[PartPlace, ...]:
         # "Oyo", a Nigerian state's bare name) is not one.
         short = " " not in folded and len(folded) <= 3 and bool(areas)
         numbers = fold(raw).split()[1:]
-        if (
-            short
-            and folded in _UNIT_LABELS
-            and numbers
-            and all(len(re.sub(r"\D", "", number)) <= 3 for number in numbers)
-        ):
-            # "FL 3", "NO 5": a floor or a unit before its number. GEO-P2: a five-digit number is a
-            # ZIP code, so "FL 33101" is Florida.
+        zip_code = any(_ZIP_CODE.fullmatch(number) for number in numbers)
+        if short and folded in _UNIT_LABELS and numbers and not (folded == "fl" and zip_code):
+            # "FL 3", "NO 5", "No 1234": a floor or a unit before its number. GEO-P2: "FL" before a
+            # ZIP code is Florida ("FL 33101"); any other label stays a unit (review P2 r1 C-3).
+            if folded == "fl" and _floor_after_town(raw_parts, index):
+                # Review W21-REV-GEO P2 r1 C-1: "1 Main St, Miami, FL 3" is a floor, or Florida
+                # with a short postcode: an unclear word, as GEO-P1 reads one.
+                places.append(PartPlace(PLACE_UNCLEAR, folded, identities(areas)))
             continue
         following = [p for p in map(address_part_key, raw_parts[index + 1 :]) if _is_named(p)]
         country_after = _country_code(following[0]) if following else None

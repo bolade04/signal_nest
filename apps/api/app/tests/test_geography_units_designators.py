@@ -55,6 +55,12 @@ TORONTO = _location("Toronto", "Ontario", "Canada")
 LONDON = _location("London", None, "United Kingdom")
 PARAMARIBO = _location("Paramaribo", None, "Suriname")
 SAO_TOME = _location("Sao Tome", "Agua Grande", "Sao Tome and Principe")
+MIAMI = _location("Miami", "Florida", "United States")
+ATLANTA = _location("Atlanta", "Georgia", "United States")
+HUTCHINSON = _location("Hutchinson", "Minnesota", "United States")
+CLACKAMAS = _location("Clackamas", "Oregon", "United States")
+IKEJA = _location("Ikeja", "Lagos", "Nigeria")
+KUALA_LUMPUR = _location("Kuala Lumpur", None, "Malaysia")
 
 
 def _refused(location, address, evidence):
@@ -324,3 +330,69 @@ def test_i3_explicit_geography_settles_a_trailing_direction_and_a_town_does_not_
     # After a town, "SE" is the qualifier's code, as on main.
     _refused(WASHINGTON_DC, "1200 Pennsylvania Ave, Washington, SE", "states country SE")
     _refused(WASHINGTON_DC, "Washington, SE", "states country SE")
+
+
+# --------------------------------------------------------------------------- #
+# Review W21-REV-GEO P2 r1: conditions C-1 to C-3
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "1 Main St, Miami, FL 3",
+        "Miami, FL 3",
+        "1 Main St; Miami; FL 3",
+        "ACME Corp, 1 Main St, Miami, Fl 3",
+    ],
+)
+def test_r1_c1_a_floor_shaped_part_after_a_town_asks(address):
+    """C-1: right after a town, and before no street line, "FL 3" is a floor or Florida with a short
+    postcode. It is GEO-P1's unclear word: a location outside Florida asks, and Miami resolves."""
+    _clarified(
+        HARTFORD, address, ADDRESS_PLACE_UNCLEAR, "is ambiguous: a town's name or subdivision US-FL"
+    )
+    assert _resolve(MIAMI, address).code == "US-FL"
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "123 Main St, Fl 3",
+        "1 Main St, Dallas, TX 75201, Fl 3",
+        "ACME, Fl 3, 123 Main St, Dallas, TX",
+    ],
+)
+def test_r1_c1_a_floor_after_a_street_or_a_state_or_before_a_street_stays_a_floor(address):
+    assert _resolve(DALLAS, address).code == "US-TX"
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "code"),
+    [
+        (HUTCHINSON, "12345 CO Hwy 5", "US-MN"),
+        (HUTCHINSON, "12345 CO Hwy 5, Hutchinson, MN 55350", "US-MN"),
+        (CLACKAMAS, "12345 SE Hwy 212, Clackamas, OR 97015", "US-OR"),
+    ],
+)
+def test_r1_c2_a_county_road_or_a_direction_is_no_route_code(location, address, code):
+    """C-2: "CO Hwy 5" is a county road and "SE Hwy 212" a street's direction, never Colorado or
+    Sweden; "4400 US Hwy 75" stays refused for London (above)."""
+    assert _resolve(location, address).code == code
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "code"),
+    [
+        (IKEJA, "No 1234, Allen Avenue, Ikeja, Lagos", "NG-LA"),
+        (KUALA_LUMPUR, "NO 1234, Jalan Ampang, Kuala Lumpur", "MY"),
+    ],
+)
+def test_r1_c3_a_unit_label_before_a_long_number_is_a_unit(location, address, code):
+    """C-3: only "FL" before a ZIP code leaves the unit-label reading; "No 1234" is a number."""
+    assert _resolve(location, address).code == code
+
+
+def test_r1_c3_fl_before_a_zip_code_is_florida():
+    _refused(ATLANTA, "FL 33101, 1 Main St", "states subdivision US-FL")
+    _refused(HARTFORD, "1 Main St, Miami, FL 33101, Suite 200", "states subdivision US-FL")
