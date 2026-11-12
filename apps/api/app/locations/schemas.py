@@ -50,7 +50,8 @@ BUSINESS_ADDRESS_FIELDS: Final = (
     "business_address_region",
     "business_address_postcode",
 )
-_AS_ENTERED = "As entered by the customer; not verified against any external source."
+#: Customer-supplied data is labelled as such (operator instruction of 2026-11-12, item 3).
+_PROVIDED = "Provided by the customer."
 #: The fixed 422 messages of the structured fields (they never repeat what was sent). Short
 #: enough that the web client shows them whole beside the field's name (its 80-character bound
 #: on one field message, "Value error, " included).
@@ -91,24 +92,30 @@ class GeoCoverageFields(BaseModel):
     # The structured business address (W21 ADDR). What a jurisdiction-dependent action needs
     # of it is ``app.jurisdiction.business_address``; storing it needs only readable values.
     business_address_street: str | None = Field(
-        default=None, max_length=400, description=f"Street. {_AS_ENTERED}"
+        default=None, max_length=400, description=f"Street. {_PROVIDED}"
     )
     business_address_locality: str | None = Field(
-        default=None, max_length=160, description=f"Town or locality. {_AS_ENTERED}"
+        default=None,
+        max_length=160,
+        description=(
+            "Town or locality: the town, locality or named place used in the business's postal "
+            f"address (required before jurisdiction-dependent actions when the location has a "
+            f"city). {_PROVIDED}"
+        ),
     )
     business_address_country: str | None = Field(
-        default=None, max_length=120, description=f"Country. {_AS_ENTERED}"
+        default=None, max_length=120, description=f"Country. {_PROVIDED}"
     )
     business_address_region: str | None = Field(
         default=None,
         max_length=160,
         description=(
             "State or province (required for jurisdiction in the United States, Canada, "
-            f"Australia and Nigeria). {_AS_ENTERED}"
+            f"Australia and Nigeria). {_PROVIDED}"
         ),
     )
     business_address_postcode: str | None = Field(
-        default=None, max_length=40, description=f"Postcode. {_AS_ENTERED}"
+        default=None, max_length=40, description=f"Postcode. {_PROVIDED}"
     )
 
     @field_validator("coverage_type")
@@ -169,7 +176,7 @@ class GeoCoverageOut(GeoCoverageFields):
         default=None,
         description=(
             "When a member of the workspace confirmed that the business town or locality lies "
-            "within this location's area. Not verified by SignalNest."
+            "within this location's area: confirmed by the customer."
         ),
     )
     locality_confirmation_applies: bool = Field(
@@ -192,8 +199,8 @@ class GeoCoverageOut(GeoCoverageFields):
 
 class LocalityConfirmationIn(BaseModel):
     """Confirm (``true``) that the saved business town or locality lies within this location's
-    area, or withdraw that confirmation (``false``). The confirmation is the customer's; it is
-    not verified."""
+    area, or withdraw that confirmation (``false``). The confirmation is the customer's own
+    statement: confirmed by the customer."""
 
     confirmed: bool
 

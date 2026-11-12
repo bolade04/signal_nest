@@ -55,8 +55,8 @@ table, alias list or dataset exists here.
 
 **A customer's confirmation** (``GeoCoverageRule.locality_confirmed_*``) answers only step 6:
 that the business town lies within the location's area. It binds the town, the location's city
-and the jurisdiction it was made for, and lapses when any of them changes. It is
-customer-confirmed, never verified.
+and the jurisdiction it was made for, and lapses when any of them changes. It is the
+customer's own statement: confirmed by the customer.
 
 Every UNRESOLVED answer carries a category of :data:`ACTION_CLARIFICATIONS`, whose messages are
 fixed and never contain an address, other customer text or the resolver's evidence; neither does
@@ -402,7 +402,7 @@ def resolve_for_action(
         evidence.append("business address text states nothing against it")
     if confirmed:
         evidence.append(
-            "town or locality customer-confirmed within the location's area (not verified)"
+            "town or locality confirmed by the customer within the location's area"
         )
     return JurisdictionResolution(
         code=code, codes=base.codes, confidence=base.confidence, evidence=tuple(evidence)

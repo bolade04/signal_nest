@@ -3447,7 +3447,7 @@
                 "type": "null"
               }
             ],
-            "description": "Country. As entered by the customer; not verified against any external source.",
+            "description": "Country. Provided by the customer.",
             "title": "Business Address Country"
           },
           "business_address_locality": {
@@ -3460,7 +3460,7 @@
                 "type": "null"
               }
             ],
-            "description": "Town or locality. As entered by the customer; not verified against any external source.",
+            "description": "Town or locality: the town, locality or named place used in the business's postal address (required before jurisdiction-dependent actions when the location has a city). Provided by the customer.",
             "title": "Business Address Locality"
           },
           "business_address_postcode": {
@@ -3473,7 +3473,7 @@
                 "type": "null"
               }
             ],
-            "description": "Postcode. As entered by the customer; not verified against any external source.",
+            "description": "Postcode. Provided by the customer.",
             "title": "Business Address Postcode"
           },
           "business_address_region": {
@@ -3486,7 +3486,7 @@
                 "type": "null"
               }
             ],
-            "description": "State or province (required for jurisdiction in the United States, Canada, Australia and Nigeria). As entered by the customer; not verified against any external source.",
+            "description": "State or province (required for jurisdiction in the United States, Canada, Australia and Nigeria). Provided by the customer.",
             "title": "Business Address Region"
           },
           "business_address_street": {
@@ -3499,7 +3499,7 @@
                 "type": "null"
               }
             ],
-            "description": "Street. As entered by the customer; not verified against any external source.",
+            "description": "Street. Provided by the customer.",
             "title": "Business Address Street"
           },
           "center_latitude": {
@@ -3610,7 +3610,7 @@
                 "type": "null"
               }
             ],
-            "description": "Country. As entered by the customer; not verified against any external source.",
+            "description": "Country. Provided by the customer.",
             "title": "Business Address Country"
           },
           "business_address_locality": {
@@ -3623,7 +3623,7 @@
                 "type": "null"
               }
             ],
-            "description": "Town or locality. As entered by the customer; not verified against any external source.",
+            "description": "Town or locality: the town, locality or named place used in the business's postal address (required before jurisdiction-dependent actions when the location has a city). Provided by the customer.",
             "title": "Business Address Locality"
           },
           "business_address_postcode": {
@@ -3636,7 +3636,7 @@
                 "type": "null"
               }
             ],
-            "description": "Postcode. As entered by the customer; not verified against any external source.",
+            "description": "Postcode. Provided by the customer.",
             "title": "Business Address Postcode"
           },
           "business_address_region": {
@@ -3649,7 +3649,7 @@
                 "type": "null"
               }
             ],
-            "description": "State or province (required for jurisdiction in the United States, Canada, Australia and Nigeria). As entered by the customer; not verified against any external source.",
+            "description": "State or province (required for jurisdiction in the United States, Canada, Australia and Nigeria). Provided by the customer.",
             "title": "Business Address Region"
           },
           "business_address_street": {
@@ -3662,7 +3662,7 @@
                 "type": "null"
               }
             ],
-            "description": "Street. As entered by the customer; not verified against any external source.",
+            "description": "Street. Provided by the customer.",
             "title": "Business Address Street"
           },
           "center_latitude": {
@@ -3737,7 +3737,7 @@
                 "type": "null"
               }
             ],
-            "description": "When a member of the workspace confirmed that the business town or locality lies within this location's area. Not verified by SignalNest.",
+            "description": "When a member of the workspace confirmed that the business town or locality lies within this location's area: confirmed by the customer.",
             "title": "Locality Confirmed At"
           },
           "locality_matches_city": {
@@ -5238,7 +5238,7 @@
         "type": "object"
       },
       "LocalityConfirmationIn": {
-        "description": "Confirm (``true``) that the saved business town or locality lies within this location's\narea, or withdraw that confirmation (``false``). The confirmation is the customer's; it is\nnot verified.",
+        "description": "Confirm (``true``) that the saved business town or locality lies within this location's\narea, or withdraw that confirmation (``false``). The confirmation is the customer's own\nstatement: confirmed by the customer.",
         "properties": {
           "confirmed": {
             "title": "Confirmed",
@@ -16673,7 +16673,7 @@
     },
     "/api/v1/workspaces/{workspace_id}/locations/{location_id}/geo-coverage/locality-confirmation": {
       "put": {
-        "description": "Confirm, or withdraw, that the saved business town or locality lies within this\nlocation's area (W21 ADDR). The confirmation is the customer's own statement, recorded with\nwho made it and when; SignalNest does not verify it.\n\nIt binds what is saved now: the stored business town, the location's city and the\njurisdiction both resolve to. It lapses when any of them changes. Before a\njurisdiction-dependent action it answers only the question of the town, after every\ncontradiction and completeness check, so it can never override a contradiction. Answers\n422 ``locality_confirmation_refused`` (a fixed message per cause; nothing is recorded) when\nthe location's own country or required state or province does not read, when the business\naddress contradicts the location or is incomplete, or when there is nothing to confirm.\nWithdrawing is always allowed. A change is audited as ``geo_coverage.updated`` naming the\nconfirmation's fields that changed, never their values; a request that changes nothing\nrecords nothing.",
+        "description": "Confirm, or withdraw, that the saved business town or locality lies within this\nlocation's area (W21 ADDR). The confirmation is the customer's own statement, recorded as\nconfirmed by the customer, with who made it and when.\n\nIt binds what is saved now: the stored business town, the location's city and the\njurisdiction both resolve to. It lapses when any of them changes. Before a\njurisdiction-dependent action it answers only the question of the town, after every\ncontradiction and completeness check, so it can never override a contradiction. Answers\n422 ``locality_confirmation_refused`` (a fixed message per cause; nothing is recorded) when\nthe location's own country or required state or province does not read, when the business\naddress contradicts the location or is incomplete, or when there is nothing to confirm.\nWithdrawing is always allowed. A change is audited as ``geo_coverage.updated`` naming the\nconfirmation's fields that changed, never their values; a request that changes nothing\nrecords nothing.",
         "operationId": "set_locality_confirmation_api_v1_workspaces__workspace_id__locations__location_id__geo_coverage_locality_confirmation_put",
         "parameters": [
           {

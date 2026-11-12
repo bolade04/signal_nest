@@ -1793,8 +1793,8 @@ export interface paths {
         /**
          * Set Locality Confirmation
          * @description Confirm, or withdraw, that the saved business town or locality lies within this
-         *     location's area (W21 ADDR). The confirmation is the customer's own statement, recorded with
-         *     who made it and when; SignalNest does not verify it.
+         *     location's area (W21 ADDR). The confirmation is the customer's own statement, recorded as
+         *     confirmed by the customer, with who made it and when.
          *
          *     It binds what is saved now: the stored business town, the location's city and the
          *     jurisdiction both resolve to. It lapses when any of them changes. Before a
@@ -3757,27 +3757,27 @@ export interface components {
             business_address?: string | null;
             /**
              * Business Address Country
-             * @description Country. As entered by the customer; not verified against any external source.
+             * @description Country. Provided by the customer.
              */
             business_address_country?: string | null;
             /**
              * Business Address Locality
-             * @description Town or locality. As entered by the customer; not verified against any external source.
+             * @description Town or locality: the town, locality or named place used in the business's postal address (required before jurisdiction-dependent actions when the location has a city). Provided by the customer.
              */
             business_address_locality?: string | null;
             /**
              * Business Address Postcode
-             * @description Postcode. As entered by the customer; not verified against any external source.
+             * @description Postcode. Provided by the customer.
              */
             business_address_postcode?: string | null;
             /**
              * Business Address Region
-             * @description State or province (required for jurisdiction in the United States, Canada, Australia and Nigeria). As entered by the customer; not verified against any external source.
+             * @description State or province (required for jurisdiction in the United States, Canada, Australia and Nigeria). Provided by the customer.
              */
             business_address_region?: string | null;
             /**
              * Business Address Street
-             * @description Street. As entered by the customer; not verified against any external source.
+             * @description Street. Provided by the customer.
              */
             business_address_street?: string | null;
             /** Center Latitude */
@@ -3811,27 +3811,27 @@ export interface components {
             business_address?: string | null;
             /**
              * Business Address Country
-             * @description Country. As entered by the customer; not verified against any external source.
+             * @description Country. Provided by the customer.
              */
             business_address_country?: string | null;
             /**
              * Business Address Locality
-             * @description Town or locality. As entered by the customer; not verified against any external source.
+             * @description Town or locality: the town, locality or named place used in the business's postal address (required before jurisdiction-dependent actions when the location has a city). Provided by the customer.
              */
             business_address_locality?: string | null;
             /**
              * Business Address Postcode
-             * @description Postcode. As entered by the customer; not verified against any external source.
+             * @description Postcode. Provided by the customer.
              */
             business_address_postcode?: string | null;
             /**
              * Business Address Region
-             * @description State or province (required for jurisdiction in the United States, Canada, Australia and Nigeria). As entered by the customer; not verified against any external source.
+             * @description State or province (required for jurisdiction in the United States, Canada, Australia and Nigeria). Provided by the customer.
              */
             business_address_region?: string | null;
             /**
              * Business Address Street
-             * @description Street. As entered by the customer; not verified against any external source.
+             * @description Street. Provided by the customer.
              */
             business_address_street?: string | null;
             /** Center Latitude */
@@ -3859,7 +3859,7 @@ export interface components {
             locality_confirmation_applies: boolean;
             /**
              * Locality Confirmed At
-             * @description When a member of the workspace confirmed that the business town or locality lies within this location's area. Not verified by SignalNest.
+             * @description When a member of the workspace confirmed that the business town or locality lies within this location's area: confirmed by the customer.
              */
             locality_confirmed_at?: string | null;
             /**
@@ -4443,8 +4443,8 @@ export interface components {
         /**
          * LocalityConfirmationIn
          * @description Confirm (``true``) that the saved business town or locality lies within this location's
-         *     area, or withdraw that confirmation (``false``). The confirmation is the customer's; it is
-         *     not verified.
+         *     area, or withdraw that confirmation (``false``). The confirmation is the customer's own
+         *     statement: confirmed by the customer.
          */
         LocalityConfirmationIn: {
             /** Confirmed */

@@ -378,8 +378,8 @@ def set_locality_confirmation(
     ctx: TenantContext = Depends(EDITORS),
 ) -> GeoCoverageOut:
     """Confirm, or withdraw, that the saved business town or locality lies within this
-    location's area (W21 ADDR). The confirmation is the customer's own statement, recorded with
-    who made it and when; SignalNest does not verify it.
+    location's area (W21 ADDR). The confirmation is the customer's own statement, recorded as
+    confirmed by the customer, with who made it and when.
 
     It binds what is saved now: the stored business town, the location's city and the
     jurisdiction both resolve to. It lapses when any of them changes. Before a

@@ -28,7 +28,7 @@ describe('the structured business-address clarifications (W21 ADDR)', () => {
 
   it('never calls anything verified, and the refusals say they cannot be confirmed away', () => {
     for (const message of [...Object.values(ADDRESS_CLARIFICATIONS), TEXT_REMEDY]) {
-      expect(message).not.toMatch(/\bverified\b/i);
+      expect(message).not.toMatch(/verif/i);
       expect(message).not.toMatch(/[{}%]/);
     }
     for (const key of ['business_address_conflict', 'business_address_text_conflict']) {

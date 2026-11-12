@@ -17,7 +17,7 @@ them and nothing copies the location's own fields into them. What they must hold
 jurisdiction-dependent action, and how they are compared with the location, is
 :mod:`app.jurisdiction.business_address`. The five ``locality_confirmed_*`` columns record a
 customer's confirmation that the business town lies within the location's area, bound to the
-values it was made for; it is customer-confirmed, never verified.
+values it was made for; it is the customer's statement (confirmed by the customer).
 """
 
 from __future__ import annotations
@@ -151,7 +151,7 @@ class GeoCoverageRule(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     # --- A customer's confirmation that the business town lies within this location's area,
     # bound to the town, the location's city and the jurisdiction it was made for
-    # (customer-confirmed; never verified). -----------------------------------------------
+    # (confirmed by the customer). ----------------------------------------------------------
     locality_confirmed_locality: Mapped[str | None] = mapped_column(String(160))
     locality_confirmed_city: Mapped[str | None] = mapped_column(String(160))
     locality_confirmed_jurisdiction: Mapped[str | None] = mapped_column(

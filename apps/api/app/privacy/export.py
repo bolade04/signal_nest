@@ -365,7 +365,7 @@ def export_account(db: Session, *, user: User) -> dict[str, Any]:
             .order_by(NotificationPreference.created_at, NotificationPreference.id),
         ),
         # W21 ADDR: the confirmations, by this account, that a location's business town lies
-        # within its area (customer-confirmed, not verified). Ids and the instant only: the
+        # within its area (confirmed by the customer). Ids and the instant only: the
         # town, the city and the address are the organization's business data.
         "locality_confirmations_made": _rows(
             db,

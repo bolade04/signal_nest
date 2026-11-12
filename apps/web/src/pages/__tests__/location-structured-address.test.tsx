@@ -166,6 +166,8 @@ describe('location dialog: the structured business address (W21 ADDR)', () => {
     await serviceArea(screen, dialog);
     for (const label of FIELDS) expect(within(dialog).getByLabelText(label)).toHaveValue('');
     expect(within(dialog).getByText(ADDRESS_HELP)).toBeInTheDocument();
+    expect(ADDRESS_HELP).toMatch(/Provided by your team\.$/);
+    expect(dialog.textContent ?? '').not.toMatch(/verif/i);
     await save(screen, dialog, /^add location$/i);
     expect(store.puts).toHaveLength(1);
     for (const key of Object.values(KEYS)) expect(store.puts[0]![key]).toBeNull();
@@ -270,16 +272,16 @@ describe('location dialog: the locality confirmation (W21 ADDR)', () => {
     await serviceArea(screen, dialog);
     expect(await within(dialog).findByText(TOWN_DIFFERS)).toBeInTheDocument();
     await screen.user.click(within(dialog).getByRole('button', { name: CONFIRM_LABEL }));
-    expect(await within(dialog).findByText(/^Customer-confirmed on /)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/^Confirmed by your team on /)).toBeInTheDocument();
     expect(store.confirmations).toEqual([true]);
-    expect(within(dialog).getByText(/SignalNest has not checked this\.$/)).toBeInTheDocument();
-    expect(dialog.textContent ?? '').not.toMatch(/\bverified\b/i);
+    // Customer data is labelled as provided or confirmed by the customer, never as verified.
+    expect(dialog.textContent ?? '').not.toMatch(/verif/i);
     expect(store.puts).toEqual([]); // the confirmation is its own request, of the saved values
 
     await screen.user.click(within(dialog).getByRole('button', { name: WITHDRAW_LABEL }));
     await waitFor(() => expect(store.confirmations).toEqual([true, false]));
     expect(await within(dialog).findByRole('button', { name: CONFIRM_LABEL })).toBeInTheDocument();
-    expect(within(dialog).queryByText(/^Customer-confirmed on /)).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/^Confirmed by your team on /)).not.toBeInTheDocument();
   });
 
   it('is disabled while the town, the state, the country or the city has unsaved edits', async () => {
@@ -345,11 +347,12 @@ describe('location dialog: the structured address, read-only (W21 ADDR)', () => 
     await serviceArea(screen, dialog);
     expect(await within(dialog).findByText('Irving')).toBeInTheDocument();
     expect(within(dialog).getByText('75039')).toBeInTheDocument();
-    expect(within(dialog).getByText(/^Customer-confirmed on /)).toBeInTheDocument();
+    expect(within(dialog).getByText(/^Confirmed by your team on /)).toBeInTheDocument();
     expect(within(dialog).queryByRole('textbox', { name: 'Business town or locality' })).not.toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: CONFIRM_LABEL })).not.toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: WITHDRAW_LABEL })).not.toBeInTheDocument();
     expect(within(dialog).queryByText(ADDRESS_HELP)).not.toBeInTheDocument();
+    expect(dialog.textContent ?? '').not.toMatch(/verif/i);
     expect(writes).toEqual([]);
   });
 });

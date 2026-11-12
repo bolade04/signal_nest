@@ -362,11 +362,8 @@ def test_a_confirmation_answers_the_town_and_is_labelled_customer_confirmed() ->
     r = resolve_for_action(LAGOS, [confirmed("Ikeja", "LAGOS", "NG-LA", country="NG",
                                              region="Lagos")])
     assert r.code == "NG-LA"
-    assert (
-        "town or locality customer-confirmed within the location's area (not verified)"
-        in r.evidence
-    )
-    assert not any("verified" in line and "not verified" not in line for line in r.evidence)
+    assert "town or locality confirmed by the customer within the location's area" in r.evidence
+    assert not any("verif" in line.lower() for line in r.evidence)
 
 
 def test_the_binding_lapses_when_the_town_the_city_or_the_code_changes() -> None:

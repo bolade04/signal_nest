@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, select
@@ -513,18 +514,46 @@ def test_a_confirmation_lapses_and_never_overrides_a_contradiction(w: W) -> None
 # A-11: never "verified"
 # --------------------------------------------------------------------------- #
 def test_nothing_calls_the_address_or_the_confirmation_verified(w: W) -> None:
+    """Operator instruction of 2026-11-12, item 3: customer-supplied or -confirmed information is
+    clearly distinguished from external verification, so it is labelled "provided by" and
+    "confirmed by" the customer, and no schema text or answer about it says verified."""
     doc = app.openapi()
     schemas = doc["components"]["schemas"]
+    path = f"{API}/workspaces/{{workspace_id}}/locations/{{location_id}}"
     published = json.dumps([schemas["GeoCoverageBase"], schemas["GeoCoverageOut"],
-                            schemas["LocalityConfirmationIn"],
-                            doc["paths"][f"{API}/workspaces/{{workspace_id}}/locations/"
-                                         f"{{location_id}}/geo-coverage/locality-confirmation"]])
-    lowered = published.lower()
-    assert lowered.count("verified") == lowered.count("not verified") > 0
+                            schemas["LocalityConfirmationIn"], doc["paths"][f"{path}/geo-coverage"],
+                            doc["paths"][f"{path}/geo-coverage/locality-confirmation"]])
+    assert "verif" not in published.lower()
+    assert "Provided by the customer." in published
+    assert "confirmed by the customer" in published
     assert _put(w, IRVING).status_code == 200
-    assert "verified" not in _confirm(w, True).text.lower()
+    assert "verif" not in _confirm(w, True).text.lower()
     for message in CONFIRMATION_REFUSALS.values():
-        assert "verified" not in message.lower()
+        assert "verif" not in message.lower()
+
+
+#: Every product text about the structured address and the confirmation: the API's modules and
+#: revision, the web's copy, and the inventory's row (the grep guard of item 3).
+GUARDED = (
+    "apps/api/app/jurisdiction/business_address.py",
+    "apps/api/app/locations/schemas.py",
+    "apps/api/app/locations/routes.py",
+    "apps/api/app/locations/models.py",
+    "apps/api/alembic/versions/20261112_1200-6f8a80cf1785_add_structured_business_address.py",
+    "apps/web/src/pages/locations/addressCopy.ts",
+    "apps/web/src/lib/jurisdictionClarifications.ts",
+)
+
+
+def test_no_product_text_about_customer_address_data_says_verified() -> None:
+    root = Path(__file__).resolve().parents[4]
+    for relative in GUARDED:
+        text = (root / relative).read_text()
+        assert "verif" not in text.lower(), relative
+    inventory = (root / "docs/operations/data-inventory.md").read_text().splitlines()
+    [row] = [line for line in inventory if line.startswith("| `geo_coverage_rules` |")]
+    assert "verif" not in row.lower()
+    assert "provided by the customer" in row and "confirmed by the customer" in row
 
 
 # --------------------------------------------------------------------------- #
