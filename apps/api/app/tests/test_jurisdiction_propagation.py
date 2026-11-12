@@ -645,7 +645,6 @@ from app.briefs.models import RecommendationBrief  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 from app.creative.models import ContentReview, CreativeDraft  # noqa: E402
 from app.creative.service import draft_approval_refusal  # noqa: E402
-from app.jurisdiction.resolver import resolve_jurisdiction  # noqa: E402
 from app.llm import service as llm_service_module  # noqa: E402
 from app.locations.models import BusinessLocation, GeoCoverageRule  # noqa: E402
 from app.tests._creative_support import (  # noqa: E402
