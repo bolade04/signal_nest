@@ -37,7 +37,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.orm import Session
 
 from app.tests._auth2_support import pg_database, require_postgres, sqlite_file_engine
@@ -412,7 +412,9 @@ _FULL = {"loc": "Ikeja", "city": "Lagos", "code": "NG-LA", "at": _AT, "by": "u-c
 def test_the_checks_refuse_a_partial_binding_and_a_malformed_code(db: Db, values) -> None:
     _at_repair_seeded(db)
     db.alembic("upgrade", "head")
-    with pytest.raises(IntegrityError):
+    # Refused by the database: the CHECK (IntegrityError), or, on PostgreSQL, the column's own
+    # length for the 10-character sentinel (DataError) before the CHECK is evaluated.
+    with pytest.raises((IntegrityError, DataError)):
         db.execute(sa.text(_SET), values)
     db.execute(sa.text(_SET), _FULL)  # positive control: a whole binding is accepted
     db.execute(sa.text(_SET), dict.fromkeys(_FULL))  # and a cleared one
