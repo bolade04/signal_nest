@@ -3415,6 +3415,7 @@
         "type": "string"
       },
       "GeoCoverageBase": {
+        "description": "The coverage PUT's body. The structured business-address fields are written only when\nthe request names them (an explicit ``null`` clears one); a value must be readable as what\nit is, and is never compared with the location here (the action does that).",
         "properties": {
           "business_address": {
             "anyOf": [
@@ -3426,6 +3427,71 @@
               }
             ],
             "title": "Business Address"
+          },
+          "business_address_country": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Country. As entered by the customer; not verified against any external source.",
+            "title": "Business Address Country"
+          },
+          "business_address_locality": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Town or locality. As entered by the customer; not verified against any external source.",
+            "title": "Business Address Locality"
+          },
+          "business_address_postcode": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Postcode. As entered by the customer; not verified against any external source.",
+            "title": "Business Address Postcode"
+          },
+          "business_address_region": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "State or province (required for jurisdiction in the United States, Canada, Australia and Nigeria). As entered by the customer; not verified against any external source.",
+            "title": "Business Address Region"
+          },
+          "business_address_street": {
+            "anyOf": [
+              {
+                "maxLength": 400,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Street. As entered by the customer; not verified against any external source.",
+            "title": "Business Address Street"
           },
           "center_latitude": {
             "anyOf": [
@@ -3525,6 +3591,71 @@
             ],
             "title": "Business Address"
           },
+          "business_address_country": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Country. As entered by the customer; not verified against any external source.",
+            "title": "Business Address Country"
+          },
+          "business_address_locality": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Town or locality. As entered by the customer; not verified against any external source.",
+            "title": "Business Address Locality"
+          },
+          "business_address_postcode": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Postcode. As entered by the customer; not verified against any external source.",
+            "title": "Business Address Postcode"
+          },
+          "business_address_region": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "State or province (required for jurisdiction in the United States, Canada, Australia and Nigeria). As entered by the customer; not verified against any external source.",
+            "title": "Business Address Region"
+          },
+          "business_address_street": {
+            "anyOf": [
+              {
+                "maxLength": 400,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Street. As entered by the customer; not verified against any external source.",
+            "title": "Business Address Street"
+          },
           "center_latitude": {
             "anyOf": [
               {
@@ -3580,6 +3711,37 @@
             },
             "title": "Included Markets",
             "type": "array"
+          },
+          "locality_confirmation_applies": {
+            "default": false,
+            "description": "Whether that customer confirmation still applies: to the current business town, the location's current city and its current jurisdiction.",
+            "title": "Locality Confirmation Applies",
+            "type": "boolean"
+          },
+          "locality_confirmed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When a member of the workspace confirmed that the business town or locality lies within this location's area. Not verified by SignalNest.",
+            "title": "Locality Confirmed At"
+          },
+          "locality_matches_city": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether the business town or locality and the location's city are the same name (ignoring case, accents and punctuation); null when either is empty.",
+            "title": "Locality Matches City"
           },
           "location_id": {
             "anyOf": [
@@ -5064,6 +5226,20 @@
           "dead_letter_count"
         ],
         "title": "JobsOverviewOut",
+        "type": "object"
+      },
+      "LocalityConfirmationIn": {
+        "description": "Confirm (``true``) that the saved business town or locality lies within this location's\narea, or withdraw that confirmation (``false``). The confirmation is the customer's; it is\nnot verified.",
+        "properties": {
+          "confirmed": {
+            "title": "Confirmed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "confirmed"
+        ],
+        "title": "LocalityConfirmationIn",
         "type": "object"
       },
       "LocationBase": {
@@ -16410,6 +16586,7 @@
         ]
       },
       "put": {
+        "description": "Store a location's Scout Reach and business address. The structured business-address\nfields are written only when the request names them (an explicit ``null`` clears one), so a\nclient that does not know them never erases them; nothing is filled from the location.\nTheir values must be readable (422 with a fixed message, never the value); whether they are\ncomplete, or agree with the location, is decided only before a jurisdiction-dependent\naction, never here.",
         "operationId": "upsert_geo_coverage_api_v1_workspaces__workspace_id__locations__location_id__geo_coverage_put",
         "parameters": [
           {
@@ -16480,6 +16657,84 @@
           }
         },
         "summary": "Upsert Geo Coverage",
+        "tags": [
+          "locations"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/locations/{location_id}/geo-coverage/locality-confirmation": {
+      "put": {
+        "description": "Confirm, or withdraw, that the saved business town or locality lies within this\nlocation's area (W21 ADDR). The confirmation is the customer's own statement, recorded with\nwho made it and when; SignalNest does not verify it.\n\nIt binds what is saved now: the stored business town, the location's city and the\njurisdiction both resolve to. It lapses when any of them changes. Before a\njurisdiction-dependent action it answers only the question of the town, after every\ncontradiction and completeness check, so it can never override a contradiction. Answers\n422 ``locality_confirmation_refused`` (a fixed message per cause; nothing is recorded) when\nthe location's own country or required state or province does not read, when the business\naddress contradicts the location or is incomplete, or when there is nothing to confirm.\nWithdrawing is always allowed. A change is audited as ``geo_coverage.updated`` naming the\nconfirmation's fields that changed, never their values; a request that changes nothing\nrecords nothing.",
+        "operationId": "set_locality_confirmation_api_v1_workspaces__workspace_id__locations__location_id__geo_coverage_locality_confirmation_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "location_id",
+            "required": true,
+            "schema": {
+              "title": "Location Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LocalityConfirmationIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GeoCoverageOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Locality Confirmation",
         "tags": [
           "locations"
         ]

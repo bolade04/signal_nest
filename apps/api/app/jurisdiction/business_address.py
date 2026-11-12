@@ -223,8 +223,10 @@ def locality_differs(locality: str | None, city: str | None) -> bool | None:
 
 
 def confirmation_applies(rule: object, city: str | None, code: str | None) -> bool:
-    """Whether the rule's stored locality confirmation binds its current town, the location's
-    current ``city`` and ``code``: all three as they were when it was made."""
+    """Whether the rule's stored locality confirmation binds what holds now: its current town,
+    the location's current ``city``, and the jurisdiction ``code`` that the location and the
+    business address both read as (the address agreeing with the location), all as they were
+    when it was made."""
     if getattr(rule, "locality_confirmed_at", None) is None or code is None:
         return False
     town = _text(rule, "business_address_locality")
@@ -233,7 +235,51 @@ def confirmation_applies(rule: object, city: str | None, code: str | None) -> bo
         and fold(_text(rule, "locality_confirmed_locality")) == fold(town)
         and fold(_text(rule, "locality_confirmed_city")) == fold(city)
         and getattr(rule, "locality_confirmed_jurisdiction", None) == code
+        and structured_status(rule, code) == "agree"
     )
+
+
+#: The fixed answers of the locality-confirmation route when it records nothing (422
+#: ``locality_confirmation_refused``), by cause, in the order they are checked (design v2 §4.6).
+CONFIRMATION_REFUSALS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "location": (
+            "Enter this location's country and, for a location in the United States, Canada, "
+            "Australia or Nigeria, its state or province on its Details tab, and save, before "
+            "confirming the town or locality."
+        ),
+        "conflict": (
+            "This town or locality cannot be confirmed: the business country, or the business "
+            "state or province, is not this location's own. Correct it first."
+        ),
+        "incomplete": (
+            "Enter the business country and, for a business in the United States, Canada, "
+            "Australia or Nigeria, the business state or province, and save, before confirming "
+            "the town or locality."
+        ),
+        "nothing": (
+            "There is nothing to confirm. A confirmation is needed only when the saved business "
+            "town or locality and the location's city are both filled in and differ."
+        ),
+    }
+)
+
+
+def confirmation_refusal(rule: object, location: LocationFacts) -> str | None:
+    """Why a customer may not confirm the stored town now (a key of
+    :data:`CONFIRMATION_REFUSALS`), or ``None``: the location reads, its stored structured
+    address neither contradicts it nor is incomplete, and the stored town and the location's
+    city both exist and differ. A confirmation can never be recorded over a contradiction."""
+    code = location_code(location)
+    if code is None:
+        return "location"
+    status = structured_status(rule, code)
+    if status != "agree":
+        return status  # "conflict" or "incomplete"
+    city = getattr(location, "city", None)
+    if not locality_differs(_text(rule, "business_address_locality"), city):
+        return "nothing"
+    return None
 
 
 def _unresolved(evidence: Sequence[str], category: str, why: str) -> JurisdictionResolution:
@@ -302,11 +348,13 @@ __all__ = [
     "BUSINESS_ADDRESS_INCOMPLETE",
     "BUSINESS_ADDRESS_LOCALITY_UNCONFIRMED",
     "BUSINESS_ADDRESS_TEXT_CONFLICT",
+    "CONFIRMATION_REFUSALS",
     "LOCATION_UNRESOLVED",
     "MANDATORY_FIELDS",
     "REFUSALS",
     "TEXT_REMEDY",
     "confirmation_applies",
+    "confirmation_refusal",
     "country_class",
     "location_code",
     "locality_differs",

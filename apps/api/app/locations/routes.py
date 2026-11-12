@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -18,13 +20,22 @@ from app.core.errors import (
 from app.db.request_tx import WriteDb
 from app.db.session import get_db
 from app.geography.geocoder import GeocodeFailure, GeocodingService, get_geocoding_service
+from app.jurisdiction.business_address import (
+    CONFIRMATION_REFUSALS,
+    confirmation_applies,
+    confirmation_refusal,
+    locality_differs,
+    location_code,
+)
 from app.locations import service as location_service
 from app.locations.models import BusinessLocation, GeoCoverageRule
 from app.locations.schemas import (
+    BUSINESS_ADDRESS_FIELDS,
     GeocodeRequest,
     GeocodeResponse,
     GeoCoverageBase,
     GeoCoverageOut,
+    LocalityConfirmationIn,
     LocationBase,
     LocationOut,
 )
@@ -222,6 +233,54 @@ def reactivate_location(
     return location
 
 
+_NO_RULE = "No Scout Reach configured for this location yet."
+
+
+class LocalityConfirmationRefusedError(ValidationDomainError):
+    """The customer may not confirm the business town now (W21 ADDR): the location does not
+    read, the business address contradicts it or is incomplete, or there is nothing to confirm.
+    Nothing is recorded (422)."""
+
+    code = "locality_confirmation_refused"
+
+
+#: The confirmation's columns; the PUT never writes them, the confirmation route only them.
+_CONFIRMATION_COLUMNS = (
+    "locality_confirmed_locality",
+    "locality_confirmed_city",
+    "locality_confirmed_jurisdiction",
+    "locality_confirmed_at",
+    "locality_confirmed_by_user_id",
+)
+
+
+def _rule_of(db: Session, workspace_id: str, location_id: str) -> GeoCoverageRule | None:
+    return db.scalar(
+        select(GeoCoverageRule).where(
+            GeoCoverageRule.workspace_id == workspace_id,
+            GeoCoverageRule.location_id == location_id,
+        )
+    )
+
+
+def _coverage_out(rule: GeoCoverageRule, location: BusinessLocation | None) -> GeoCoverageOut:
+    """The stored rule, with what the Locations dialog needs to know of its business town:
+    whether it matches the location's city, and whether a customer confirmation applies.
+    Computed from the stored values with the readers alone; the resolver is never called here
+    (register gate G0)."""
+    out = GeoCoverageOut.model_validate(rule)
+    city = location.city if location is not None else None
+    differs = locality_differs(rule.business_address_locality, city)
+    return out.model_copy(
+        update={
+            "locality_matches_city": None if differs is None else not differs,
+            "locality_confirmation_applies": confirmation_applies(
+                rule, city, location_code(location)
+            ),
+        }
+    )
+
+
 @router.get(
     "/workspaces/{workspace_id}/locations/{location_id}/geo-coverage",
     response_model=GeoCoverageOut,
@@ -231,16 +290,14 @@ def get_geo_coverage(
     location_id: str,
     db: Session = Depends(get_db),
     ctx: TenantContext = Depends(get_tenant_context),
-) -> GeoCoverageRule:
-    rule = db.scalar(
-        select(GeoCoverageRule).where(
-            GeoCoverageRule.workspace_id == workspace_id,
-            GeoCoverageRule.location_id == location_id,
-        )
-    )
+) -> GeoCoverageOut:
+    rule = _rule_of(db, workspace_id, location_id)
     if not rule:
-        raise NotFoundError("No Scout Reach configured for this location yet.")
-    return rule
+        raise NotFoundError(_NO_RULE)
+    location = db.get(BusinessLocation, location_id)
+    if location is not None and location.workspace_id != workspace_id:
+        location = None  # never another workspace's location, even for a computed field
+    return _coverage_out(rule, location)
 
 
 @router.put(
@@ -253,24 +310,28 @@ def upsert_geo_coverage(
     body: GeoCoverageBase,
     db: Session = WriteDb,
     ctx: TenantContext = Depends(require_role(Role.OWNER, Role.ADMIN, Role.MARKETER)),
-) -> GeoCoverageRule:
+) -> GeoCoverageOut:
+    """Store a location's Scout Reach and business address. The structured business-address
+    fields are written only when the request names them (an explicit ``null`` clears one), so a
+    client that does not know them never erases them; nothing is filled from the location.
+    Their values must be readable (422 with a fixed message, never the value); whether they are
+    complete, or agree with the location, is decided only before a jurisdiction-dependent
+    action, never here."""
     location = db.get(BusinessLocation, location_id)
     if not location or location.workspace_id != workspace_id:
         raise NotFoundError("Location not found in this workspace.")
-    rule = db.scalar(
-        select(GeoCoverageRule).where(
-            GeoCoverageRule.workspace_id == workspace_id,
-            GeoCoverageRule.location_id == location_id,
-        )
-    )
+    rule = _rule_of(db, workspace_id, location_id)
     if not rule:
         rule = GeoCoverageRule(
             organization_id=ctx.organization.id,
             workspace_id=workspace_id,
             location_id=location_id,
         )
-    for key, value in body.model_dump().items():
+    for key, value in body.model_dump(exclude=set(BUSINESS_ADDRESS_FIELDS)).items():
         setattr(rule, key, value)
+    for key in BUSINESS_ADDRESS_FIELDS:
+        if key in body.model_fields_set:
+            setattr(rule, key, getattr(body, key))
     db.add(rule)
     db.flush()
     record_audit(
@@ -282,4 +343,66 @@ def upsert_geo_coverage(
         entity_type="geo_coverage_rule",
         entity_id=rule.id,
     )
-    return rule
+    return _coverage_out(rule, location)
+
+
+@router.put(
+    "/workspaces/{workspace_id}/locations/{location_id}/geo-coverage/locality-confirmation",
+    response_model=GeoCoverageOut,
+)
+def set_locality_confirmation(
+    workspace_id: str,
+    location_id: str,
+    body: LocalityConfirmationIn,
+    db: Session = WriteDb,
+    ctx: TenantContext = Depends(EDITORS),
+) -> GeoCoverageOut:
+    """Confirm, or withdraw, that the saved business town or locality lies within this
+    location's area (W21 ADDR). The confirmation is the customer's own statement, recorded with
+    who made it and when; SignalNest does not verify it.
+
+    It binds what is saved now: the stored business town, the location's city and the
+    jurisdiction both resolve to. It lapses when any of them changes. Before a
+    jurisdiction-dependent action it answers only the question of the town, after every
+    contradiction and completeness check, so it can never override a contradiction. Answers
+    422 ``locality_confirmation_refused`` (a fixed message per cause; nothing is recorded) when
+    the location's own country or required state or province does not read, when the business
+    address contradicts the location or is incomplete, or when there is nothing to confirm.
+    Withdrawing is always allowed. A change is audited as ``geo_coverage.updated`` naming the
+    confirmation's fields that changed, never their values; a request that changes nothing
+    records nothing."""
+    location = _get_scoped(db, workspace_id, location_id)
+    rule = _rule_of(db, workspace_id, location_id)
+    if not rule:
+        raise NotFoundError(_NO_RULE)
+    before = {column: getattr(rule, column) for column in _CONFIRMATION_COLUMNS}
+    if body.confirmed:
+        refusal = confirmation_refusal(rule, location)
+        if refusal is not None:
+            raise LocalityConfirmationRefusedError(CONFIRMATION_REFUSALS[refusal])
+        rule.locality_confirmed_locality = rule.business_address_locality
+        rule.locality_confirmed_city = location.city
+        rule.locality_confirmed_jurisdiction = location_code(location)
+        rule.locality_confirmed_at = datetime.now(UTC)
+        rule.locality_confirmed_by_user_id = ctx.user.id
+    else:
+        for column in _CONFIRMATION_COLUMNS:
+            setattr(rule, column, None)
+    changed = sorted(c for c in _CONFIRMATION_COLUMNS if getattr(rule, c) != before[c])
+    if changed:
+        db.add(rule)
+        db.flush()
+        record_audit(
+            db,
+            organization_id=ctx.organization.id,
+            workspace_id=workspace_id,
+            actor_user_id=ctx.user.id,
+            action=AuditAction.GEO_COVERAGE_UPDATED,
+            entity_type="geo_coverage_rule",
+            entity_id=rule.id,
+            context={
+                "locality_confirmation": "confirmed" if body.confirmed else "withdrawn",
+                "fields_changed": changed,
+            },
+        )
+    return _coverage_out(rule, location)

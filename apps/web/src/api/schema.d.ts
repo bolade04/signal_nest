@@ -1765,8 +1765,49 @@ export interface paths {
         };
         /** Get Geo Coverage */
         get: operations["get_geo_coverage_api_v1_workspaces__workspace_id__locations__location_id__geo_coverage_get"];
-        /** Upsert Geo Coverage */
+        /**
+         * Upsert Geo Coverage
+         * @description Store a location's Scout Reach and business address. The structured business-address
+         *     fields are written only when the request names them (an explicit ``null`` clears one), so a
+         *     client that does not know them never erases them; nothing is filled from the location.
+         *     Their values must be readable (422 with a fixed message, never the value); whether they are
+         *     complete, or agree with the location, is decided only before a jurisdiction-dependent
+         *     action, never here.
+         */
         put: operations["upsert_geo_coverage_api_v1_workspaces__workspace_id__locations__location_id__geo_coverage_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/locations/{location_id}/geo-coverage/locality-confirmation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Locality Confirmation
+         * @description Confirm, or withdraw, that the saved business town or locality lies within this
+         *     location's area (W21 ADDR). The confirmation is the customer's own statement, recorded with
+         *     who made it and when; SignalNest does not verify it.
+         *
+         *     It binds what is saved now: the stored business town, the location's city and the
+         *     jurisdiction both resolve to. It lapses when any of them changes. Before a
+         *     jurisdiction-dependent action it answers only the question of the town, after every
+         *     contradiction and completeness check, so it can never override a contradiction. Answers
+         *     422 ``locality_confirmation_refused`` (a fixed message per cause; nothing is recorded) when
+         *     the location's own country or required state or province does not read, when the business
+         *     address contradicts the location or is incomplete, or when there is nothing to confirm.
+         *     Withdrawing is always allowed. A change is audited as ``geo_coverage.updated`` naming the
+         *     confirmation's fields that changed, never their values; a request that changes nothing
+         *     records nothing.
+         */
+        put: operations["set_locality_confirmation_api_v1_workspaces__workspace_id__locations__location_id__geo_coverage_locality_confirmation_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -3699,10 +3740,40 @@ export interface components {
          * @enum {string}
          */
         FeedbackReason: "useful_insight" | "strong_evidence" | "commercially_relevant" | "correct_market" | "irrelevant" | "wrong_market" | "weak_evidence" | "duplicate" | "outdated" | "not_commercially_useful" | "other";
-        /** GeoCoverageBase */
+        /**
+         * GeoCoverageBase
+         * @description The coverage PUT's body. The structured business-address fields are written only when
+         *     the request names them (an explicit ``null`` clears one); a value must be readable as what
+         *     it is, and is never compared with the location here (the action does that).
+         */
         GeoCoverageBase: {
             /** Business Address */
             business_address?: string | null;
+            /**
+             * Business Address Country
+             * @description Country. As entered by the customer; not verified against any external source.
+             */
+            business_address_country?: string | null;
+            /**
+             * Business Address Locality
+             * @description Town or locality. As entered by the customer; not verified against any external source.
+             */
+            business_address_locality?: string | null;
+            /**
+             * Business Address Postcode
+             * @description Postcode. As entered by the customer; not verified against any external source.
+             */
+            business_address_postcode?: string | null;
+            /**
+             * Business Address Region
+             * @description State or province (required for jurisdiction in the United States, Canada, Australia and Nigeria). As entered by the customer; not verified against any external source.
+             */
+            business_address_region?: string | null;
+            /**
+             * Business Address Street
+             * @description Street. As entered by the customer; not verified against any external source.
+             */
+            business_address_street?: string | null;
             /** Center Latitude */
             center_latitude?: number | null;
             /** Center Longitude */
@@ -3732,6 +3803,31 @@ export interface components {
         GeoCoverageOut: {
             /** Business Address */
             business_address?: string | null;
+            /**
+             * Business Address Country
+             * @description Country. As entered by the customer; not verified against any external source.
+             */
+            business_address_country?: string | null;
+            /**
+             * Business Address Locality
+             * @description Town or locality. As entered by the customer; not verified against any external source.
+             */
+            business_address_locality?: string | null;
+            /**
+             * Business Address Postcode
+             * @description Postcode. As entered by the customer; not verified against any external source.
+             */
+            business_address_postcode?: string | null;
+            /**
+             * Business Address Region
+             * @description State or province (required for jurisdiction in the United States, Canada, Australia and Nigeria). As entered by the customer; not verified against any external source.
+             */
+            business_address_region?: string | null;
+            /**
+             * Business Address Street
+             * @description Street. As entered by the customer; not verified against any external source.
+             */
+            business_address_street?: string | null;
             /** Center Latitude */
             center_latitude?: number | null;
             /** Center Longitude */
@@ -3749,6 +3845,22 @@ export interface components {
             id: string;
             /** Included Markets */
             included_markets?: string[];
+            /**
+             * Locality Confirmation Applies
+             * @description Whether that customer confirmation still applies: to the current business town, the location's current city and its current jurisdiction.
+             * @default false
+             */
+            locality_confirmation_applies: boolean;
+            /**
+             * Locality Confirmed At
+             * @description When a member of the workspace confirmed that the business town or locality lies within this location's area. Not verified by SignalNest.
+             */
+            locality_confirmed_at?: string | null;
+            /**
+             * Locality Matches City
+             * @description Whether the business town or locality and the location's city are the same name (ignoring case, accents and punctuation); null when either is empty.
+             */
+            locality_matches_city?: boolean | null;
             /** Location Id */
             location_id: string | null;
             /**
@@ -4321,6 +4433,16 @@ export interface components {
             stuck_count: number;
             /** Total */
             total: number;
+        };
+        /**
+         * LocalityConfirmationIn
+         * @description Confirm (``true``) that the saved business town or locality lies within this location's
+         *     area, or withdraw that confirmation (``false``). The confirmation is the customer's; it is
+         *     not verified.
+         */
+        LocalityConfirmationIn: {
+            /** Confirmed */
+            confirmed: boolean;
         };
         /** LocationBase */
         LocationBase: {
@@ -9492,6 +9614,44 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["GeoCoverageBase"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeoCoverageOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_locality_confirmation_api_v1_workspaces__workspace_id__locations__location_id__geo_coverage_locality_confirmation_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                location_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LocalityConfirmationIn"];
             };
         };
         responses: {

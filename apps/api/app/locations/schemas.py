@@ -1,8 +1,13 @@
 from __future__ import annotations
 
-from typing import Any
+from datetime import datetime
+from typing import Any, Final
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
+
+from app.db.clock import as_utc
+from app.jurisdiction.resolver import country_code_of, subdivision_code_of
+from app.jurisdiction.subdivisions import SUBDIVISION_JURISDICTIONS
 
 
 class LocationBase(BaseModel):
@@ -36,7 +41,30 @@ class LocationOut(LocationBase):
         from_attributes = True
 
 
-class GeoCoverageBase(BaseModel):
+#: The structured business address (W21 ADDR), in the order the request validates them: the
+#: country before the state or province, which is read in it.
+BUSINESS_ADDRESS_FIELDS: Final = (
+    "business_address_street",
+    "business_address_locality",
+    "business_address_country",
+    "business_address_region",
+    "business_address_postcode",
+)
+_AS_ENTERED = "As entered by the customer; not verified against any external source."
+#: The fixed 422 messages of the structured fields (they never repeat what was sent).
+UNKNOWN_COUNTRY = (
+    "Enter a country we recognise for the business country, by name or two-letter code (for "
+    "example 'Nigeria' or 'NG')."
+)
+UNKNOWN_REGION = (
+    "Enter a state or province of the business country, by name or code (for example 'Texas' "
+    "or 'TX')."
+)
+
+
+class GeoCoverageFields(BaseModel):
+    """The fields a coverage rule holds, as stored and answered."""
+
     coverage_type: str = "radius"
     business_address: str | None = None
     center_latitude: float | None = None
@@ -47,6 +75,28 @@ class GeoCoverageBase(BaseModel):
     included_markets: list[str] = Field(default_factory=list)
     excluded_markets: list[str] = Field(default_factory=list)
     online_global: bool = False
+    # The structured business address (W21 ADDR). What a jurisdiction-dependent action needs
+    # of it is ``app.jurisdiction.business_address``; storing it needs only readable values.
+    business_address_street: str | None = Field(
+        default=None, max_length=400, description=f"Street. {_AS_ENTERED}"
+    )
+    business_address_locality: str | None = Field(
+        default=None, max_length=160, description=f"Town or locality. {_AS_ENTERED}"
+    )
+    business_address_country: str | None = Field(
+        default=None, max_length=120, description=f"Country. {_AS_ENTERED}"
+    )
+    business_address_region: str | None = Field(
+        default=None,
+        max_length=160,
+        description=(
+            "State or province (required for jurisdiction in the United States, Canada, "
+            f"Australia and Nigeria). {_AS_ENTERED}"
+        ),
+    )
+    business_address_postcode: str | None = Field(
+        default=None, max_length=40, description=f"Postcode. {_AS_ENTERED}"
+    )
 
     @field_validator("coverage_type")
     @classmethod
@@ -60,12 +110,78 @@ class GeoCoverageBase(BaseModel):
         return v
 
 
-class GeoCoverageOut(GeoCoverageBase):
+class GeoCoverageBase(GeoCoverageFields):
+    """The coverage PUT's body. The structured business-address fields are written only when
+    the request names them (an explicit ``null`` clears one); a value must be readable as what
+    it is, and is never compared with the location here (the action does that)."""
+
+    @field_validator(*BUSINESS_ADDRESS_FIELDS, mode="before")
+    @classmethod
+    def _blank_is_none(cls, v: object) -> object:
+        if isinstance(v, str):
+            v = v.strip()
+            return v or None
+        return v
+
+    @field_validator("business_address_country")
+    @classmethod
+    def _readable_country(cls, v: str | None) -> str | None:
+        if v is not None and country_code_of(v) is None:
+            raise ValueError(UNKNOWN_COUNTRY)
+        return v
+
+    @field_validator("business_address_region")
+    @classmethod
+    def _readable_region(cls, v: str | None, info: ValidationInfo) -> str | None:
+        country = country_code_of(info.data.get("business_address_country"))
+        if v is not None and country in SUBDIVISION_JURISDICTIONS:
+            if subdivision_code_of(country, v) is None:
+                raise ValueError(UNKNOWN_REGION)
+        return v
+
+
+class GeoCoverageOut(GeoCoverageFields):
     id: str
     location_id: str | None
+    #: Computed from the stored town and the location's city; never stored.
+    locality_matches_city: bool | None = Field(
+        default=None,
+        description=(
+            "Whether the business town or locality and the location's city are the same name "
+            "(ignoring case, accents and punctuation); null when either is empty."
+        ),
+    )
+    locality_confirmed_at: datetime | None = Field(
+        default=None,
+        description=(
+            "When a member of the workspace confirmed that the business town or locality lies "
+            "within this location's area. Not verified by SignalNest."
+        ),
+    )
+    locality_confirmation_applies: bool = Field(
+        default=False,
+        description=(
+            "Whether that customer confirmation still applies: to the current business town, "
+            "the location's current city and its current jurisdiction."
+        ),
+    )
+
+    @field_validator("locality_confirmed_at")
+    @classmethod
+    def _as_utc(cls, value: datetime | None) -> datetime | None:
+        # SQLite hands back a naive datetime; every value written here is UTC.
+        return None if value is None else as_utc(value)
 
     class Config:
         from_attributes = True
+
+
+class LocalityConfirmationIn(BaseModel):
+    """Confirm (``true``) that the saved business town or locality lies within this location's
+    area, or withdraw that confirmation (``false``). The confirmation is the customer's; it is
+    not verified."""
+
+    confirmed: bool
 
 
 class GeocodeRequest(BaseModel):
