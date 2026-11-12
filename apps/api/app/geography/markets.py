@@ -1025,7 +1025,8 @@ def _address_agrees(parts: list[tuple[str, str]], label: str) -> MarketIdentity 
     "Abia State, NG-AB, Nigeria"), an agreeing country, or another form of the same code. A part
     that names no area is a town or a street. Any part naming another area keeps it unplaceable.
     When no part names an area, the code agrees if at most one other part is a word without a
-    digit: a town ("US-AL, 1 Main St, Montgomery"; C-6, W21-REV-5DW2FIX r3d)."""
+    digit: a town ("US-AL, 1 Main St, Montgomery"; C-6, W21-REV-5DW2FIX r3d). A unit or a postcode
+    alone is not a word ("US-AL, Montgomery, Suite 5"; C-8, r3e)."""
     forms = [_form(folded, raw, head_of_two=False, observed=True) for folded, raw in parts]
     code = next((form for form in forms if form is not None and form.strict), None)
     if code is None:
@@ -1047,7 +1048,13 @@ def _address_agrees(parts: list[tuple[str, str]], label: str) -> MarketIdentity 
     if not confirmed:
         # C-6 (r3d): no part names an area. As FU-E reads "US-AL, Montgomery", one town and any
         # streets or units agree ("US-AL, 1 Main St, Montgomery"); two words may hide an area.
-        words = [folded for (folded, _), form in zip(parts, forms, strict=True) if form is not code]
+        # C-8 (r3e): ``folded`` has lost a unit's number ("Suite 5" -> "suite"), so D1's
+        # ``_unit_or_postcode`` reads each part as written and leaves units out of the count.
+        words = [
+            folded
+            for (folded, raw), form in zip(parts, forms, strict=True)
+            if form is not code and not _unit_or_postcode(raw)
+        ]
         confirmed = sum(1 for word in words if not _HAS_DIGIT.search(word)) <= 1
     return _identity(None, code.region, code.country, label) if confirmed else None
 

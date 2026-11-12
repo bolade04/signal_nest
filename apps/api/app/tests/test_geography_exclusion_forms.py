@@ -1505,3 +1505,62 @@ def test_c7_a_second_code_for_another_subdivision_keeps_the_address_refused(
     result = _resolve(location, address)
     assert result.code == UNRESOLVED, address
     assert result.evidence[-1].endswith(UNPLACED.format(code)), result.evidence
+
+
+VANCOUVER_LOCATION = _location("Vancouver", "British Columbia", "Canada")
+MELBOURNE_LOCATION = _location("Melbourne", "Victoria", "Australia")
+ABEOKUTA_LOCATION = _location("Abeokuta", "Ogun", "Nigeria")
+C8_OWN = [
+    (MONTGOMERY_LOCATION, "US-AL, Montgomery, Suite 5", "US-AL"),
+    (MONTGOMERY_LOCATION, "US-AL, Suite 5, Montgomery", "US-AL"),
+    (MONTGOMERY_LOCATION, "1 Main St, US-AL, Montgomery, Suite 5", "US-AL"),
+    (MONTGOMERY_LOCATION, "us-al, montgomery, suite 5", "US-AL"),
+    (MONTGOMERY_LOCATION, "US-AL, Montgomery, Apt 4B", "US-AL"),
+    (TORONTO_LOCATION, "CA-ON, Toronto, Unit 3", "CA-ON"),
+    (TORONTO_LOCATION, "CA-ON, Unit 3, Toronto", "CA-ON"),
+    (SYDNEY_LOCATION, "AU-NSW, Sydney, Level 3", "AU-NSW"),
+]
+
+
+@pytest.mark.parametrize(("location", "address", "code"), C8_OWN)
+def test_c8_a_unit_beside_the_town_is_that_place(location, address, code):
+    """C-8: a unit ("Suite 5", "Unit 3") is not a word beside the town. Its number is lost in the
+    folded part ("suite"), so the C-6 count reads the part as written. These were refused for
+    their own location (384 own rows of the review's completeness probe, r3e)."""
+    result = _resolve(location, address)
+    assert result.code == code, address
+    assert result.evidence[-1].endswith("agrees"), result.evidence
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "stated"),
+    [
+        (DALLAS_LOCATION, "US-AL, Montgomery, Suite 5", "subdivision US-AL"),
+        (DALLAS_LOCATION, "US-AL, Suite 5, Montgomery", "subdivision US-AL"),
+        (DALLAS_LOCATION, "1 Main St, US-AL, Montgomery, Suite 5", "subdivision US-AL"),
+        (VANCOUVER_LOCATION, "CA-ON, Toronto, Unit 3", "subdivision CA-ON"),
+        (DALLAS_LOCATION, "CA-ON, Unit 3, Toronto", "country CA"),
+        (MELBOURNE_LOCATION, "AU-NSW, Sydney, Level 3", "subdivision AU-NSW"),
+    ],
+)
+def test_c8_the_same_addresses_for_a_location_elsewhere_are_refused(location, address, stated):
+    result = _resolve(location, address)
+    assert result.code == UNRESOLVED, address
+    assert result.evidence[-1].endswith(f"states {stated}"), result.evidence
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "code"),
+    [
+        (IKEJA_LOCATION, "NG-LA, No 3 Ajose Adeogun St, Ikeja", "NG-LA"),
+        (IKEJA_LOCATION, "NG-LA, Ikeja, Plot 1 Adeola Odeku St", "NG-LA"),
+        (SYDNEY_LOCATION, "AU-NSW, Level 3 1 Martin Pl, Sydney", "AU-NSW"),
+        (ABEOKUTA_LOCATION, "NG-LA, No 3 Ajose Adeogun St, Ikeja", UNRESOLVED),
+        (MELBOURNE_LOCATION, "AU-NSW, Level 3 1 Martin Pl, Sydney", UNRESOLVED),
+    ],
+)
+def test_c8_a_street_line_after_a_unit_label_is_a_street(location, address, code):
+    """A street line written after a unit label ("No 3 Ajose Adeogun St", "Level 3 1 Martin Pl")
+    carries its number inside, not first; it is a street, not a word (the review's mutant RC-5)."""
+    result = _resolve(location, address)
+    assert result.code == code, address
