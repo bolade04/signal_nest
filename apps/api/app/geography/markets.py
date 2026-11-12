@@ -709,9 +709,11 @@ def _listed_codes(raw: str, folded: str) -> list[_Form]:
     """Every listed subdivision code one part (``raw`` as written) writes: the whole part
     ("US-AL", "us al", "NG LA 100001"), a code with a hyphen or a dash anywhere in it ("US-CT
     Hartford", "Hartford US-CT", "Lekki NG–LA"), or a code with a space at its end ("1500 Broadway
-    US CT"). Only a code the tables place is one: a road number or a hyphenated name ("US-9",
-    "GA-400", "AL-AIN", "Ca-Mau") is not, as everywhere a business address is read
-    (W21-REV-5DW2FIX r1 C-1)."""
+    US CT", "1500 Broadway NG AB"). Only a code the tables place is one: a road number or a
+    hyphenated name ("US-9", "GA-400", "AL-AIN", "Ca-Mau") is not, as everywhere a business address
+    is read (W21-REV-5DW2FIX r1 C-1). A listed code written with a space stays explicit (D1's C-12);
+    since the exclusion fix (#312) that includes Nigeria's, so "NG AB" after a word is Abia State,
+    not only a group of Nigeria and Alberta."""
     whole = _code_form(folded, raw, observed=True)
     if whole is not None:
         return [whole] if whole.strict else []
@@ -721,9 +723,11 @@ def _listed_codes(raw: str, folded: str) -> list[_Form]:
         if form is not None and form.strict and form not in found:
             found.append(form)
     words = folded.split()
-    if not found and len(words) > 2 and " ".join(words[-2:]) in _FOLDED_SUBDIVISION_CODES:
-        country = words[-2].upper()
-        found.append(_Form(country, f"{country}-{words[-1].upper()}", True, None))
+    if not found and len(words) > 2:
+        country, part = words[-2].upper(), words[-1].upper()
+        key = _subdivision_key(country, part) if country in _CODED_COUNTRIES else None
+        if key is not None:
+            found.append(_Form(country, key, True, f"{country}-{part}"))
     return found
 
 

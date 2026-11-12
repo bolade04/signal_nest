@@ -263,6 +263,20 @@ def test_g5_a_listed_nigerian_code_after_a_town_is_read():
     _refused(DALLAS, "1 Allen Ave, Lekki NG-LA", "states country NG")
 
 
+def test_g5_a_listed_nigerian_code_written_with_a_space_after_a_word_is_read():
+    """D1's C-12 keeps a listed code written with a space explicit ("1 Main St, Los Angeles, US
+    CA"); since #312 Nigeria's codes are listed, so "1500 Broadway NG AB" is Abia State, not only
+    the group "Nigeria or Alberta", which agreed with any Nigerian location. A group whose every
+    reading contradicts keeps C-12's evidence."""
+    yola = _location("Yola", "Adamawa", "Nigeria")
+    _refused(yola, "1500 Broadway NG AB, Nigeria", "states subdivision NG-AB")
+    assert _resolve(UMUAHIA, "1500 Broadway NG AB, Nigeria").code == "NG-AB"
+    new_orleans = _location("New Orleans", "Louisiana", "United States")
+    _refused(new_orleans, "Ikeja NG LA", "states country NG")
+    _refused(DALLAS, "Ikeja NG LA", "states country NG or country LA or subdivision US-LA")
+    assert _resolve(IKEJA, "Ikeja NG LA").code == "NG-LA"
+
+
 # --------------------------------------------------------------------------- #
 # G-9 (FU-K): a code or name alone in a middle part; a state or country before the town
 # --------------------------------------------------------------------------- #
