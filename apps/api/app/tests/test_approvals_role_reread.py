@@ -12,25 +12,34 @@ PostgreSQL; review W21-REV-R4, probe P6, drafts included).
 * a decision whose request resolved the reviewer role (``ctx.role``) but whose membership now
   says otherwise is refused 403 and writes nothing: demoted to each other role, or removed;
 * an unchanged reviewer still decides, and ``decided_role`` is the role read under the lock;
-* the re-read comes after the subject's row lock and before the sequence is read; the user row
-  is read before the membership row (the lock order).
+* the lock order (``approvals.service`` "Lock order"; review W21-REV-DN4A r1 C-1): the decider's
+  user row, then the organization, then the membership, then the subject's row lock, then the
+  sequence read.
 
 **PostgreSQL** (``TEST_POSTGRES_URL``; unset FAILS in CI and skips elsewhere), real sessions in
 real threads, every wait bounded (``lock_timeout`` / ``statement_timeout`` and join bounds):
 
-* **the demotion waits for the decision, without deadlock**: a decision holds its ``FOR SHARE``
-  until it commits; a concurrent demotion (or removal) of the decider is seen waiting on the
-  membership row, blocked by the decider's backend, and completes once the decision commits;
-  the decision is recorded as a reviewer's, and the demotion after it. Brief and draft paths;
+* **the demotion waits for the decision, without deadlock**: a decision holds its locks until it
+  commits; a concurrent demotion (or removal) of the decider is seen waiting on the
+  organization row (it locks it ``FOR UPDATE`` first), blocked by the decider's backend, and
+  completes once the decision commits; the decision is recorded as a reviewer's, and the
+  demotion after it. Brief and draft paths;
+* **the membership itself is held ``FOR SHARE``**: a direct ``UPDATE`` of the decider's
+  membership (a writer that skips the organization lock) waits on it until the decision commits;
 * **a decision that comes second is refused**: while an uncommitted demotion holds the
-  membership row, the decision waits on it, then reads the committed role and is refused 403,
+  organization, the decision waits on it, then reads the committed role and is refused 403,
   writing nothing;
+* **organization deletion never deadlocks with a decision** (the r1 defect, 40P01): with the
+  real ``delete_organization`` paused after it deleted the memberships, the decision waits on
+  the organization and is refused 403 once the deletion commits; with the decision paused
+  first, the deletion waits on the organization and erases it once the decision commits (the
+  approval is kept, anonymised). Brief and draft paths; neither transaction is aborted;
 * **account deletion of the decider never deadlocks with a decision**: with the decision paused
-  after its re-read, the deletion waits on the decider's user row (the ``FOR KEY SHARE`` taken
-  before the membership), and both complete in order. Without that lock the deletion would
-  hold the user row and wait on the membership while the decision's foreign key waited on the
-  user row.
-* the lock statements compile to ``FOR SHARE`` and ``FOR KEY SHARE`` on PostgreSQL.
+  after its subject lock, the deletion waits on the decider's user row (the decision's first
+  lock), and both complete in order. Without that lock the deletion would hold the user row
+  and wait on the organization while the decision's foreign key waited on the user row.
+* the lock statements compile to ``FOR KEY SHARE``, ``FOR KEY SHARE`` and ``FOR SHARE`` on
+  PostgreSQL.
 """
 
 from __future__ import annotations
@@ -60,12 +69,14 @@ from app.creative.models import ContentReview, CreativeDraft
 from app.db.models import Base
 from app.organizations import members
 from app.organizations.models import Organization, OrganizationMember, User, Workspace
-from app.privacy.erasure import delete_account
+from app.privacy import erasure
+from app.privacy.erasure import delete_account, delete_organization
 from app.tests._approvals_support import add_brief, add_evidence, add_org, add_user
 from app.tests._auth2_support import pg_database, require_postgres, sqlite_file_engine
 
 ORG, WS, BRIEF, DRAFT = "org-rr", "ws-rr", "brief-rr", "draft-rr"
 AUTHOR, DECIDER, ADMIN, OTHER = "rr-author", "rr-decider", "rr-admin", "rr-other"
+OWNER = "rr-owner"
 PASSWORD = "role-reread-pass-1"
 JOIN_SECONDS = 60.0
 POLL_SECONDS = 30.0
@@ -77,16 +88,17 @@ def _seed(s: Session) -> None:
     author = add_user(s, AUTHOR, org_id=ORG, role=Role.MARKETER)
     add_user(s, ADMIN, org_id=ORG, role=Role.ADMIN)
     add_user(s, OTHER, org_id=ORG, role=Role.REVIEWER)
-    s.add(
-        User(
-            id=DECIDER, email=f"{DECIDER}@example.test", full_name="Decider",
-            hashed_password=hash_password(PASSWORD), is_active=True,
+    for user_id, role in ((DECIDER, Role.REVIEWER), (OWNER, Role.OWNER)):
+        s.add(
+            User(
+                id=user_id, email=f"{user_id}@example.test", full_name=f"Name {user_id}",
+                hashed_password=hash_password(PASSWORD), is_active=True,
+            )
         )
-    )
-    s.flush()
-    s.add(OrganizationMember(id=f"m-{DECIDER}", organization_id=ORG, user_id=DECIDER,
-                             role=Role.REVIEWER.value))
-    s.flush()
+        s.flush()
+        s.add(OrganizationMember(id=f"m-{user_id}", organization_id=ORG, user_id=user_id,
+                                 role=role.value))
+        s.flush()
     evidence = add_evidence(s, org_id=ORG, ws_id=WS, key="rr")
     brief = add_brief(s, evidence, brief_id=BRIEF, author=author)
     s.add(
@@ -222,9 +234,10 @@ def test_an_unchanged_reviewer_decides_and_the_reread_role_is_recorded(world: Wo
 
 
 @pytest.mark.parametrize("subject", SUBJECTS)
-def test_the_reread_follows_the_subject_lock_and_precedes_the_sequence(world: World, subject):
-    """Statement order inside the decision: the subject row, then the decider's user row, then
-    the membership row, then ``max(decision_seq)``."""
+def test_the_reread_precedes_the_subject_lock_in_the_lock_order(world: World, subject):
+    """Statement order inside the decision ("Lock order" in ``approvals.service``): the
+    decider's user row, then the organization, then the membership, then the subject row, then
+    ``max(decision_seq)``."""
     seen: list[str] = []
 
     def record(conn, cursor, statement, parameters, context, executemany):
@@ -258,19 +271,22 @@ def test_the_reread_follows_the_subject_lock_and_precedes_the_sequence(world: Wo
 
     # The subject lock selects exactly the id and the version (``subject_lock_select``).
     lock = first(lambda q: q.startswith(f"select {table}.id, {table}.{version} from {table}"))
-    user = first(lambda q: q.startswith("select users.id") and "from users" in q)
+    user = first(lambda q: q.startswith("select users.id from users"))
+    organization = first(lambda q: q.startswith("select organizations.id from organizations"))
     member = first(lambda q: q.startswith("select organization_members.role"))
     seq = first(lambda q: "max(approvals.decision_seq)" in q)
-    assert lock < user < member < seq, seen
+    assert user < organization < member < lock < seq, seen
 
 
 def test_the_lock_statements_compile_to_for_share_and_for_key_share():
     dialect = postgresql.dialect()
     member = str(svc.approver_membership_select(ORG, DECIDER).compile(dialect=dialect))
     user = str(svc.approver_user_lock_select(DECIDER).compile(dialect=dialect))
+    organization = str(svc.approver_organization_lock_select(ORG).compile(dialect=dialect))
     assert member.rstrip().endswith("FOR SHARE") and "KEY SHARE" not in member
     assert "organization_members" in member and "role" in member
     assert user.rstrip().endswith("FOR KEY SHARE") and "users" in user
+    assert organization.rstrip().endswith("FOR KEY SHARE") and "organizations" in organization
 
 
 # --------------------------------------------------------------------------- #
@@ -417,10 +433,10 @@ def test_a_demotion_or_removal_waits_for_the_decision_without_deadlock(pg: PgWor
     change_runner = _Runner(_membership_change, pg, change)
     change_runner.start()
     try:
-        verb = "UPDATE organization_members" if change == "demote" else (
-            "DELETE FROM organization_members")
-        _wait_for(lambda: _waiting(pg, decider_pid[0], verb),
-                  f"the {change} to wait on the decider's membership row")
+        # It locks the organization FOR UPDATE first (members.lock_organization): it waits
+        # there, on the decision's organization KEY SHARE (step 2 of the lock order).
+        _wait_for(lambda: _waiting(pg, decider_pid[0], "organizations", "FOR UPDATE"),
+                  f"the {change} to wait on the organization row the decision holds")
         time.sleep(0.3)
         assert change_runner.is_alive()  # still waiting: the decision has not committed
         assert _membership(pg) == "reviewer"
@@ -445,8 +461,8 @@ def test_a_decision_after_an_uncommitted_demotion_waits_and_is_refused(pg: PgWor
     decision = _Runner(_decision_held, pg, subject, decided, release, decider_pid)
     decision.start()
     try:
-        _wait_for(lambda: _waiting(pg, admin_pid[0], "organization_members", "FOR SHARE"),
-                  "the decision to wait on the membership row the demotion holds")
+        _wait_for(lambda: _waiting(pg, admin_pid[0], "organizations", "FOR KEY SHARE"),
+                  "the decision to wait on the organization row the demotion holds")
         assert not decided.is_set()
     finally:
         hold.set()
@@ -462,9 +478,10 @@ def test_a_decision_after_an_uncommitted_demotion_waits_and_is_refused(pg: PgWor
 @pytest.mark.parametrize("subject", SUBJECTS)
 def test_account_deletion_of_the_decider_never_deadlocks_with_a_decision(pg: PgWorld, subject,
                                                                          monkeypatch):
-    """The decision pauses after its re-read (it holds the user ``FOR KEY SHARE`` and the
-    membership ``FOR SHARE``, its approval not yet inserted); the decider's account deletion
-    then waits on the user row, and both complete once the decision commits."""
+    """The decision pauses after its subject lock (it holds the user ``FOR KEY SHARE``, the
+    organization ``FOR KEY SHARE``, the membership ``FOR SHARE`` and the subject, its approval
+    not yet inserted); the decider's account deletion then waits on the user row, and both
+    complete once the decision commits."""
     reread, go = threading.Event(), threading.Event()
     real_next = svc._next_decision_seq
 
@@ -500,3 +517,140 @@ def test_account_deletion_of_the_decider_never_deadlocks_with_a_decision(pg: PgW
     assert _approvals(pg.factory) == [(kind, "approved", None, "reviewer")]
     with pg.factory() as s:
         assert s.get(User, DECIDER) is None
+
+
+def test_a_direct_membership_update_waits_on_the_decisions_for_share(pg: PgWorld):
+    """Step 3 on its own: a writer that changes the decider's membership without taking the
+    organization first (none does today) still waits for the decision, on the membership's
+    ``FOR SHARE``, and goes through once it commits."""
+    holding, hold, decider_pid = threading.Event(), threading.Event(), []
+    decision = _Runner(_decision_held, pg, "brief", holding, hold, decider_pid)
+    decision.start()
+    assert holding.wait(JOIN_SECONDS), "the decision never flushed"
+
+    def direct_update() -> int:
+        with pg.engine.begin() as conn:
+            return conn.execute(text(
+                "UPDATE organization_members SET role = 'marketer'"
+                " WHERE organization_id = :o AND user_id = :u"
+            ), {"o": ORG, "u": DECIDER}).rowcount
+
+    writer = _Runner(direct_update)
+    writer.start()
+    try:
+        _wait_for(lambda: _waiting(pg, decider_pid[0], "UPDATE organization_members"),
+                  "the direct update to wait on the decider's membership row")
+        time.sleep(0.3)
+        assert writer.is_alive()
+    finally:
+        hold.set()
+    assert decision.outcome() == ("ok", "reviewer")
+    assert writer.outcome() == 1
+    assert _membership(pg) == "marketer"
+
+
+def _paused_organization_deletion(monkeypatch, deleted: threading.Event, resume: threading.Event):
+    """Pause the real organization deletion right after its walk has deleted the memberships
+    (``erasure.delete_rows`` on ``organization_members``), before it reaches the subject."""
+    real = erasure.delete_rows
+
+    def delete_rows(db, table, ids):
+        counts = real(db, table, ids)
+        if table.name == "organization_members" and not deleted.is_set():
+            deleted.set()
+            assert resume.wait(JOIN_SECONDS)
+        return counts
+
+    monkeypatch.setattr(erasure, "delete_rows", delete_rows)
+
+
+def _delete_organization(w: PgWorld, pid: list[int]) -> str:
+    with w.factory() as s:
+        pid.append(_pid(s))
+        delete_organization(
+            s, user=s.get(User, OWNER), organization_id=ORG, current_password=PASSWORD,
+            confirm_organization_name=f"Org {ORG}",
+        )
+        s.commit()
+        return "ok"
+
+
+def _organization_gone(w: PgWorld) -> bool:
+    with w.factory() as s:
+        return (
+            s.get(Organization, ORG) is None
+            and s.get(RecommendationBrief, BRIEF) is None
+            and s.get(CreativeDraft, DRAFT) is None
+            and s.scalar(select(OrganizationMember.id).where(
+                OrganizationMember.organization_id == ORG).limit(1)) is None
+            and s.get(User, DECIDER) is not None  # members' accounts survive
+        )
+
+
+@pytest.mark.parametrize("subject", SUBJECTS)
+def test_organization_deletion_first_the_decision_waits_and_is_refused(pg: PgWorld, subject,
+                                                                       monkeypatch):
+    """The r1 interleaving (review W21-REV-DN4A r1 C-1, 40P01 at ``dd2d1a56``): the deletion
+    has deleted the memberships and not yet reached the subject. The decision now waits on the
+    organization (step 2) before it holds the membership or the subject; once the deletion
+    commits it finds no membership and is refused 403. Neither transaction is aborted."""
+    deleted, resume, owner_pid = threading.Event(), threading.Event(), []
+    _paused_organization_deletion(monkeypatch, deleted, resume)
+    deletion = _Runner(_delete_organization, pg, owner_pid)
+    deletion.start()
+    assert deleted.wait(JOIN_SECONDS), "the deletion never deleted the memberships"
+    holding, hold, decider_pid = threading.Event(), threading.Event(), []
+    hold.set()
+    decision = _Runner(_decision_held, pg, subject, holding, hold, decider_pid)
+    decision.start()
+    try:
+        _wait_for(lambda: _waiting(pg, owner_pid[0], "organizations", "FOR KEY SHARE"),
+                  "the decision to wait on the organization the deletion holds")
+        assert not holding.is_set()
+    finally:
+        resume.set()
+    assert deletion.outcome() == "ok"  # no 40P01: outcome() re-raises any error
+    assert decision.outcome() == ("forbidden", svc.NOT_A_MEMBER)
+    assert _organization_gone(pg)
+    assert _approvals(pg.factory) == []
+    assert _approval_audits(pg.factory) == 0
+
+
+@pytest.mark.parametrize("subject", SUBJECTS)
+def test_a_decision_first_the_organization_deletion_waits_then_erases(pg: PgWorld, subject,
+                                                                      monkeypatch):
+    """The other order: the decision holds every lock (paused after its subject lock); the
+    deletion waits on the organization, then, once the decision commits, erases the
+    organization and keeps the approval, anonymised (O-6). Neither transaction is aborted."""
+    reread, go = threading.Event(), threading.Event()
+    real_next = svc._next_decision_seq
+
+    def paused(*args, **kwargs):
+        reread.set()
+        assert go.wait(JOIN_SECONDS)
+        return real_next(*args, **kwargs)
+
+    monkeypatch.setattr(svc, "_next_decision_seq", paused)
+    holding, hold, decider_pid = threading.Event(), threading.Event(), []
+    hold.set()
+    decision = _Runner(_decision_held, pg, subject, holding, hold, decider_pid)
+    decision.start()
+    assert reread.wait(JOIN_SECONDS), "the decision never reached its sequence read"
+    owner_pid: list[int] = []
+    deletion = _Runner(_delete_organization, pg, owner_pid)
+    deletion.start()
+    try:
+        _wait_for(lambda: _waiting(pg, decider_pid[0], "organizations", "FOR UPDATE"),
+                  "the deletion to wait on the organization the decision holds")
+    finally:
+        go.set()
+    assert decision.outcome() == ("ok", "reviewer")
+    assert deletion.outcome() == "ok"
+    assert _organization_gone(pg)
+    kind = "recommendation_brief" if subject == "brief" else "creative_draft"
+    assert _approvals(pg.factory) == [(kind, "approved", None, "reviewer")]  # anonymised
+    with pg.factory() as s:
+        [approval] = s.scalars(select(Approval)).all()
+        assert (approval.brief_id, approval.draft_id, approval.organization_id) == (
+            None, None, ORG
+        )

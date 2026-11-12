@@ -17,26 +17,86 @@ never the author of the brief version (separation of duties): the author is read
 ``created_by`` and, because that foreign key is ``SET NULL``, also from the id that leads
 ``created_by_snapshot`` (:mod:`app.core.actor_snapshot`).
 
-**The role is re-read under the decision lock (operator ruling D-N4 item 34, 2026-11-12:
-"re-read the approver's membership role under a FOR SHARE lock, for brief and draft
-decisions").** The role the request resolved at its start (``ctx.role``) is checked first, as
-before, but it is not what a decision rests on: after the subject's row lock is taken,
+**The role is re-read under locks held until the decision commits (operator ruling D-N4 item
+34, 2026-11-12: "re-read the approver's membership role under a FOR SHARE lock, for brief and
+draft decisions").** The role the request resolved at its start (``ctx.role``) is checked
+first, as before, but it is not what a decision rests on: before the subject's row lock,
 :func:`_reread_approver_role` reads the decider's membership row again ``FOR SHARE``, and the
 decision is refused (403, nothing written) unless that row still exists and its role is an
-approver role. ``decided_role`` is the role read there. The ``FOR SHARE`` lock is held until
-the decision's transaction ends, so a concurrent demotion or removal of the decider (an
-``UPDATE`` or ``DELETE`` of that row, :mod:`app.organizations.members`) waits for the decision
-to commit, and a decision that comes second reads the committed change and is refused
-(proven on PostgreSQL in ``test_approvals_role_reread.py``). Before the membership row, the
-decider's ``users`` row is read ``FOR KEY SHARE``, the lock the decision's own foreign keys
-(``approvals.decided_by``, ``audit_logs.actor_user_id``) take later anyway: taking it first
-means account deletion, which locks the user ``FOR UPDATE`` and then deletes the membership,
-either waits for the decision or makes the decision wait before it holds the membership,
-never a deadlock. Lock order: the subject row ``FOR UPDATE``, the user ``FOR KEY SHARE``, the
-membership ``FOR SHARE``. No organization row is locked (an organization deletion locks that
-row first and then deletes the subject and the membership, so it waits for the decision). On
-SQLite every lock compiles to a plain read; the re-read still reads the persisted role, and
-the single writer serializes.
+approver role. ``decided_role`` is the role read there. Every lock below is held until the
+decision's transaction ends, so a demotion or removal of the decider waits for the decision to
+commit, and a decision that comes second reads the committed change and is refused (proven on
+PostgreSQL in ``test_approvals_role_reread.py``).
+
+**Lock order (PostgreSQL) and why no cycle can form** (review W21-REV-DN4A r1, C-1: the r1 order
+``subject → user → membership`` deadlocked with organization deletion, which deletes the
+memberships before it reaches the subject). A decision takes, in this order:
+
+======  ==================================  ================  ==================================
+step    row                                 mode              why
+======  ==================================  ================  ==================================
+1       the decider's ``users`` row         ``KEY SHARE``     the decision's own foreign keys
+                                                              (``approvals.decided_by``,
+                                                              ``audit_logs.actor_user_id``) take
+                                                              it anyway; first, so a path that
+                                                              locks the user ``FOR UPDATE``
+                                                              meets the decision before anything
+2       the decision's ``organizations``    ``KEY SHARE``     every writer of a membership, and
+        row                                                   organization deletion, locks this
+                                                              row ``FOR UPDATE`` first
+3       the decider's                       ``SHARE``         the ruled re-read; held to commit
+        ``organization_members`` row
+4       the subject (brief or draft)        ``UPDATE``        the ``decision_seq`` serializer
+5       inserts: ``approvals``,             FK ``KEY SHARE``  only on rows 1 and 4, already held
+        ``audit_logs``
+======  ==================================  ================  ==================================
+
+Every other path that locks one of those rows, and where it first meets the decision:
+
+======================================  =====================================  =================
+path (its order)                        first lock it shares with a decision   cycle?
+======================================  =====================================  =================
+organization deletion                   the organization (``FOR UPDATE`` vs    no
+(owner's user → organization →          step 2), before it deletes any
+members → workspaces → … → subject)     membership or subject
+account deletion of the decider         the user (``FOR UPDATE`` vs step 1),   no
+(user → its organizations → …)          the decision's first lock
+a sole member deleting their own        the user (step 1); then the            no (the cycle
+account, which erases the               organization (step 2)                  through the
+organization (user → organization →                                            ``decided_by`` FK
+… → subject)                                                                   at ``5f4131d8``
+                                                                               is closed)
+account deletion of another member      the organization (step 2), before it   no
+(that user → organizations → its        touches the subject
+``created_by`` on the subject)
+role change or removal                  the organization (step 2)              no
+(organization → membership)
+invitation create, revoke, accept       the organization (step 2)              no
+(organization → invitation, new
+membership)
+credential flows (user ``FOR UPDATE``   the user (step 1); they lock nothing   no
+→ tokens, sessions)                     else a decision holds
+creative generation (organization       the subject (step 4): a brief          no (a decision
+``KEY SHARE`` → advisory → workspace →  ``FOR UPDATE`` at version allocation,  holds no advisory
+brief ``FOR UPDATE``; a revision's      or a parent draft's FK ``KEY SHARE``   or workspace lock;
+parent draft FK)                                                               step 2 is
+                                                                               compatible)
+retention purge of opportunities        the subject (step 4), deleted with     no (the purge
+(… → brief → draft)                     its opportunity                        locks no user,
+                                                                               organization or
+                                                                               membership)
+another decision                        the same order                         no
+======================================  =====================================  =================
+
+So each path either takes, as its first contested lock, a row the decision takes earlier in the
+same order (the user, or the organization), or holds nothing the decision waits for. Two
+transactions therefore never each hold a row the other waits on. The organization is taken
+after the user because account deletion locks the user, then its organizations: the reverse
+order would cycle with it. The membership ``FOR SHARE`` is still taken and held to commit, as
+ruled; with step 2 before it, a membership writer that takes the organization first never
+reaches it during a decision, and one that did not (none exists) would wait on it. On SQLite
+every lock compiles to a plain read; the re-read still reads the persisted role, and the single
+writer serializes.
 
 **The latest decision controls.** Decisions are append-only; a change of mind is a new
 row. The controlling decision of a subject version is the row with the highest
@@ -120,7 +180,7 @@ from app.core.errors import (
 from app.core.logging import get_logger, log_event
 from app.creative.models import CreativeDraft
 from app.creative.service import draft_approval_refusal
-from app.organizations.models import OrganizationMember, User
+from app.organizations.models import Organization, OrganizationMember, User
 
 logger = get_logger("signalnest.approvals")
 
@@ -276,19 +336,33 @@ def _lock_subject(db: Session, brief_id: str) -> int:
 
 
 # --------------------------------------------------------------------------- #
-# The approver's role, re-read under the decision lock (D-N4 item 34)
+# The approver's role, re-read under locks held to commit (D-N4 item 34)
 # --------------------------------------------------------------------------- #
 def approver_user_lock_select(user_id: str) -> Select:
-    """``SELECT id FROM users … FOR KEY SHARE``: the decider's user row, read before the
-    membership (see "The role is re-read under the decision lock" in the module docstring).
+    """``SELECT id FROM users … FOR KEY SHARE``: the decider's user row, the decision's first
+    lock (step 1 of "Lock order" in the module docstring).
 
     Factored out so a test can compile it against the PostgreSQL dialect."""
     return select(User.id).where(User.id == user_id).with_for_update(read=True, key_share=True)
 
 
+def approver_organization_lock_select(organization_id: str) -> Select:
+    """``SELECT id FROM organizations … FOR KEY SHARE``: the decision's organization, step 2
+    of "Lock order": every membership writer and organization deletion lock this row ``FOR
+    UPDATE`` first, so they wait for the decision (or it for them) before either holds a
+    membership or the subject.
+
+    Factored out so a test can compile it against the PostgreSQL dialect."""
+    return (
+        select(Organization.id)
+        .where(Organization.id == organization_id)
+        .with_for_update(read=True, key_share=True)
+    )
+
+
 def approver_membership_select(organization_id: str, user_id: str) -> Select:
-    """``SELECT role FROM organization_members … FOR SHARE``: the decider's membership row,
-    held until the decision's transaction ends, so a demotion or removal waits for it.
+    """``SELECT role FROM organization_members … FOR SHARE``: the decider's membership row
+    (step 3), held until the decision's transaction ends, so a demotion or removal waits for it.
 
     Selects the column, not the entity, so the identity map (and ``ctx``) is untouched and the
     role is the one committed now. Factored out so a test can compile it against the
@@ -304,9 +378,12 @@ def approver_membership_select(organization_id: str, user_id: str) -> Select:
 
 
 def _reread_approver_role(db: Session, ctx: TenantContext) -> Role:
-    """The decider's role as it stands now, read ``FOR SHARE`` under the subject's lock; 403
-    unless the membership still exists and its role is an approver role (nothing written)."""
+    """The decider's role as it stands now: steps 1 to 3 of "Lock order" (user ``KEY SHARE``,
+    organization ``KEY SHARE``, membership ``SHARE``), taken before the subject's lock and held
+    to commit. 403 unless the membership still exists and its role is an approver role
+    (nothing written). A deleted organization or user leaves no membership: 403 too."""
     db.execute(approver_user_lock_select(ctx.user.id))
+    db.execute(approver_organization_lock_select(ctx.organization.id))
     stored = db.execute(approver_membership_select(ctx.organization.id, ctx.user.id)).scalar()
     if stored is None:
         log_event(
@@ -396,10 +473,11 @@ def record_decision(
 
     Order of checks (each refusal writes nothing): the approver role as the request resolved
     it (403), the brief's tenant scope (404), separation of duties (403), reason polarity
-    (422); then, under the subject lock: the row still exists (404), the approver role re-read
-    ``FOR SHARE`` from the decider's membership (403, D-N4 item 34), the exact version (409),
-    the transition rule against the controlling decision (409); then the sequenced insert and
-    the audit row, whose ``decided_role`` is the re-read role.
+    (422); then the approver role re-read ``FOR SHARE`` from the decider's membership, under
+    locks 1 to 3 of "Lock order" (403, D-N4 item 34); then, under the subject lock: the row
+    still exists (404), the exact version (409), the transition rule against the controlling
+    decision (409); then the sequenced insert and the audit row, whose ``decided_role`` is the
+    re-read role.
     """
     decision = ApprovalDecision(decision)
     role = Role(ctx.role)
@@ -414,12 +492,13 @@ def record_decision(
     if not reason_allowed(decision, reason):
         raise ValidationDomainError(REASON_MISMATCH)
 
-    # Everything that decides the sequence is read under the subject's row lock, in this
-    # transaction (review rule W21-REV-CF1-DATA): the row's existence (404 if it is gone),
-    # the decider's role as it stands now (D-N4 item 34), the exact version, the controlling
-    # decision, then max(decision_seq).
-    version = _lock_subject(db, brief.id)
+    # The decider's role as it stands now, under locks 1 to 3 of "Lock order" (D-N4 item 34;
+    # before the subject, review W21-REV-DN4A r1 C-1). Then everything that decides the
+    # sequence is read under the subject's row lock, in this transaction (review rule
+    # W21-REV-CF1-DATA): the row's existence (404 if it is gone), the exact version, the
+    # controlling decision, then max(decision_seq).
     role = _reread_approver_role(db, ctx)
+    version = _lock_subject(db, brief.id)
     if subject_version != version:
         raise ConflictError(STALE_VERSION, code="approval_stale_version")
     latest = controlling_decision(
@@ -635,8 +714,9 @@ def record_draft_decision(
     """Append one decision on ``draft``'s exact version, with its audit row; flush only.
 
     The brief decision's checks in the same order (approver role 403, tenant scope 404,
-    author 403, reason polarity 422; under the draft row's lock: existence 404, the approver
-    role re-read ``FOR SHARE`` 403 (D-N4 item 34), exact version 409, the revoke rule 409),
+    author 403, reason polarity 422; the approver role re-read ``FOR SHARE`` under locks 1 to
+    3 of "Lock order" 403 (D-N4 item 34); under the draft row's lock: existence 404, exact
+    version 409, the revoke rule 409),
     then the 5C precondition: an ``approved`` decision is refused (409
     ``approval_review_blocked``, nothing written) while
     :func:`app.creative.service.draft_approval_refusal` gives a reason.
@@ -653,8 +733,8 @@ def record_draft_decision(
     if not reason_allowed(decision, reason):
         raise ValidationDomainError(REASON_MISMATCH)
 
+    role = _reread_approver_role(db, ctx)  # D-N4 item 34: locks 1 to 3, as for a brief
     version = _lock_draft(db, draft.id)
-    role = _reread_approver_role(db, ctx)  # D-N4 item 34, as for a brief
     if subject_version != version:
         raise ConflictError(STALE_DRAFT_VERSION, code="approval_stale_version")
     latest = controlling_decision(
@@ -767,6 +847,7 @@ __all__ = [
     "ApprovalPage",
     "BriefQueuePage",
     "approver_membership_select",
+    "approver_organization_lock_select",
     "approver_user_lock_select",
     "controlling_decision",
     "draft_lock_select",
