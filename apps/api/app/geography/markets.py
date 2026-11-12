@@ -861,6 +861,10 @@ _ROUTE_WORDS: Final = frozenset({"hwy", "highway", "route", "rte", "rt"})
 _ZIP_CODE: Final = re.compile(r"\d{5}(?:-\d{4})?")
 
 
+#: A two-letter code and a ZIP code, the whole part ("NE 68102").
+_STATE_AND_ZIP: Final = re.compile(r"[A-Za-z]{2}\s+\d{5}(?:-\d{4})?")
+
+
 def _floor_after_town(raw_parts: list[str], index: int) -> bool:
     """GEO-P2 (review W21-REV-GEO P2 r1 C-1): is the floor-shaped part at ``index`` right after a
     bare town and before no street line ("1 Main St, Miami, FL 3")? There it may be a floor or the
@@ -989,7 +993,11 @@ def _part_places(text: str) -> tuple[PartPlace, ...]:
         homonyms = [area for area in _homonym_areas(folded) if area not in areas]
         if not areas and not homonyms:
             continue
-        if folded in _DIRECTION_PARTS:
+        if folded in _DIRECTION_PARTS and not (
+            index == 0 and _STATE_AND_ZIP.fullmatch(raw.strip())
+        ):
+            # Review W21-REV-GEO P2 r1 I-9: a first part "NE 68102" is a state and its ZIP code, as
+            # "FL 33101" is, never a direction.
             places.append(PartPlace(PLACE_DIRECTION, folded, identities(areas)))
             continue
         # A code of two or three letters ("NG", "TX", "NSW"); a name that short ("Edo", "Imo",
