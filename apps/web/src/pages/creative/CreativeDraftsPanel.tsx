@@ -138,7 +138,6 @@ function DraftsInner({
     enabled: isEditor && generationConfigured && Boolean(opportunityId),
   });
   const briefApproved = briefHistory.data?.items[0]?.decision === 'approved';
-  const canGenerate = isEditor && generationConfigured && briefApproved;
   // Q-4: the brief the page already loaded for its summary (BriefDraftsPage), read from its
   // cache entry without a request of its own.
   const brief = useQuery({
@@ -148,13 +147,21 @@ function DraftsInner({
     enabled: false,
   });
   const noLocation = Boolean(opportunityId) && brief.data?.location_id === null;
+  // Review r4 F-6: while the page is still reading that brief, the generate path waits, so the
+  // Q-1 note, the approve-first note and the empty state's invitation never flash for a brief
+  // that turns out to have no location. Once the read ends (loaded, or failed: a failed read
+  // stays "not no location", as above) it is shown as before; with no read under way (the
+  // panel on its own), nothing waits.
+  const briefLoading =
+    Boolean(opportunityId) && brief.data === undefined && brief.fetchStatus === 'fetching';
+  const canGenerate = isEditor && generationConfigured && briefApproved && !briefLoading;
   const generateUnavailable: string | null = !isEditor
     ? null
     : !generationConfigured
       ? "Generating drafts isn't available in this workspace yet."
       : !opportunityId
         ? 'Open this brief from its opportunity to generate drafts.'
-        : briefHistory.isPending
+        : briefHistory.isPending || briefLoading
           ? null
           : !briefApproved && !noLocation
             ? 'Approve this brief before generating drafts from it.'
