@@ -161,11 +161,16 @@ class BriefJurisdictionUnresolvedError(ValidationDomainError):
 
 
 #: The one answer to an unresolved capture. Fixed: it never quotes the location or the
-#: resolver's evidence.
+#: resolver's evidence. Since Q-4 an opportunity with no location is not refused, so every
+#: cause is an existing location: a missing or unknown country, a missing state or province
+#: where the jurisdiction is one (item 33), or a business address that names another place
+#: (correctable on the location's Service area tab since F-1). One wording true for each, as
+#: the brief panel's (review r3 F-4, r4 F-5).
 JURISDICTION_UNRESOLVED_MESSAGE = (
     "The jurisdiction of this opportunity's location could not be determined, so no brief "
-    "was generated. Complete the location's details, for example add its state or province, "
-    "and try again."
+    "was generated. Complete or correct the location's details so that its country, its state "
+    "or province (required in the United States, Canada, Australia and Nigeria) and its "
+    "business address all name the same place, then try again."
 )
 
 
