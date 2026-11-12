@@ -17,10 +17,14 @@ ruling, not against what the code happens to do:
 The below-relevance-floor "monitor" behaviour the same ruling records (PP-35-MONITOR) is product
 polish, not a requirement, and is deliberately not pinned here.
 
-Not in this module (reported as defects to the coordinator, with reproductions in the lane's
-evidence ``defects/``): an exclusion written as an ISO 3166-2 code ("US-TX", "NG-LA") or as a
-Nigerian state in words ("Lagos State") removes nothing in that subdivision. A failing test is
-never committed.
+Not in this module: an exclusion written as an ISO 3166-2 code ("US-TX", "NG-LA") or as a
+Nigerian state in words ("Lagos State"). The lane reported both as defects (D-5DW4-01/02) and
+never committed a failing test; the exclusion fix (#312, lane 5DW2FIX) cured them on main, and
+``test_geography_exclusion_forms.py`` pins them there.
+
+The operator's exclusion semantics X-1 to X-5 (2026-11-08) are asserted here where this battery
+deferred them until #312 was on main: the unqualified "York" / "New York" pair (X-4, section 3)
+and the bare "Niger" readings (X-2, section 5).
 """
 
 from __future__ import annotations
@@ -51,6 +55,7 @@ from app.tests._privacy_support import PrivacyEnv, privacy_world
 
 DALLAS = market_from_parts(city="Dallas", region="Texas", country="United States")
 LAGOS = market_from_parts(city="Lagos", region="Lagos", country="Nigeria")
+LONDON = market_from_parts(city="London", region="England", country="United Kingdom")
 
 
 def _online(excluded, *, home=None) -> list[CoverageRule]:
@@ -259,10 +264,9 @@ def test_an_unreadable_market_is_removed_by_any_exclusion_even_online(limb):
 # 3. "York" is not "New York", in both directions, on every gating path
 # --------------------------------------------------------------------------- #
 #: (short, long): neither excludes the other, in either direction. Case and width variants are
-#: qualified, so their geography is unambiguous. The unqualified pair ("York" against "New York",
-#: in any spelling) is asserted at this battery's rebase onto a main containing lane 5DW2FIX, in
-#: whichever direction its implementation of X-1, X-3 and X-4 decides (operator, 2026-11-08: an
-#: unqualified "New York" is a city/state ambiguity, and a bare "York" names no country).
+#: qualified, so their geography is unambiguous. ``("York", "New York, NY")`` relies on
+#: "New York, NY" being read as the city ("Explicit qualifiers narrow the interpretation", X-4).
+#: The unqualified pair is asserted below, in the direction the exclusion fix (#312) implements.
 YORK_PAIRS = [
     ("York, UK", "New York, NY"),
     ("YORK, UK", "NEW YORK, NY"),
@@ -277,6 +281,35 @@ YORK_PAIRS = [
 def test_york_does_not_exclude_new_york_nor_the_reverse(limb, short, long):
     assert market_in_coverage(_online([short])[limb], long) is True
     assert market_in_coverage(_online([long])[limb], short) is True
+
+
+#: The unqualified pair, in plain, upper-case and full-width spellings: deferred by this battery
+#: until a main containing lane 5DW2FIX (#312), and asserted here in the direction #312
+#: implements (its ``test_x4_an_unqualified_york_cannot_be_ruled_out_of_new_york_state``).
+UNQUALIFIED_YORK_PAIRS = [
+    ("York", "New York"),
+    ("YORK", "NEW YORK"),
+    ("ｙｏｒｋ", "New York"),  # full-width york
+]
+
+
+@pytest.mark.parametrize(("short", "long"), UNQUALIFIED_YORK_PAIRS)
+@pytest.mark.parametrize("limb", range(3), ids=_LIMBS)
+def test_an_unqualified_york_and_new_york_cannot_be_ruled_out_of_each_other(limb, short, long):
+    """X-4: "ambiguous city/state exclusions such as 'New York' cover both readings"; X-3: an
+    observed market is read in "every plausible reading"; X-1: "Retain conservative matching when
+    geography is genuinely missing or ambiguous". An unqualified "New York" is also the state,
+    and a bare "York" names no country, so a York inside New York State cannot be ruled out:
+    each exclusion removes the other observation, with no location or with a US one.
+
+    This is not the substring class exit criterion 5 names ("York" ≠ "New York"): the qualified
+    rows above and ``SUBSTRING_TRAPS`` keep that asserted (W21-REV-5DW4 r4 INFO-1). A location
+    that states another country constrains a bare "York" exclusion to that country (X-2: "A known
+    country must constrain the possible readings"), so it no longer reaches New York."""
+    for home in (None, DALLAS):
+        assert market_in_coverage(_online([short], home=home)[limb], long) is False, home
+        assert market_in_coverage(_online([long], home=home)[limb], short) is False, home
+    assert market_in_coverage(_online([short], home=LONDON)[limb], long) is True
 
 
 @pytest.mark.parametrize("excluded", ["New York", "NEW YORK", "ＮＥＷ ＹＯＲＫ", "New York, NY"])
@@ -372,22 +405,41 @@ SUBSTRING_TRAPS = [
 ]
 
 
-#: Pairs whose exclusion limb is not asserted yet. The reading is ruled (X-2, operator
-#: 2026-11-08: an ambiguous bare "Niger" may cover both the country Niger and Niger State) and is
-#: asserted at this battery's rebase onto a main that contains lane 5DW2FIX.
-_UNRULED_EXCLUSION_READING = {("Niger", "Nigeria"), ("Niger", "Niger State, NG")}
+#: Pairs whose exclusion limb is a ruled ambiguity, not a substring question (X-2, operator
+#: 2026-11-08: "an ambiguous bare 'Niger' may cover both country Niger and Niger State"). This
+#: battery deferred it until a main containing lane 5DW2FIX (#312); it is asserted in
+#: ``test_a_bare_niger_and_its_nigerian_readings_cannot_be_ruled_out_of_each_other`` below.
+_X2_AMBIGUOUS_EXCLUSION_PAIRS = {("Niger", "Nigeria"), ("Niger", "Niger State, NG")}
 
 
 @pytest.mark.parametrize(("a", "b"), SUBSTRING_TRAPS)
 def test_no_gating_path_equates_a_name_with_one_containing_it(a, b):
     for first, second in ((a, b), (b, a)):
-        if (a, b) not in _UNRULED_EXCLUSION_READING:
+        if (a, b) not in _X2_AMBIGUOUS_EXCLUSION_PAIRS:
             for rule in _online([first]):  # exclusion: the other place is still admitted
                 assert market_in_coverage(rule, second) is True, ("excluded", first, second)
         inclusion = CoverageRule(coverage_type="city", included_markets=(first,))
         assert market_in_coverage(inclusion, second) is False, ("included", first, second)
         policy = ConnectorPolicy("rss_news", True, frozenset({first}))
         assert policy.permits(source_types=(), market=second) is False, ("cleared", first, second)
+
+
+@pytest.mark.parametrize(("a", "b"), sorted(_X2_AMBIGUOUS_EXCLUSION_PAIRS))
+@pytest.mark.parametrize("limb", range(3), ids=_LIMBS)
+def test_a_bare_niger_and_its_nigerian_readings_cannot_be_ruled_out_of_each_other(limb, a, b):
+    """X-2: a bare "Niger" exclusion covers the country Niger and Niger State, so it removes
+    "Niger State, NG" and an observed "Nigeria", which names no state (item 35's breadth). X-3:
+    an observed bare "Niger" is read in "every plausible reading", Niger State among them, so a
+    "Nigeria" or a "Niger State, NG" exclusion removes it. With no location, a US one or a GB one.
+
+    The removal comes from the ruled ambiguity, never from a substring: the unambiguous forms
+    keep the places apart (X-2: "Preserve unambiguous ways to specify country Niger and Nigerian
+    Niger State separately")."""
+    for home in (None, DALLAS, LONDON):
+        assert market_in_coverage(_online([a], home=home)[limb], b) is False, home
+        assert market_in_coverage(_online([b], home=home)[limb], a) is False, home
+    assert market_in_coverage(_online(["Republic of Niger"])[limb], b) is True
+    assert market_in_coverage(_online(["Niger State, NG"])[limb], "Niamey, Niger") is True
 
 
 _GATING_MODULES = [engine_module, markets_module, policy_module, resolver_module]
