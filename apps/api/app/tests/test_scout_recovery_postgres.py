@@ -492,9 +492,10 @@ def _alembic(w, *args) -> subprocess.CompletedProcess:
 def _step_down(w) -> None:
     """Down to c6f1d8e2a4b7 (the ledger without deadlines). W16 (PROPOSED) adds one revision
     on top (e7b3c5a9d1f4), Project Phase 5 CF-1 another (f3a9c1e7b2d5), CF-2 another
-    (a7d2e9f4c1b8), CF-3 another (c3f8e1a6d2b9) and 5D-W1's campaign-location data repair
-    another (d5f616c0ec97), so that is six guarded steps down from the code head."""
-    for _ in range(6):
+    (a7d2e9f4c1b8), CF-3 another (c3f8e1a6d2b9), 5D-W1's campaign-location data repair
+    another (d5f616c0ec97) and D-N4 item 37's append-only backstop another (d0a8bce8de6a), so
+    that is seven guarded steps down from the code head."""
+    for _ in range(7):
         token = _alembic(w, "app.db.migrate", "downgrade-confirmation", "-1")
         assert token.returncode == 0, token.stderr
         down = _alembic(w, "alembic", "-x", f"confirm={token.stdout.strip()}", "downgrade", "-1")

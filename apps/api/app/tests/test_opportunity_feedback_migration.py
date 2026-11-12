@@ -141,7 +141,7 @@ def test_single_head(db_path) -> None:
     # Exactly one head line — no divergent branches.
     heads = [ln for ln in result.stdout.splitlines() if ln.strip()]
     assert len(heads) == 1, result.stdout
-    assert "d5f616c0ec97" in heads[0]  # 5D-W1's campaign-location data repair
+    assert "d0a8bce8de6a" in heads[0]  # D-N4 item 37: the PostgreSQL append-only backstop
 
 
 def test_downgrade_is_surgical_and_preserves_business_data(db_path) -> None:

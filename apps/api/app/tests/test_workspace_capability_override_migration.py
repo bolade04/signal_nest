@@ -35,7 +35,7 @@ import pytest
 API_DIR = Path(__file__).resolve().parents[2]
 # Revision immediately before the workspace_capability_overrides migration.
 PREV = "4945b98229e6"
-HEAD = "d5f616c0ec97"  # 5D-W1's campaign-location data repair (Amendment D-1)
+HEAD = "d0a8bce8de6a"  # D-N4 item 37: the PostgreSQL append-only backstop
 TABLE = "workspace_capability_overrides"
 
 
