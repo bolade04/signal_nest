@@ -10,7 +10,8 @@ trusts the library's approved claims, so all four are closed (:mod:`app.brands.s
   ``permission_denied`` (the ``/claims`` answer) and writes nothing; without claims it
   onboards exactly as before;
 * **audited like ``/claims``** — one ``claims_library_entry.created`` row per entry, with the
-  same entity, actor and field-name context a ``/claims`` create writes;
+  same entity, actor and field-name context a ``/claims`` create writes, and (operator ruling
+  D-N4 item 40) the same ``new_state``: the new entry's text and kind;
 * **validated like ``/claims``** — each claim must be a valid ``ClaimIn`` (empty text 422);
 * **first onboarding only** — once the workspace is onboarded, claims are added through
   ``/claims``: a repeated onboarding with claims is 409 ``onboarding_claims_closed``.
@@ -113,25 +114,39 @@ def test_a_stewards_first_onboarding_creates_the_claims_and_audits_each(world, r
     ]
     audits = world.rows(AuditLog, workspace_id=ws, action="claims_library_entry.created")
     assert sorted(a["entity_id"] for a in audits) == sorted(r["id"] for r in rows)
+    by_id = {r["id"]: r for r in rows}
     for audit in audits:
         assert audit["actor_user_id"] == world.users[role]
         assert audit["entity_type"] == "claims_library_entry"
         assert audit["context"] == {"fields": list(CLAIM_CREATE_FIELDS)}
-        assert "Locally roasted" not in str(audit) and "Cures everything" not in str(audit)
+        # D-N4 item 40: the new entry's text and kind, exactly as stored; no other value.
+        entry = by_id[audit["entity_id"]]
+        assert audit["previous_state"] is None
+        assert audit["new_state"] == {"kind": entry["kind"], "text": entry["text"]}
+        assert "health" not in str(audit["new_state"])
 
 
 def test_the_onboarding_audit_has_the_claims_route_shape(world):
     """The same body through ``POST /claims`` and through onboarding: identical audit rows
-    apart from the ids and the time."""
+    apart from the ids, the time and the claim text itself (D-N4 item 40: both record the new
+    entry's text and kind)."""
     ws = _fresh_workspace(world, "R1 audit shape")
     assert _onboard(world, ws, "owner", [{"text": "Shape A"}]).status_code == 201
     r = world.send("POST", f"/workspaces/{ws}/claims", "owner", {"text": "Shape B"})
     assert r.status_code == 201, r.text
     audits = world.rows(AuditLog, workspace_id=ws, action="claims_library_entry.created")
     assert len(audits) == 2
+    assert sorted(a["new_state"]["text"] for a in audits) == ["Shape A", "Shape B"]
     volatile = {"id", "entity_id", "created_at", "updated_at"}
-    shapes = [{k: v for k, v in a.items() if k not in volatile} for a in audits]
+    shapes = [
+        {
+            **{k: v for k, v in a.items() if k not in volatile},
+            "new_state": {**a["new_state"], "text": "<text>"},
+        }
+        for a in audits
+    ]
     assert shapes[0] == shapes[1]
+    assert shapes[0]["new_state"] == {"kind": "approved", "text": "<text>"}
 
 
 # --------------------------------------------------------------------------- #

@@ -11,8 +11,11 @@ plan §2). For ``/workspaces/{workspace_id}/claims`` only:
 * **Soft retirement.** ``DELETE`` sets ``retired_at`` and keeps the row; a retired entry is
   no longer listed and cannot be edited or retired again (404, as a missing one).
 * **Audited.** Every create, update and retirement writes ``claims_library_entry.created`` /
-  ``.updated`` / ``.retired`` naming the actor, the entry and the changed field *names* —
-  never the claim text.
+  ``.updated`` / ``.retired`` naming the actor, the entry and the changed field *names*, and
+  (operator ruling D-N4 item 40, 2026-11-12, superseding the CF-2 "field names, never their
+  values" shape) the entry's ``text`` and ``kind``: a create as ``new_state``, an update as
+  ``previous_state`` and ``new_state``, a retirement as ``previous_state``.
+  ``test_claims_audit_values`` covers the shape in full and the privacy controls over it.
 * **Nothing else changed.** Another collection (products) keeps the OWNER/ADMIN/MARKETER
   editors, hard delete and no audit record.
 
@@ -246,9 +249,13 @@ def test_a_steward_creates_updates_and_retires_with_an_audit_trail(
         assert audit["entity_type"] == "claims_library_entry"
         assert (audit["organization_id"], audit["workspace_id"]) == (world.org, world.ws)
         assert audit["actor_user_id"] == actor is not None
-        # Field names only: the claim text never reaches the audit record.
-        assert BLOCKED_TEXT not in json.dumps(audit, default=str)
-        assert audit["previous_state"] is None and audit["new_state"] is None
+    # D-N4 item 40: the previous and new claim text and kind (no other field's value).
+    assert [(a["previous_state"], a["new_state"]) for a in audits] == [
+        (None, {"kind": "blocked", "text": BLOCKED_TEXT}),
+        ({"kind": "blocked", "text": BLOCKED_TEXT}, {"kind": "restricted", "text": BLOCKED_TEXT}),
+        ({"kind": "restricted", "text": BLOCKED_TEXT}, None),
+    ]
+    assert "health" not in json.dumps([a["new_state"] for a in audits])  # category: names only
 
 
 def test_an_empty_update_writes_no_audit_record(world: World) -> None:
