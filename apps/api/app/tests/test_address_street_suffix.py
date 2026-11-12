@@ -379,7 +379,8 @@ AMBIGUOUS_CONSISTENT = [
     (WARSAW, "PL", "1 Main St, Warszawa PL"),
     (SAO_TOME, "ST", "10 Rua X, Sao Tome ST"),
     (DALLAS, "US-TX", "Suite 5, 3 Kings Ct"),
-    (MUNICH, "DE", "Marienplatz 1, 80331 Munich, DE-BY"),
+    # GEO-P3 (G-7): "Marienplatz 1, 80331 Munich, DE-BY" now states Germany through its code
+    # form, so it agrees for Munich, not stating nothing (test_geography_place_knowledge).
     # FU-R1: the first part's code reading is the location's own area.
     (HARTFORD, "US-CT", "1500 Broadway Hartford CT, Hartford"),
     (HARTFORD, "US-CT", "Hartford CT, Hartford"),

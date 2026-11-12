@@ -843,6 +843,7 @@ def _read_business_address(text: str) -> BusinessAddressReading:
         text, raw_parts = raw_parts[0], raw_parts[:1]
     if len(raw_parts) < 2:
         stated = _parse(text, None, qualify=False, known=None, forms=True, street_address=True)
+        stated = _with_unlisted_form_country(stated, text)  # GEO-P3 (G-7)
         kind = street_line_kind(text)
         ambiguous = parse_observed(text) if kind == STREET_LINE_AMBIGUOUS else None
         if stated is not None and stated.country is not None and _street_name_and_direction(text):
@@ -907,6 +908,17 @@ def _read_business_address(text: str) -> BusinessAddressReading:
     ambiguous = _part_reading(raw_parts[0])[1] + ambiguous
     groups = list(_groups(", ".join(kept))) + groups
     ambiguous_groups = _part_groups(raw_parts[0])[1] + ambiguous_groups
+    # GEO-P3 (G-7): an unlisted ISO 3166-2 form or a country-prefixed postcode names its country,
+    # wherever it is written ("DE-BY, Bavaria"; "ACME, Flat 3, NO-0150 Oslo").
+    stated = _with_unlisted_form_country(stated, None)
+    parts += [
+        MarketIdentity(country=found, label=raw.strip())
+        for raw in raw_parts
+        if (found := _unlisted_form_country(raw)) is not None
+    ]
+    shadowed = _unlisted_form_shadows(text)
+    if stated is not None and stated.country in shadowed:
+        stated = MarketIdentity(city=stated.city, label=stated.label)
     with_homonym, homonyms = _with_nigerian_homonym(tuple(groups), raw_parts[-1])
     return BusinessAddressReading(
         stated,
@@ -916,6 +928,55 @@ def _read_business_address(text: str) -> BusinessAddressReading:
         tuple(ambiguous_groups),
         homonyms=homonyms,
     )
+
+
+#: GEO-P3 (register G-7): an ISO 3166-2 form of a country whose subdivisions are not listed, two
+#: letters, a hyphen and two letters, in capitals ("DE-BY", "IN-MH", "ZA-GT"). Three letters
+#: ("FR-IDF") and digits ("KE-30") are not read: they cannot be told from a road ("GA-400",
+#: "SR-12") or a hyphenated name ("AL-AIN") without each country's code list.
+_UNLISTED_FORM: Final = re.compile(r"(?<![A-Za-z0-9])([A-Z]{2})-([A-Z]{2})(?![A-Za-z0-9])")
+#: GEO-P3 (register G-7): a country-prefixed postcode followed by a town ("NO-0150 Oslo"), not after
+#: a house number.
+_PREFIXED_POSTCODE: Final = re.compile(r"(?<![A-Za-z0-9])(?<!\d )([A-Z]{2})-(\d{4,6}) +[A-Z][a-z]")
+
+
+def _unlisted_form_country(part: str) -> str | None:
+    """GEO-P3 (register G-7): the country that an unlisted ISO 3166-2 form or a country-prefixed
+    postcode in ``part`` names ("Munich DE-BY": DE; "NO-0150 Oslo": NO), when its country's
+    subdivisions are not listed (a listed country's form is read as a listed code, GEO-P1)."""
+    for pattern in (_UNLISTED_FORM, _PREFIXED_POSTCODE):
+        for match in pattern.finditer(part):
+            country = match[1]
+            if country in COUNTRIES and country not in _CODED_COUNTRIES:
+                return country
+    return None
+
+
+def _unlisted_form_shadows(text: str) -> frozenset[str]:
+    """GEO-P3 (G-7): the countries that the letters after the hyphen of an unlisted form would name
+    if read alone ("DE-BY": BY, Belarus), which the form's own reading replaces."""
+    found = set()
+    for match in _UNLISTED_FORM.finditer(text):
+        if match[1] in COUNTRIES and match[1] not in _CODED_COUNTRIES:
+            second = _country_code(match[2].lower())
+            if second is not None and second != match[1]:
+                found.add(second)
+    return frozenset(found)
+
+
+def _with_unlisted_form_country(
+    stated: MarketIdentity | None, text: str | None
+) -> MarketIdentity | None:
+    """GEO-P3 (G-7): a one-part address with an unlisted form ("DE-BY", "Andheri IN-MH 400053")
+    states the form's country, never the country its second letters would name ("BY" is Belarus).
+    With ``text`` ``None`` (an address of several parts) ``stated`` is returned unchanged."""
+    if text is None:
+        return stated
+    country = _unlisted_form_country(text)
+    if country is None:
+        return stated
+    city = stated.city if stated is not None else None
+    return MarketIdentity(city=city, country=country, label=text.strip())
 
 
 def _code_form_part(part: str) -> bool:

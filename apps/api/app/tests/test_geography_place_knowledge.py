@@ -57,6 +57,9 @@ WASHINGTON_DC = _location("Washington", "District of Columbia", "United States")
 SEATTLE = _location("Seattle", "Washington", "United States")
 MINNA = _location("Minna", "Niger", "Nigeria")
 NIAMEY = _location("Niamey", None, "Niger")
+MUNICH = _location("Munich", "Bavaria", "Germany")
+MUMBAI = _location("Mumbai", "Maharashtra", "India")
+OSLO = _location("Oslo", None, "Norway")
 
 
 # --------------------------------------------------------------------------- #
@@ -222,3 +225,52 @@ def test_p3_niger_never_hides_a_contradiction():
     _refused(MINNA, "1 Main St, Springfield, AB, Niger", "states country NE")
     _refused(DALLAS, "Minna, Niger", "states country NE")
     assert _resolve(NIAMEY, "Niamey, Niger").code == "NE"
+
+
+# --------------------------------------------------------------------------- #
+# 4. Unlisted ISO 3166-2 forms and country-prefixed postcodes (register G-7)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "code"),
+    [
+        (MUNICH, "DE-BY", "DE"),
+        (MUNICH, "Munich DE-BY", "DE"),
+        (MUMBAI, "IN-MH", "IN"),
+        (MUMBAI, "Andheri IN-MH 400053", "IN"),
+        (MUNICH, "Marienplatz 1, Munich DE-BY", "DE"),
+        (MUNICH, "Marienplatz 1, 80331 Munich, DE-BY", "DE"),
+        (OSLO, "ACME, Flat 3, NO-0150 Oslo", "NO"),
+    ],
+)
+def test_p3_an_unlisted_code_form_names_its_country(location, address, code):
+    """ "DE-BY" was read as Belarus ("BY") and refused for Munich; it is Germany's form, and the
+    address agrees (D1's test held "Marienplatz 1, 80331 Munich, DE-BY" as stating nothing)."""
+    resolution = _resolve(location, address)
+    assert resolution.code == code
+    assert resolution.evidence[-1].endswith("agrees"), resolution.evidence
+
+
+@pytest.mark.parametrize(
+    ("address", "evidence"),
+    [
+        ("DE-BY", "states country DE"),
+        ("Marienplatz 1, Munich DE-BY", "states country DE"),
+        ("DE-BY, Bavaria", "states country DE"),
+        ("ACME, Flat 3, NO-0150 Oslo", "states country NO"),
+    ],
+)
+def test_p3_an_unlisted_code_form_elsewhere_is_refused(address, evidence):
+    _refused(DALLAS, address, evidence)
+
+
+def test_p3_roads_and_hyphenated_names_are_not_code_forms():
+    """ "AL-AIN" (Al Ain) and "GA-400" (a road) keep their readings."""
+    _clarified(
+        DALLAS,
+        "KHALIFA ST, AL-AIN",
+        "address_suffix_ambiguous",
+        "is ambiguous: a street type or country ST",
+    )
+    assert _resolve(DALLAS, "4400 GA-400").reason == "address_route_ambiguous"
