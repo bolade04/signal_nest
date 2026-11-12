@@ -204,6 +204,13 @@ def test_g8_in_one_case_a_street_without_a_house_number_asks(address, reading):
     _refused(DALLAS, "US CT", "states subdivision US-CT")
 
 
+def test_g6_a_floor_part_is_a_unit_so_the_first_part_reads_alone():
+    """A floor after a whole-address form is a unit (D1's C-6(b)), so the form keeps its own
+    reading: "Main St, Fl 3" asks as "Main St" does, and "1 SR 520, Fl 3" as "1 SR 520" does."""
+    _clarified(DALLAS, "Main St, Fl 3", ADDRESS_SUFFIX_AMBIGUOUS, "a street type or country ST")
+    _clarified(SEATTLE, "1 SR 520, Fl 3", ADDRESS_ROUTE_AMBIGUOUS, "a route or country SR")
+
+
 def test_g6_a_state_and_its_zip_code_before_a_trailing_unit_is_read():
     """ "FL 33101" is Florida and its ZIP code, not a floor: it is read before a trailing unit."""
     _refused(HARTFORD, "1 Main St, Miami, FL 33101, Suite 200", "states subdivision US-FL")
@@ -240,6 +247,7 @@ def test_g8_a_route_name_follows_case_and_skips_street_types():
     State Route, never Sao Tome."""
     _clarified(LONDON, "ACME CORP, 4400 US HWY 75", ADDRESS_PLACE_UNCLEAR, "country US")
     assert _resolve(LONDON, "ACME Ltd, 1 St Rt 9").code == "GB"
+    assert _resolve(LONDON, "ACME Ltd, 1 ST RT 9").code == "GB"
 
 
 # --------------------------------------------------------------------------- #
