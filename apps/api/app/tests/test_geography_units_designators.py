@@ -64,6 +64,8 @@ IKEJA = _location("Ikeja", "Lagos", "Nigeria")
 KUALA_LUMPUR = _location("Kuala Lumpur", None, "Malaysia")
 RENO = _location("Reno", "Nevada", "United States")
 OMAHA = _location("Omaha", "Nebraska", "United States")
+LAGOS = _location("Lagos", "Lagos", "Nigeria")
+MUMBAI = _location("Mumbai", "Maharashtra", "India")
 
 
 def _refused(location, address, evidence):
@@ -425,6 +427,19 @@ def test_r1_c4_rt_is_a_route_word():
 def test_r1_c4_a_floor_with_a_letter_or_a_hash_is_a_floor(address):
     """X7, X8: "Fl 3A" and "Fl #3" are floors, never Florida."""
     assert _resolve(DALLAS, address).code == "US-TX"
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "code"),
+    [
+        (LAGOS, "ACME Ltd, No 3, Victoria Island, Lagos", "NG-LA"),
+        (MUMBAI, "ACME Ltd, No 3, Bandra West, Mumbai 400050", "IN"),
+    ],
+)
+def test_r1_c4_only_fl_after_a_town_is_unclear(location, address, code):
+    """C-1 reads only "FL" after a town as unclear: "No 3" after a business name stays a unit's
+    number (the lane's surviving mutant C1d; D1's R20 rows)."""
+    assert _resolve(location, address).code == code
 
 
 # --------------------------------------------------------------------------- #
