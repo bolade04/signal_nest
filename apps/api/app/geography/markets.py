@@ -1227,7 +1227,18 @@ def _part_places(text: str) -> tuple[PartPlace, ...]:
         country_after = _country_code(following[0]) if following else None
         if short and country_after is not None:
             if country_after not in _CODED_COUNTRIES:
-                continue  # "Mumbai, MH, India": an unlisted country's region code (G-7)
+                # GEO-P3 (review I-1): a name whose country is unlisted but which has a listed
+                # reading ("Georgia" is the country GE or US-GA; "Niger" the country NE or Niger
+                # State) reads the code in that listed reading's country: "AL" beside "Georgia" is
+                # US-AL. Before, "Springfield, AL, Georgia" read nothing in the region slot.
+                listed = [
+                    c
+                    for c, r in _area_candidates(following[0]) + _homonym_areas(following[0])
+                    if c in _CODED_COUNTRIES and r
+                ]
+                if not listed:
+                    continue  # "Mumbai, MH, India": an unlisted country's region code (G-7)
+                country_after = listed[0]
             region, _ = normalize_region(folded, country_after)
             tokens = _JURISDICTION_REGION_TOKENS.get(country_after, {})
             if region in _CODED_REGIONS or folded in tokens:

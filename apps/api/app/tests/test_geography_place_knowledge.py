@@ -18,6 +18,7 @@ import pytest
 from app.geography.markets import read_business_address
 from app.jurisdiction.codes import UNRESOLVED
 from app.jurisdiction.resolver import (
+    ADDRESS_NAMES_ANOTHER_PLACE,
     ADDRESS_PLACE_UNCLEAR,
     resolve_jurisdiction,
 )
@@ -60,6 +61,7 @@ NIAMEY = _location("Niamey", None, "Niger")
 MUNICH = _location("Munich", "Bavaria", "Germany")
 MUMBAI = _location("Mumbai", "Maharashtra", "India")
 OSLO = _location("Oslo", None, "Norway")
+ATLANTA = _location("Atlanta", "Georgia", "United States")
 
 
 # --------------------------------------------------------------------------- #
@@ -274,3 +276,21 @@ def test_p3_roads_and_hyphenated_names_are_not_code_forms():
         "is ambiguous: a street type or country ST",
     )
     assert _resolve(DALLAS, "4400 GA-400").reason == "address_route_ambiguous"
+
+
+# --------------------------------------------------------------------------- #
+# 5. The region slot before a two-reading name (review I-1)
+# --------------------------------------------------------------------------- #
+
+
+def test_p3_a_code_before_georgia_is_read_in_the_listed_country():
+    """ "Georgia" is the country GE or US-GA, so "AL" before it is US-AL: the address names
+    another state beside Georgia, which may be the town, so it asks; it was accepted."""
+    _clarified(
+        ATLANTA,
+        "Springfield, AL, Georgia, 1 Main St",
+        ADDRESS_NAMES_ANOTHER_PLACE,
+        "also names subdivision US-AL",
+    )
+    assert _resolve(ATLANTA, "Springfield, GA, Georgia, 1 Main St").code == "US-GA"
+    _refused(DALLAS, "Mumbai, MH, India", "states country IN")
