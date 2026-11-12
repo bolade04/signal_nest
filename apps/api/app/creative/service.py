@@ -691,7 +691,8 @@ def execute_generation(
     if not creative_capability(db, settings, org_id, ws_id).effective_enabled:
         raise _fail(JobErrorCode.POLICY, "capability_unavailable")
     if not brief_has_jurisdiction(brief):
-        # Item 31, re-read under the locks: terminal (VALIDATION is never retried).
+        # Item 31, checked under the locks (the code is written once at insert, so the row read
+        # above is current): terminal (VALIDATION is never retried).
         _log_not_generated(ws_id, brief.id, "refused", BRIEF_JURISDICTION_MISSING)
         raise _fail(JobErrorCode.VALIDATION, BRIEF_JURISDICTION_MISSING)
     if not brief_is_approved(db, brief):

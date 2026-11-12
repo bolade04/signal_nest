@@ -57,7 +57,7 @@ describe('creative labels', () => {
 
   it('maps every job failure class to customer copy', () => {
     expect(generationFailureMessage('policy')).toMatch(/unavailable or its daily limit/);
-    expect(generationFailureMessage('validation')).toMatch(/changed before the draft was generated/);
+    expect(generationFailureMessage('validation')).toMatch(/as it stands now\. Refresh the page to see why/);
     expect(generationFailureMessage('authorization')).toMatch(/no longer have permission/);
     expect(generationFailureMessage('cancelled')).toMatch(/cancelled/);
     expect(generationFailureMessage('non_retryable')).toMatch(/safety screen/);

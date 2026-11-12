@@ -75,6 +75,7 @@ export function CreateCampaignDialog({
           locations={locations.data}
           locationsError={locations.isError}
           idPrefix={idPrefix}
+          creating
         />
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={create.isPending}>

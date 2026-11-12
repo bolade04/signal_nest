@@ -28,6 +28,7 @@ export function CampaignFields({
   locations,
   locationsError,
   idPrefix,
+  creating = false,
 }: {
   values: CampaignFormValues;
   onChange: (values: CampaignFormValues) => void;
@@ -37,6 +38,8 @@ export function CampaignFields({
   locations: readonly LocationOut[] | undefined;
   locationsError: boolean;
   idPrefix: string;
+  /** The create dialog: there is no campaign yet whose locations could be "changed". */
+  creating?: boolean;
 }) {
   const set = <K extends keyof CampaignFormValues>(key: K, value: CampaignFormValues[K]) =>
     onChange({ ...values, [key]: value });
@@ -101,8 +104,9 @@ export function CampaignFields({
         <legend className="text-sm font-medium">Locations</legend>
         {locationsError ? (
           <p role="alert" className="text-sm text-destructive">
-            This workspace’s locations could not be loaded, so the campaign’s locations cannot be
-            changed here now. Its other fields can still be saved.
+            {creating
+              ? 'This workspace’s locations could not be loaded, so locations cannot be chosen now. The campaign can still be added without them.'
+              : 'This workspace’s locations could not be loaded, so the campaign’s locations cannot be changed here now. Its other fields can still be saved.'}
           </p>
         ) : !locations ? (
           <p className="text-sm text-muted-foreground">Loading locations…</p>

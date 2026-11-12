@@ -58,8 +58,10 @@ export function isGenerationInFlight(status: string): boolean {
  * Customer copy for a generation job that ended without a draft, from the job's stable
  * error class (`JobOut.last_error_code`; the customer job view carries no summary). The
  * job's failure classes (`app.creative.service.execute_generation`): `policy` — generation
- * unavailable, not configured, or a daily limit reached; `validation` — the brief is no longer
- * approved or the version revised is gone; `authorization` — the requester may no longer
+ * unavailable, not configured, or a daily limit reached; `validation` — the request, the brief,
+ * its workspace, its recorded jurisdiction (S1-5D item 31), its approval or the version revised is
+ * no longer what the request needs (one wording true for each; FU-5DW3-4, W21-REV-5D-INTEG r1
+ * §6(b)); `authorization` — the requester may no longer
  * generate; `non_retryable` — the model failed or its text did not pass the safety screen.
  */
 export function generationFailureMessage(code: string | null | undefined): string {
@@ -67,7 +69,7 @@ export function generationFailureMessage(code: string | null | undefined): strin
     case 'policy':
       return 'Draft generation is unavailable or its daily limit has been reached. Try again later.';
     case 'validation':
-      return 'This brief or version changed before the draft was generated. Refresh and try again.';
+      return 'The draft could not be generated from this brief version as it stands now. Refresh the page to see why.';
     case 'authorization':
       return 'You no longer have permission to generate drafts in this workspace.';
     case 'cancelled':

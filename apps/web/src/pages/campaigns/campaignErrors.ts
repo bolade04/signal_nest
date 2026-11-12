@@ -10,8 +10,10 @@ import { ApiError } from '@/api/client';
  * - 403: not a member of the workspace's organization (reads), or a member whose role is not
  *   owner, admin or marketer (writes);
  * - 404: the workspace, the campaign, or a requested location is not in this workspace;
- * - 409: the campaign changed in a way that conflicts with this request;
  * - 422: the request was invalid; the API's own message says how.
+ *
+ * 409 is not returned by the campaigns router today. It keeps its own message so that a future
+ * conflict is not shown as a generic failure (W21-REV-5DW3 r2, copy C-2).
  */
 export type CampaignWrite = 'create' | 'update' | 'delete';
 
@@ -49,8 +51,15 @@ export function campaignReadError(
   return answer((error as ApiError).message, false);
 }
 
-/** The message for a refused or failed write. */
-export function campaignWriteError(action: CampaignWrite, error: unknown): string {
+/**
+ * The message for a refused or failed write. `locationsSent` says whether an update sent
+ * `location_ids`: only then can its 404 be about a chosen location (W21-REV-5DW3 r2, copy C-1).
+ */
+export function campaignWriteError(
+  action: CampaignWrite,
+  error: unknown,
+  { locationsSent = true }: { locationsSent?: boolean } = {},
+): string {
   const lead = NOT_SAVED[action];
   const status = statusOf(error);
   switch (status) {
@@ -62,7 +71,9 @@ export function campaignWriteError(action: CampaignWrite, error: unknown): strin
           `${lead} ${(error as ApiError).message}`
         : action === 'delete'
           ? 'This campaign is no longer in this workspace, so there was nothing to delete.'
-          : `${lead} This campaign, or a location you chose, is no longer in this workspace.`;
+          : locationsSent
+            ? `${lead} This campaign, or a location you chose, is no longer in this workspace.`
+            : `${lead} This campaign is no longer in this workspace. It may have been deleted.`;
     case 409:
       return `${lead} The campaign changed at the same time. Reload it to see the current version.`;
     case 422:

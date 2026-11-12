@@ -67,13 +67,14 @@ const NO_LOCATION_NOTE =
  * The brief capture's `jurisdiction_unresolved` refusal (5D-W3; S1-5D capture rule). Since
  * Q-4 an opportunity with no location is not refused, so the cause is always an existing
  * location: a missing or unknown country, a missing state or province where one is required
- * (the item-33 list: US, CA, AU, NG), or an address that names another place. The API sends
- * only the code, so one static wording covers them all. Never the server's text.
+ * (the item-33 list: US, CA, AU, NG), or a business address (the location's Service area) that
+ * names another place. The API sends only the code, so one static wording covers them all, in
+ * the API message's terms. Never the server's text.
  */
 const JURISDICTION_UNRESOLVED_MESSAGE =
   'No brief was generated because the jurisdiction of this opportunity’s location could not be ' +
   'determined. Complete or correct the location’s details so that its country, its state or ' +
-  'province (required in the United States, Canada, Australia and Nigeria) and its address all ' +
+  'province (required in the United States, Canada, Australia and Nigeria) and its business address all ' +
   'name the same place, then generate the brief again.';
 
 function isJurisdictionUnresolved(error: unknown): boolean {

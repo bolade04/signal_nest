@@ -140,7 +140,8 @@ function CampaignView({ workspaceId, campaignId }: { workspaceId: string; campai
         toast({ title: 'Campaign updated', intent: 'success' });
         setEditing(null);
       },
-      onError: (err) => setError(campaignWriteError('update', err)),
+      onError: (err) =>
+        setError(campaignWriteError('update', err, { locationsSent: 'location_ids' in changes })),
     });
   };
 
@@ -237,7 +238,7 @@ function CampaignView({ workspaceId, campaignId }: { workspaceId: string; campai
           open={confirmingDelete}
           onOpenChange={setConfirmingDelete}
           title="Delete this campaign?"
-          description={`“${current.name}” and its list of locations are deleted. Scout requests and opportunities that used it are kept, without the campaign. This cannot be undone.`}
+          description={`“${current.name}” and its list of locations are deleted. Scout requests, opportunities, briefs and drafts that used it are kept, without the campaign. This cannot be undone.`}
           confirmLabel="Delete campaign"
           destructive
           onConfirm={confirmDelete}
