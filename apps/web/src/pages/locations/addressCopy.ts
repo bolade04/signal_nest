@@ -7,9 +7,10 @@ import { formatDateTime } from '@/lib/utils';
  * API words them (fixed messages that never repeat what was entered).
  */
 export const ADDRESS_HELP =
-  'Required for jurisdiction: the business country and, in the United States, Canada, Australia ' +
-  'and Nigeria, the business state or province. As entered by your team; SignalNest does not ' +
-  'verify addresses against any external source.';
+  'Required for jurisdiction: the business country; in the United States, Canada, Australia and ' +
+  'Nigeria, the business state or province; and, when this location has a city, the business town ' +
+  "or locality (the town, locality or named place used in the business's postal address). As " +
+  'entered by your team; SignalNest does not verify addresses against any external source.';
 export const TOWN_DIFFERS = "The business town or locality is not this location's city.";
 export const CONFIRM_LABEL = "Confirm it lies within this location's area";
 export const CONFIRM_HELP =

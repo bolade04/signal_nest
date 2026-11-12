@@ -403,7 +403,7 @@ def test_a_location_without_a_rule_is_the_existing_404(w: W) -> None:
         ({**IRVING, "business_address_region": "Oklahoma"}, {}, "conflict"),
         ({**IRVING, "business_address_region": None}, {}, "incomplete"),
         ({**IRVING, "business_address_country": None}, {}, "incomplete"),
-        ({**IRVING, "business_address_locality": None}, {}, "nothing"),
+        ({**IRVING, "business_address_locality": None}, {}, "incomplete"),  # a city: town required
         ({**IRVING, "business_address_locality": "dallas"}, {}, "nothing"),
         (IRVING, {"city": None}, "nothing"),
     ],

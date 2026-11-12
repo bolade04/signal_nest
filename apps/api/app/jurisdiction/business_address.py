@@ -28,8 +28,11 @@ rule.
    :data:`BUSINESS_ADDRESS_TEXT_CONFLICT`. It runs whether or not the fields are complete; it
    can only refuse, never make the action resolve, so a known contradiction is never turned
    into a request to fill something in.
-4. **Completeness.** No rule at all, or a field of :data:`MANDATORY_FIELDS` missing, or the
-   country or a required state or province unreadable: :data:`BUSINESS_ADDRESS_INCOMPLETE`.
+4. **Completeness.** No rule at all, or a field of :data:`MANDATORY_FIELDS` missing (the town
+   or locality among them whenever the location has a city to compare against), or the country
+   or a required state or province unreadable: :data:`BUSINESS_ADDRESS_INCOMPLETE`. A location
+   with no city has no locality to compare: its business town stays optional, and the check
+   compares the country and the state or province only. No town is ever derived or invented.
    Empty fields stop here: the text's agreement or silence is never consulted for them ("Empty
    new fields must not fall back to “town alone states nothing.”").
 5. **Free-text clarification.** The first reading, in rule order, that is UNRESOLVED with a
@@ -101,8 +104,11 @@ ADDRESS_CLARIFICATIONS: Final[Mapping[str, str]] = MappingProxyType(
         ),
         BUSINESS_ADDRESS_INCOMPLETE: (
             "This location's business address is incomplete. Open the location and, on its "
-            "Service area tab, enter the business country and, for a business in the United "
-            "States, Canada, Australia or Nigeria, the business state or province. Then try again."
+            "Service area tab, enter the business country; for a business in the United States, "
+            "Canada, Australia or Nigeria, the business state or province; and, when the location "
+            "has a city, the business town or locality: the town, locality or named place used in "
+            "the business's postal address. If the location's own city is wrong, correct it on "
+            "its Details tab instead. Then try again."
         ),
         BUSINESS_ADDRESS_CONFLICT: (
             "The business country, or the business state or province, is not this location's "
@@ -147,20 +153,40 @@ REFUSALS: Final = frozenset({BUSINESS_ADDRESS_CONFLICT, BUSINESS_ADDRESS_TEXT_CO
 
 # --- What is mandatory (one table; coordinator ruling OP-3) --------------------------------
 #: The business-address fields a jurisdiction-dependent action requires, by the class of the
-#: location's country: "the existing jurisdiction requirements" (item 33). The country always;
-#: the state or province where the jurisdiction is a subdivision. A different operator ruling
-#: (for example, a required town) is a one-line change here.
-MANDATORY_FIELDS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+#: location's country and whether the selected location has a city to compare against. The
+#: country always, and the state or province where the jurisdiction is a subdivision ("the
+#: existing jurisdiction requirements", item 33); the town or locality whenever the location's
+#: city folds to something non-empty (operator instruction of 2026-11-12, item 3: "require
+#: town/locality before jurisdiction-dependent actions when the selected location has a
+#: town/city to compare against"). A location with no city has no locality to compare, so its
+#: business town stays optional; nothing ever derives or copies a town. One table, so a
+#: further ruling is a one-line change.
+MANDATORY_FIELDS: Final[Mapping[tuple[str, bool], tuple[str, ...]]] = MappingProxyType(
     {
-        "subdivision": ("business_address_country", "business_address_region"),
-        "country": ("business_address_country",),
+        ("subdivision", True): (
+            "business_address_country",
+            "business_address_region",
+            "business_address_locality",
+        ),
+        ("subdivision", False): ("business_address_country", "business_address_region"),
+        ("country", True): ("business_address_country", "business_address_locality"),
+        ("country", False): ("business_address_country",),
     }
 )
+
+#: The evidence line for a location with no city: the town is not required and not compared.
+NO_LOCALITY_TO_COMPARE: Final = "no locality to compare: the location has no city"
 
 
 def country_class(country: str) -> str:
     """``"subdivision"`` for a country of ``SUBDIVISION_JURISDICTIONS``, else ``"country"``."""
     return "subdivision" if country in SUBDIVISION_JURISDICTIONS else "country"
+
+
+def mandatory_fields(country: str, city: str | None) -> tuple[str, ...]:
+    """The fields :data:`MANDATORY_FIELDS` requires for a location in ``country`` whose city is
+    ``city`` (the town only when the city folds to something non-empty)."""
+    return MANDATORY_FIELDS[(country_class(country), bool(fold(city)))]
 
 
 class StructuredAddressFacts(Protocol):
@@ -175,6 +201,15 @@ class StructuredAddressFacts(Protocol):
 def _text(obj: object, name: str) -> str | None:
     value = getattr(obj, name, None)
     return value if isinstance(value, str) and value.strip() else None
+
+
+def _filled(rule: object, field: str) -> bool:
+    """A field holds something: non-blank, and for the town something that folds non-empty, so
+    a placeholder ("-", "...") never stands in for a locality."""
+    text = _text(rule, field)
+    if text is None:
+        return False
+    return bool(fold(text)) if field == "business_address_locality" else True
 
 
 def location_code(location: LocationFacts | None) -> str | None:
@@ -194,9 +229,10 @@ def location_code(location: LocationFacts | None) -> str | None:
     return subdivision_code_of(country, getattr(location, "state_province", None))
 
 
-def structured_status(rule: object, code: str) -> str:
+def structured_status(rule: object, code: str, city: str | None) -> str:
     """``"conflict"``, ``"incomplete"`` or ``"agree"``: one rule's structured fields against
-    the location's ``code`` (steps 2 and 4). Only the rule's own fields are read."""
+    the location's ``code`` and ``city`` (steps 2 and 4). Only the rule's own fields are read:
+    the town is required, never derived, when the location's ``city`` is non-empty."""
     country = code.split("-", 1)[0]
     cls = country_class(country)
     stated_country = None
@@ -211,7 +247,7 @@ def structured_status(rule: object, code: str) -> str:
         stated_region = subdivision_code_of(country, region_text)
         if stated_region is not None and stated_region != code:
             return "conflict"
-    if any(_text(rule, field) is None for field in MANDATORY_FIELDS[cls]):
+    if any(not _filled(rule, field) for field in mandatory_fields(country, city)):
         return "incomplete"
     if country_text is not None and stated_country is None:
         return "incomplete"  # a country that does not read
@@ -242,7 +278,7 @@ def confirmation_applies(rule: object, city: str | None, code: str | None) -> bo
         and fold(_text(rule, "locality_confirmed_locality")) == fold(town)
         and fold(_text(rule, "locality_confirmed_city")) == fold(city)
         and getattr(rule, "locality_confirmed_jurisdiction", None) == code
-        and structured_status(rule, code) == "agree"
+        and structured_status(rule, code, city) == "agree"
     )
 
 
@@ -260,9 +296,9 @@ CONFIRMATION_REFUSALS: Final[Mapping[str, str]] = MappingProxyType(
             "state or province, is not this location's own. Correct it first."
         ),
         "incomplete": (
-            "Enter the business country and, for a business in the United States, Canada, "
-            "Australia or Nigeria, the business state or province, and save, before confirming "
-            "the town or locality."
+            "Complete the business address and save it before confirming the town or locality: "
+            "the business country, the business town or locality and, for a business in the "
+            "United States, Canada, Australia or Nigeria, the business state or province."
         ),
         "nothing": (
             "There is nothing to confirm. A confirmation is needed only when the saved business "
@@ -280,10 +316,10 @@ def confirmation_refusal(rule: object, location: LocationFacts) -> str | None:
     code = location_code(location)
     if code is None:
         return "location"
-    status = structured_status(rule, code)
+    city = getattr(location, "city", None)
+    status = structured_status(rule, code, city)
     if status != "agree":
         return status  # "conflict" or "incomplete"
-    city = getattr(location, "city", None)
     if not locality_differs(_text(rule, "business_address_locality"), city):
         return "nothing"
     return None
@@ -330,7 +366,7 @@ def resolve_for_action(
         failures.append((STEP_INCOMPLETE, 0, BUSINESS_ADDRESS_INCOMPLETE, "no coverage rule"))
     texts = confirmed = 0
     for index, rule in enumerate(rules):
-        status = structured_status(rule, code)
+        status = structured_status(rule, code, city)
         if status == "conflict":
             failures.append(
                 (STEP_CONFLICT, index, BUSINESS_ADDRESS_CONFLICT, "structured address conflicts")
@@ -360,6 +396,8 @@ def resolve_for_action(
         return _unresolved(base.evidence, category, f"coverage rule {index}: {why}")
 
     evidence = [*base.evidence, "structured business address agrees"]
+    if not fold(city):
+        evidence.append(NO_LOCALITY_TO_COMPARE)
     if texts:
         evidence.append("business address text states nothing against it")
     if confirmed:
@@ -381,6 +419,7 @@ __all__ = [
     "CONFIRMATION_REFUSALS",
     "LOCATION_UNRESOLVED",
     "MANDATORY_FIELDS",
+    "NO_LOCALITY_TO_COMPARE",
     "REFUSALS",
     "TEXT_REMEDY",
     "confirmation_applies",
@@ -388,6 +427,7 @@ __all__ = [
     "country_class",
     "location_code",
     "locality_differs",
+    "mandatory_fields",
     "resolve_for_action",
     "structured_status",
 ]

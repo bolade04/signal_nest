@@ -83,6 +83,8 @@ def confirmed(locality: str, city: str, code: str, **fields) -> SimpleNamespace:
 
 
 DALLAS = loc("Dallas", "TX", "US")
+#: A complete business address for the Dallas location (its town required: the location has a city).
+TX_DALLAS = {"country": "US", "region": "TX", "locality": "Dallas"}
 ANCHORAGE = loc("Anchorage", "Alaska", "United States")
 LONDON = loc("London", None, "United Kingdom")
 LAGOS = loc("Lagos", "Lagos", "Nigeria")
@@ -162,9 +164,9 @@ def test_a_stored_confirmation_never_overrides_a_contradiction() -> None:
 # U-4 / U-5: what is compared, in which readings
 # --------------------------------------------------------------------------- #
 def test_a_country_class_region_is_neither_required_nor_compared() -> None:
-    assert answer(LONDON, rule(country="UK")) == "GB"
-    assert answer(LONDON, rule(country="England", region="Texas")) == "GB"
-    assert answer(NAIROBI, rule(country="KE", region="Bavaria")) == "KE"
+    assert answer(LONDON, rule(country="UK", locality="London")) == "GB"
+    assert answer(LONDON, rule(country="England", region="Texas", locality="London")) == "GB"
+    assert answer(NAIROBI, rule(country="KE", region="Bavaria", locality="Nairobi")) == "KE"
 
 
 @pytest.mark.parametrize(
@@ -176,9 +178,8 @@ def test_a_country_class_region_is_neither_required_nor_compared() -> None:
     ],
 )
 def test_codes_names_and_suffixed_names_agree(location, country, region) -> None:
-    assert answer(location, rule(country=country, region=region)) == resolve_jurisdiction(
-        location
-    ).code
+    got = answer(location, rule(country=country, region=region, locality=location.city))
+    assert got == resolve_jurisdiction(location).code
 
 
 # --------------------------------------------------------------------------- #
@@ -215,17 +216,73 @@ def test_the_four_subdivision_countries_require_the_region(code) -> None:
 
 
 @pytest.mark.parametrize("code", ["GB", "KE"])
-def test_other_countries_require_only_the_country(code) -> None:
+def test_other_countries_require_the_country_and_with_a_city_the_town(code) -> None:
     location, fields = OWN[code]
-    assert answer(location, rule(country=fields["country"])) == code
+    assert answer(location, rule(country=fields["country"], locality=fields["locality"])) == code
+    assert answer(location, rule(country=fields["country"])) == BUSINESS_ADDRESS_INCOMPLETE
     assert answer(location, rule(locality=fields["locality"])) == BUSINESS_ADDRESS_INCOMPLETE
+    no_city = loc(None, None, location.country)
+    assert answer(no_city, rule(country=fields["country"])) == code
+
+
+# --------------------------------------------------------------------------- #
+# The town (operator instruction of 2026-11-12, item 3): required when the location has a city
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("code", sorted(OWN))
+def test_the_town_is_required_when_the_location_has_a_city(code) -> None:
+    location, fields = OWN[code]
+    assert location.city
+    assert answer(location, rule(**fields)) == code
+    for empty in (None, "", "   ", "..."):
+        assert answer(location, rule(**{**fields, "locality": empty})) == (
+            BUSINESS_ADDRESS_INCOMPLETE
+        )
+
+
+@pytest.mark.parametrize("city", [None, "", "  ", "-"])
+def test_a_location_with_no_city_has_no_locality_to_compare(city) -> None:
+    """The town stays optional, nothing is derived or copied, and the evidence says so."""
+    location = loc(city, "TX", "US")
+    bare = rule(country="US", region="TX")
+    r = resolve_for_action(location, [bare])
+    assert r.code == "US-TX"
+    assert ba.NO_LOCALITY_TO_COMPARE in r.evidence
+    assert bare.business_address_locality is None  # never filled in
+    assert answer(location, rule(country="US", region="TX", locality="Irving")) == "US-TX"
+    assert answer(location, rule(country="US", region="OK")) == BUSINESS_ADDRESS_CONFLICT
+    assert answer(location, rule(country="US")) == BUSINESS_ADDRESS_INCOMPLETE
+    assert ba.NO_LOCALITY_TO_COMPARE not in resolve_for_action(
+        DALLAS, [rule(**TX_DALLAS)]
+    ).evidence
+
+
+def test_a_genuinely_missing_town_has_no_bypass() -> None:
+    """A location with a city and an address with no locality stays incomplete: a stored
+    confirmation, a free text naming the city, or a placeholder never resolves it."""
+    stale = confirmed("Irving", "Dallas", "US-TX", country="US", region="TX")
+    stale.business_address_locality = None
+    assert answer(DALLAS, stale) == BUSINESS_ADDRESS_INCOMPLETE
+    assert answer(DALLAS, rule("1 Main St, Dallas, TX", country="US", region="TX")) == (
+        BUSINESS_ADDRESS_INCOMPLETE
+    )
+    message = ADDRESS_CLARIFICATIONS[BUSINESS_ADDRESS_INCOMPLETE]
+    assert "the business town or locality" in message
+    assert "named place used in the business's postal address" in message
+    assert "If the location's own city is wrong, correct it on its Details tab instead." in message
 
 
 def test_the_mandatory_set_is_one_table_derived_from_item_33() -> None:
     assert dict(MANDATORY_FIELDS) == {
-        "subdivision": ("business_address_country", "business_address_region"),
-        "country": ("business_address_country",),
+        ("subdivision", True): (
+            "business_address_country", "business_address_region", "business_address_locality"
+        ),
+        ("subdivision", False): ("business_address_country", "business_address_region"),
+        ("country", True): ("business_address_country", "business_address_locality"),
+        ("country", False): ("business_address_country",),
     }
+    assert ba.mandatory_fields("US", "Dallas")[-1] == "business_address_locality"
+    assert ba.mandatory_fields("GB", None) == ("business_address_country",)
+    assert ba.mandatory_fields("GB", " .. ") == ("business_address_country",)
     assert ba.country_class("US") == "subdivision" and ba.country_class("GB") == "country"
     for country in ("US", "CA", "AU", "NG"):
         assert ba.country_class(country) == "subdivision"
@@ -243,7 +300,7 @@ def test_anchorage_with_region_alabama_and_no_country_asks_and_is_never_refused(
     in the location's country, "Alabama" would contradict Alaska; it is never so read."""
     got = answer(ANCHORAGE, rule(region="Alabama"))
     assert got == BUSINESS_ADDRESS_INCOMPLETE and got != BUSINESS_ADDRESS_CONFLICT
-    assert ba.structured_status(rule(region="Alabama"), "US-AK") == "incomplete"
+    assert ba.structured_status(rule(region="Alabama"), "US-AK", "Anchorage") == "incomplete"
     # With the country it reads, the same region is the contradiction it is.
     assert answer(ANCHORAGE, rule(country="US", region="Alabama")) == BUSINESS_ADDRESS_CONFLICT
 
@@ -261,7 +318,7 @@ def test_the_location_is_checked_first() -> None:
                      None):
         assert answer(location, rule(country="Canada")) == LOCATION_UNRESOLVED
     captured = loc("Dallas", "TX", "US", jurisdiction_code="US-OK")
-    assert answer(captured, rule(country="US", region="TX")) == LOCATION_UNRESOLVED
+    assert answer(captured, rule(**TX_DALLAS)) == LOCATION_UNRESOLVED
 
 
 # --------------------------------------------------------------------------- #
@@ -289,7 +346,10 @@ def test_any_other_town_asks_and_is_never_read_as_a_code(town) -> None:
 def test_a_town_is_compared_only_when_both_sides_are_present() -> None:
     no_city = loc(None, "TX", "US")
     assert answer(no_city, rule(country="US", region="TX", locality="Irving")) == "US-TX"
-    assert answer(DALLAS, rule(country="US", region="TX", locality=None)) == "US-TX"
+    # With a city, a missing town is not "nothing to compare": it is incomplete (item 3).
+    assert answer(DALLAS, rule(country="US", region="TX", locality=None)) == (
+        BUSINESS_ADDRESS_INCOMPLETE
+    )
     assert answer(loc("...", "TX", "US"), rule(country="US", region="TX", locality="Irving")) == (
         "US-TX"
     )
@@ -346,7 +406,7 @@ def test_a_confirmation_does_not_answer_anything_but_the_town() -> None:
      ("ACME SA, Calle Mayor 1", "28013"), ("Suite 5, US-AL", "AL"), (SENTINEL, SENTINEL)],
 )
 def test_street_and_postcode_are_never_read(street, postcode) -> None:
-    got = answer(DALLAS, rule(country="US", region="TX", locality="Dallas", street=street,
+    got = answer(DALLAS, rule(**TX_DALLAS, street=street,
                               postcode=postcode))
     assert got == "US-TX"
 
@@ -369,16 +429,16 @@ def test_an_ambiguous_text_asks_with_the_readers_category_once_the_fields_are_co
     text = "1500 Broadway Hartford CT"
     assert resolve_jurisdiction(DALLAS, [rule(text)]).reason == ADDRESS_SUFFIX_AMBIGUOUS
     assert answer(DALLAS, rule(text)) == BUSINESS_ADDRESS_INCOMPLETE
-    assert answer(DALLAS, rule(text, country="US", region="TX")) == ADDRESS_SUFFIX_AMBIGUOUS
+    assert answer(DALLAS, rule(text, **TX_DALLAS)) == ADDRESS_SUFFIX_AMBIGUOUS
     assert ACTION_CLARIFICATIONS[ADDRESS_SUFFIX_AMBIGUOUS] == (
         CLARIFICATIONS[ADDRESS_SUFFIX_AMBIGUOUS] + TEXT_REMEDY
     )
     # The remedy the sentence names resolves: the text left empty.
-    assert answer(DALLAS, rule(None, country="US", region="TX")) == "US-TX"
+    assert answer(DALLAS, rule(None, **TX_DALLAS)) == "US-TX"
 
 
 def test_an_agreeing_text_is_recorded_and_changes_nothing() -> None:
-    r = resolve_for_action(DALLAS, [rule("1 Main St, Dallas, TX", country="US", region="TX")])
+    r = resolve_for_action(DALLAS, [rule("1 Main St, Dallas, TX", **TX_DALLAS)])
     assert r.code == "US-TX"
     assert "business address text states nothing against it" in r.evidence
 
@@ -406,14 +466,14 @@ def test_each_step_runs_over_every_rule_before_the_next() -> None:
         BUSINESS_ADDRESS_CONFLICT
     )
     # Within one step, the first failing rule in the caller's order decides.
-    assert answer(DALLAS, rule("1500 Broadway Hartford CT", country="US", region="TX"),
-                  rule("1 Spring Hill St NE", country="US", region="TX")) == (
+    assert answer(DALLAS, rule("1500 Broadway Hartford CT", **TX_DALLAS),
+                  rule("1 Spring Hill St NE", **TX_DALLAS)) == (
         resolve_jurisdiction(DALLAS, [rule("1500 Broadway Hartford CT")]).reason
     )
 
 
 def test_every_rule_must_pass_each_step_refusals_first() -> None:
-    complete = rule(country="US", region="TX")
+    complete = rule(**TX_DALLAS)
     assert answer(DALLAS, complete, rule()) == BUSINESS_ADDRESS_INCOMPLETE
     assert answer(DALLAS, rule(), rule(country="CA")) == BUSINESS_ADDRESS_CONFLICT
     assert answer(DALLAS, complete, rule("1 Main St, Toronto, Canada", country="US",
@@ -470,8 +530,11 @@ def test_the_web_copy_mirrors_these_categories_and_messages() -> None:
 def test_the_design_messages_verbatim() -> None:
     assert ADDRESS_CLARIFICATIONS[BUSINESS_ADDRESS_INCOMPLETE] == (
         "This location's business address is incomplete. Open the location and, on its Service "
-        "area tab, enter the business country and, for a business in the United States, Canada, "
-        "Australia or Nigeria, the business state or province. Then try again."
+        "area tab, enter the business country; for a business in the United States, Canada, "
+        "Australia or Nigeria, the business state or province; and, when the location has a "
+        "city, the business town or locality: the town, locality or named place used in the "
+        "business's postal address. If the location's own city is wrong, correct it on its "
+        "Details tab instead. Then try again."
     )
     assert ADDRESS_CLARIFICATIONS[BUSINESS_ADDRESS_CONFLICT].endswith(
         "This cannot be confirmed instead of corrected."
@@ -515,22 +578,22 @@ def test_every_reason_is_a_key_and_no_sentinel_reaches_a_message_or_an_added_lin
 @pytest.mark.parametrize(
     ("before", "after", "category"),
     [
-        ((loc("Dallas", None, "US"), rule(country="US", region="TX")),
-         (DALLAS, rule(country="US", region="TX")), LOCATION_UNRESOLVED),
-        ((DALLAS, rule(country="US")), (DALLAS, rule(country="US", region="TX")),
+        ((loc("Dallas", None, "US"), rule(**TX_DALLAS)),
+         (DALLAS, rule(**TX_DALLAS)), LOCATION_UNRESOLVED),
+        ((DALLAS, rule(country="US")), (DALLAS, rule(**TX_DALLAS)),
          BUSINESS_ADDRESS_INCOMPLETE),
-        ((DALLAS, rule(country="US", region="OK")), (DALLAS, rule(country="US", region="TX")),
+        ((DALLAS, rule(country="US", region="OK")), (DALLAS, rule(**TX_DALLAS)),
          BUSINESS_ADDRESS_CONFLICT),
-        ((DALLAS, rule("Toronto, Canada", country="US", region="TX")),
-         (DALLAS, rule(None, country="US", region="TX")), BUSINESS_ADDRESS_TEXT_CONFLICT),
-        ((DALLAS, rule("1500 Broadway Hartford CT", country="US", region="TX")),
-         (DALLAS, rule("1500 Broadway, Dallas, TX", country="US", region="TX")),
+        ((DALLAS, rule("Toronto, Canada", **TX_DALLAS)),
+         (DALLAS, rule(None, **TX_DALLAS)), BUSINESS_ADDRESS_TEXT_CONFLICT),
+        ((DALLAS, rule("1500 Broadway Hartford CT", **TX_DALLAS)),
+         (DALLAS, rule("1500 Broadway, Dallas, TX", **TX_DALLAS)),
          ADDRESS_SUFFIX_AMBIGUOUS),
         ((DALLAS, rule(country="US", region="TX", locality="Irving")),
          (DALLAS, confirmed("Irving", "Dallas", "US-TX", country="US", region="TX")),
          BUSINESS_ADDRESS_LOCALITY_UNCONFIRMED),
         ((DALLAS, rule(country="US", region="TX", locality="Irving")),
-         (DALLAS, rule(country="US", region="TX", locality="Dallas")),
+         (DALLAS, rule(**TX_DALLAS)),
          BUSINESS_ADDRESS_LOCALITY_UNCONFIRMED),
     ],
 )

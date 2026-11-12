@@ -8,8 +8,9 @@ address (``jobs/pipeline.py`` ``_coverage_rule_for`` copies nine other fields of
   has empty, complete and agreeing, contradicting, or confirmed structured fields, and for one
   whose rule has none; ``CoverageRule`` has no field for any of them;
 * **S-2** a Scout run (the fixture connector, on the seeded demo database) for a location with
-  empty fields, and for the same location with a contradicting, incomplete address, scans,
-  scores and decides exactly the same;
+  empty fields, and for the same location with a contradicting, incomplete address, or one
+  complete but for the town the location's city requires (operator instruction of 2026-11-12,
+  item 3), scans, scores and decides exactly the same;
 * **S-3** the seed leaves the structured fields empty (nothing copies the location in);
 * **S-4** creating and running a Scout needs nothing of the structured fields (S-2 runs one
   whose address could not support a jurisdiction-dependent action).
@@ -52,6 +53,9 @@ STATES = {
                   "locality_confirmed_jurisdiction": "US-TX",
                   "locality_confirmed_at": datetime(2026, 11, 12, tzinfo=UTC)},
     "incomplete": {"business_address_locality": "Toronto"},
+    # Operator instruction of 2026-11-12, item 3: the town is required before jurisdiction-
+    # dependent actions when the location has a city; a Scout search is not such an action.
+    "no-town": {"business_address_country": "United States", "business_address_region": "TX"},
 }
 
 
@@ -135,7 +139,7 @@ def _outcome(s, request_id: str) -> list[tuple]:
 
 def test_a_scout_run_is_the_same_whatever_the_structured_fields_hold(world) -> None:
     results = {}
-    for state in ("empty", "contradicting", "incomplete"):
+    for state in ("empty", "contradicting", "incomplete", "no-town"):
         with world() as s:
             location = _dallas(s)
             rule = s.scalar(
@@ -158,3 +162,4 @@ def test_a_scout_run_is_the_same_whatever_the_structured_fields_hold(world) -> N
     assert results["empty"][0] > 0 and results["empty"][1] > 0
     assert results["contradicting"] == results["empty"]
     assert results["incomplete"] == results["empty"]
+    assert results["no-town"] == results["empty"]  # the town rule changes no Scout search
