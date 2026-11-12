@@ -38,7 +38,11 @@ federations listed in :mod:`app.jurisdiction.subdivisions`, the first-level subd
   :data:`ADDRESS_PLACE_UNCLEAR`, and a part that is only a direction with
   :data:`ADDRESS_DIRECTION_AMBIGUOUS` unless explicit geography settles it. A first part read as a
   town and a code ("Dallas TX, 1 Main St"), which may be a business's name ("ACME SA"), asks with
-  :data:`ADDRESS_PLACE_UNCLEAR` unless explicit geography settles it (W21-REV-GEO r1 C-1).
+  :data:`ADDRESS_PLACE_UNCLEAR` unless explicit geography settles it (W21-REV-GEO r1 C-1);
+* a business address is only a route designator ("1 SR 520", "12000 FM 1960"), whose code reading
+  may be a road and contradicts the location: :data:`ADDRESS_ROUTE_AMBIGUOUS` (GEO-P2). A floor
+  ("Fl 3") is never read as Florida, and a street with no house number ("Main St") is an ambiguous
+  street line.
 
 A city alone never resolves, known or unknown: a bare city says nothing about which
 country it is in (``app.geography.markets`` reads a bare "London" the same way). Every
@@ -161,6 +165,10 @@ ADDRESS_PLACE_UNCLEAR: Final = "address_place_unclear"
 #: may be a street's direction or a state or country code, and as a code it contradicts the
 #: location.
 ADDRESS_DIRECTION_AMBIGUOUS: Final = "address_direction_ambiguous"
+#: Reason category (GEO-P2): a business address that is only a route designator ("1 SR 520",
+#: "12000 FM 1960") may be a road, or a state or country code that contradicts the location. (A
+#: designator in a later part keeps D1's reason, C-16.)
+ADDRESS_ROUTE_AMBIGUOUS: Final = "address_route_ambiguous"
 
 #: The fixed, customer-safe clarification for each reason category. It never contains the
 #: address or other customer text, nor the resolver's evidence.
@@ -185,6 +193,13 @@ CLARIFICATIONS: Final[Mapping[str, str]] = MappingProxyType(
             "example 'Lagos State' or 'Nigeria') after the town, separated by a comma. If it is "
             "the name of the business or a building, leave it out of the address. Otherwise "
             "correct or remove it."
+        ),
+        ADDRESS_ROUTE_AMBIGUOUS: (
+            "We couldn't tell whether a route or unit number in the business address (such as "
+            "'SR 520', 'FM 1960' or 'Unit 5 NY 10001') is part of the street or a state or "
+            "country. After it, write the town and the state or province in full, separated by "
+            "commas (for example '1 SR 520, Redmond, Washington'), or write the road's name in "
+            "full (for example '1 State Route 520')."
         ),
         ADDRESS_DIRECTION_AMBIGUOUS: (
             "We couldn't tell whether a part of the business address that is only a direction "
@@ -422,6 +437,18 @@ def _address_check(
             if found and all(found):
                 either = " or ".join(found)
                 return True, f"is ambiguous: a name or {either}", ADDRESS_PLACE_UNCLEAR
+        for possible in reading.routes:
+            # GEO-P2 (G-8): a designator's code, settled or ruled out as an ambiguous reading is.
+            if countries and possible.country not in countries:
+                continue
+            conflict = _conflict(possible, country, code)
+            if conflict is not None:
+                return True, f"is ambiguous: a route or {conflict}", ADDRESS_ROUTE_AMBIGUOUS
+        for group in reading.route_groups:
+            found = _group_conflicts(group, countries, country, code)
+            if found and all(found):
+                either = " or ".join(found)
+                return True, f"is ambiguous: a route or {either}", ADDRESS_ROUTE_AMBIGUOUS
         for place in directions:
             # GEO-P1: read as C-14 reads "St NE": explicit geography settles it (above).
             found = _group_conflicts(place.readings, countries, country, code)
@@ -539,6 +566,7 @@ def resolve_jurisdiction(
 
 __all__ = [
     "ADDRESS_DIRECTION_AMBIGUOUS",
+    "ADDRESS_ROUTE_AMBIGUOUS",
     "ADDRESS_NAMES_ANOTHER_PLACE",
     "ADDRESS_PLACE_UNCLEAR",
     "ADDRESS_SUFFIX_AMBIGUOUS",
