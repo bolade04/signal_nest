@@ -384,6 +384,28 @@ def test_p3b_the_remedy_resolves_and_another_area_is_still_refused():
     )
 
 
+@pytest.mark.parametrize(
+    ("location", "address", "code"),
+    [
+        (MONTGOMERY, "US-AL, Montgomery, State of Texas", "US-AL"),
+        (MONTGOMERY, "US-AL, Montgomery, Texas State", "US-AL"),
+        (UMUAHIA, "Adamawa State, NG-AB, Umuahia", "NG-AB"),
+        (MONTGOMERY, "US-AL, Montgomery, Ont.", "US-AL"),
+        (DALLAS, "US-TX, Dallas, Korea", "US-TX"),
+    ],
+)
+def test_p3b_another_area_named_by_a_prefix_a_suffix_or_an_alias_is_refused(
+    location, address, code
+):
+    """G-3 asks only when no other part names an area: a prefixed or suffixed subdivision and a
+    listed alias (G-10) name one, so the own code with another area is refused, not asked."""
+    _refused(
+        location,
+        address,
+        f"states subdivision {code}, but the rest of the address cannot be read with it",
+    )
+
+
 # --------------------------------------------------------------------------- #
 # P3-b-3. Other scripts ask (register G-10; operator ruling)
 # --------------------------------------------------------------------------- #
