@@ -503,7 +503,7 @@ def _names_an_area_alone(part: str) -> bool:
         return True
     reading = read_business_address(part)
     return bool(
-        any(s is not None and s.country for s in (reading.stated, *reading.parts))
+        any(s is not None and s.country for s in (reading.stated, *reading.parts, *reading.forms))
         or reading.ambiguous
         or reading.alternatives
         or reading.ambiguous_alternatives
@@ -735,6 +735,12 @@ class BusinessAddressReading:
     #: reading agrees and another contradicts, unless the address states one of them, and refuses
     #: when every reading contradicts.
     alias_groups: tuple[tuple[MarketIdentity, ...], ...] = ()
+    #: GEO-P3 (register G-7; ruling P3-R-9): the country that each later part's unlisted ISO
+    #: 3166-2 form or country-prefixed postcode names ("Munich, DE-BY": DE). It agrees with or
+    #: contradicts the location as an explicit reading does, but reads only the form itself: it
+    #: settles no other part's reading ("Munich BY, DE-BY" asks as on GEO-P2, since a bare "BY"
+    #: is also Belarus).
+    forms: tuple[MarketIdentity, ...] = ()
 
 
 def _alternatives(text: str) -> tuple[MarketIdentity, ...]:
@@ -948,6 +954,7 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
         reading.route_groups,
         reading.homonyms,
         tuple(g for g in (_alias_readings(part) for part in _written_parts(text)) if g),
+        reading.forms,
     )
 
 
@@ -1087,14 +1094,15 @@ def _read_business_address(text: str) -> BusinessAddressReading:
     groups = list(_groups(", ".join(kept))) + groups
     ambiguous_groups = _part_groups(raw_parts[0])[1] + ambiguous_groups
     # GEO-P3 (G-7): an unlisted ISO 3166-2 form or a country-prefixed postcode names its country,
-    # wherever it is written ("DE-BY, Bavaria"; "ACME, Flat 3, NO-0150 Oslo").
+    # wherever it is written ("DE-BY, Bavaria"; "ACME, Flat 3, NO-0150 Oslo"). Ruling P3-R-9: it
+    # reads only the form itself (``forms``), never another part's reading.
     stated = _with_unlisted_form_country(stated, None)
-    parts += [
+    forms = tuple(
         MarketIdentity(country=found, label=raw.strip())
         for raw in raw_parts
         if (found := _unlisted_form_country(raw)) is not None
-    ]
-    shadowed = _unlisted_form_shadows(text)
+    )
+    shadowed = _unlisted_form_shadows(text, raw_parts)
     if stated is not None and stated.country in shadowed:
         stated = MarketIdentity(city=stated.city, label=stated.label)
     with_homonym, homonyms = _with_nigerian_homonym(tuple(groups), raw_parts[-1])
@@ -1106,6 +1114,7 @@ def _read_business_address(text: str) -> BusinessAddressReading:
         with_homonym,
         tuple(ambiguous_groups),
         homonyms=homonyms,
+        forms=forms,
     )
 
 
@@ -1131,16 +1140,32 @@ def _unlisted_form_country(part: str) -> str | None:
     return None
 
 
-def _unlisted_form_shadows(text: str) -> frozenset[str]:
+def _unlisted_form_shadows(text: str, raw_parts: list[str]) -> frozenset[str]:
     """GEO-P3 (G-7): the countries that the letters after the hyphen of an unlisted form would name
-    if read alone ("DE-BY": BY, Belarus), which the form's own reading replaces."""
+    if read alone ("DE-BY": BY, Belarus), which the form's own reading replaces. Ruling P3-R-9: not
+    when another part writes those letters as a bare code ("..., Munich DE-BY, BY"; "Munich BY,
+    DE-BY"): that code keeps its own readings."""
     found = set()
     for match in _UNLISTED_FORM.finditer(text):
         if match[1] in COUNTRIES and match[1] not in _CODED_COUNTRIES:
             second = _country_code(match[2].lower())
-            if second is not None and second != match[1]:
+            if (
+                second is not None
+                and second != match[1]
+                and not _bare_code_elsewhere(raw_parts, match[2])
+            ):
                 found.add(second)
     return frozenset(found)
+
+
+def _bare_code_elsewhere(raw_parts: list[str], letters: str) -> bool:
+    """GEO-P3 (ruling P3-R-9): does a part, without its unlisted forms and any postcode, end in
+    ``letters`` as a word of its own ("BY", "Munich BY", "Munich BY 80331")?"""
+    for part in raw_parts:
+        words = _strip_postcode(fold(_UNLISTED_FORM.sub(" ", part))).split()
+        if words and words[-1] == letters.lower():
+            return True
+    return False
 
 
 def _with_unlisted_form_country(

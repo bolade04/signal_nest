@@ -308,6 +308,41 @@ def test_p3_an_unlisted_code_form_elsewhere_is_refused(address, evidence):
     _refused(DALLAS, address, evidence)
 
 
+MINSK = _location("Minsk", "Minsk", "Belarus")
+YENAGOA = _location("Yenagoa", "Bayelsa", "Nigeria")
+
+
+def test_p3_r9_an_unlisted_form_reads_only_itself():
+    """Ruling P3-R-9: "DE-BY" is Germany's form, but a separate bare "BY" is also Belarus or Bayelsa
+    State. The form does not settle that code, which keeps its outcome on GEO-P2: it asks when
+    ambiguous and is refused when it contradicts."""
+    _clarified(
+        MUNICH,
+        "Munich BY, DE-BY",
+        ADDRESS_PLACE_UNCLEAR,
+        "is ambiguous: a name or country BY or country NG",
+    )
+    _refused(MUNICH, "Marienplatz 1, Munich, BY, DE-BY", "states country BY or country NG")
+    _refused(MUNICH, "Marienplatz 1, Munich DE-BY, BY", "states country BY")
+    _refused(MUMBAI, "Andheri, Mumbai, MH, IN-MH", "states country MH")
+
+
+def test_p3_r9_the_form_still_agrees_or_contradicts_by_itself():
+    """The form alone still names its country, and an explicit country still settles the bare code
+    as before. A form that contradicts is refused first, before review I-6's town and Nigerian code
+    can ask ("Springfield BY": Belarus or Bayelsa State)."""
+    assert _resolve(MUNICH, "Munich, DE-BY").code == "DE"
+    assert _resolve(MUNICH, "Munich BY, Germany").code == "DE"
+    _refused(MINSK, "Munich BY, DE-BY", "states country DE")
+    _refused(YENAGOA, "1 Main St, Springfield BY, DE-BY", "states country DE")
+    _clarified(
+        YENAGOA,
+        "1 Main St, Springfield BY",
+        ADDRESS_PLACE_UNCLEAR,
+        "is ambiguous: country BY or subdivision NG-BY",
+    )
+
+
 def test_p3_roads_and_hyphenated_names_are_not_code_forms():
     """ "AL-AIN" (Al Ain) and "GA-400" (a road) keep their readings."""
     _clarified(

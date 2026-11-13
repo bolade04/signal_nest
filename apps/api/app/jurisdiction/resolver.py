@@ -435,13 +435,17 @@ def _reading_check(
     city: str | None,
 ) -> tuple[bool, str | None, str | None]:
     """:func:`_address_check` for one reading of the address."""
-    explicit = [s for s in (reading.stated, *reading.parts) if s is not None and s.country]
+    # GEO-P3 (ruling P3-R-9): an unlisted form's country (``reading.forms``: "DE-BY" is Germany)
+    # agrees with or contradicts the location as explicit text does, but settles no other part's
+    # reading ("Munich BY, DE-BY" asks, as on GEO-P2: a bare "BY" is also Belarus).
+    settling = [s for s in (reading.stated, *reading.parts) if s is not None and s.country]
+    explicit = settling + [s for s in reading.forms if s.country]
     homonym_ask = None
     last = last_written_part(address)
-    nigeria_stated = any(s.country == "NG" for s in explicit)
+    nigeria_stated = any(s.country == "NG" for s in settling)
     code_contradicts = any(
         p.kind == PLACE_CODE and _part_conflicts(p, country, code) for p in reading.places
-    )
+    ) or any(_conflict(form, country, code) is not None for form in reading.forms if form.country)
     for stated in list(explicit):
         conflict = _conflict(stated, country, code)
         if conflict is not None:
@@ -452,8 +456,10 @@ def _reading_check(
             ]
             if agreeing_state:
                 # GEO-P3 (review I-6): "Springfield AB" is Alberta or Abia State. Nigeria written
-                # settles it, and an explicit code elsewhere that contradicts is refused below;
-                # otherwise one reading agrees, one contradicts, and the address asks.
+                # settles it, and an explicit code or unlisted form elsewhere that contradicts is
+                # refused below (ruling P3-R-9: "1 Main St, Town BY, DE-BY" for a Bayelsa location
+                # is refused as Germany, as on GEO-P2); otherwise one reading agrees, one
+                # contradicts, and the address asks.
                 if nigeria_stated or code_contradicts:
                     continue
                 either = " or ".join(
@@ -479,6 +485,7 @@ def _reading_check(
                 if agreeing:
                     # "Niger" is the country or Niger State: one reading agrees, one contradicts.
                     explicit.remove(stated)
+                    settling.remove(stated)
                     either = " or ".join(
                         f"subdivision {_stated_subdivision(a, country) or a.region}"
                         for a in agreeing
@@ -491,7 +498,7 @@ def _reading_check(
         found = _group_conflicts(group, (), country, code)
         if found and all(found):
             return True, "states " + " or ".join(found), None
-        unsettled = _unsettled_homonym(group, found, reading, explicit, country, code)
+        unsettled = _unsettled_homonym(group, found, reading, settling, country, code)
         if unsettled is not None:
             return True, f"is ambiguous: {unsettled}", ADDRESS_PLACE_UNCLEAR
     for group in reading.alias_groups:
@@ -515,7 +522,7 @@ def _reading_check(
     contradicting = [(p, found) for p in places if (found := _part_conflicts(p, country, code))]
     agreeing = [
         r
-        for r in (*explicit, *(r for group in reading.alternatives for r in group))
+        for r in (*settling, *(r for group in reading.alternatives for r in group))
         if _conflict(r, country, code) is None
     ] + [
         r
@@ -529,8 +536,8 @@ def _reading_check(
             place.kind == PLACE_NAME and not _own_area_named(place, agreeing, country, code)
         ):
             return True, "states " + " or ".join(found), None
-    if not any(_stated_subdivision(stated, country) is not None for stated in explicit):
-        countries = {stated.country for stated in explicit}
+    if not any(_stated_subdivision(stated, country) is not None for stated in settling):
+        countries = {stated.country for stated in settling}
         for possible in reading.ambiguous:
             if countries and possible.country not in countries:
                 continue
@@ -578,7 +585,7 @@ def _reading_check(
         # elsewhere ("Seoul, Korea, Republic of Korea"); never the location or place knowledge.
         if not any(_conflict(r, country, code) for r in group):
             continue
-        if any(_same_area(s, r) for s in explicit for r in group):
+        if any(_same_area(s, r) for s in settling for r in group):
             continue
         either = " or ".join(
             f"subdivision {r.region}" if r.region else f"country {r.country}" for r in group
