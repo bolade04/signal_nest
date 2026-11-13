@@ -44,6 +44,7 @@ import os
 import string
 import subprocess
 import sys
+import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -656,6 +657,7 @@ from app.tests._creative_support import (  # noqa: E402
 from app.tests.test_jurisdiction_failclosed import (  # noqa: E402
     MATRIX_LOCATIONS,
     _CountingProvider,
+    backstop_refuses_update,
     capture,
     evidence,
 )
@@ -721,6 +723,39 @@ def _generate(world: CreativeWorld, ws: str, brief_id: str) -> dict:
 def _refusal(world: CreativeWorld, draft_id: str) -> str | None:
     with world.session() as s:
         return draft_approval_refusal(s, s.get(CreativeDraft, draft_id))
+
+
+def _legacy_draft(world: CreativeWorld, draft: dict) -> dict:
+    """A draft written before 5D-W3, with no ``jurisdiction_code``, made as such rows were made:
+    by INSERT, never by changing a stored draft. It is ``draft`` written again as the next version
+    of its brief, with its review, both without a code (the text and the passed review are the
+    generated ones, so only the jurisdiction differs).
+
+    On PostgreSQL, D-N4 item 37's append-only backstop (#318) refuses the older way, an UPDATE of
+    the stored draft, and that refusal is asserted first; the privacy-writer mark is never taken.
+    """
+    if world.witness.dialect.name == "postgresql":
+        backstop_refuses_update(world, CreativeDraft, draft["id"], jurisdiction_code=None)
+    review = _review(world, draft["id"])
+    version = max(d["draft_version"] for d in _drafts(world, draft["brief_id"])) + 1
+    legacy_id, review_id = uuid.uuid4().hex, uuid.uuid4().hex
+    with world.witness.begin() as conn:
+        conn.execute(
+            CreativeDraft.__table__.insert().values(
+                {**draft, "id": legacy_id, "draft_version": version,
+                 "parent_draft_id": draft["id"], "jurisdiction_code": None}
+            )
+        )  # fmt: skip
+        conn.execute(
+            ContentReview.__table__.insert().values(
+                {**review, "id": review_id, "draft_id": legacy_id, "draft_version": version,
+                 "jurisdiction_code": None}
+            )
+        )  # fmt: skip
+    legacy = world.row(CreativeDraft, legacy_id)
+    assert legacy["jurisdiction_code"] is None
+    assert _review(world, legacy_id)["jurisdiction_code"] is None
+    return legacy
 
 
 # --------------------------------------------------------------------------- #
@@ -851,10 +886,8 @@ def test_the_approval_recheck_reads_the_library_in_the_drafts_jurisdiction(
     texan = _generate(world, ws, world.seed_brief(ws, jurisdiction_code="US-TX"))
     british = _generate(world, ws, world.seed_brief(ws, jurisdiction_code="GB"))
     legacy = _generate(world, ws, world.seed_brief(ws, jurisdiction_code="US-TX"))
+    legacy = _legacy_draft(world, legacy)  # a draft written before 5D-W3: no code
     assert {_refusal(world, d["id"]) for d in (texan, british, legacy)} == {None}
-    table = CreativeDraft.__table__
-    with world.witness.begin() as conn:  # a draft written before 5D-W3: no code
-        conn.execute(update(table).where(table.c.id == legacy["id"]).values(jurisdiction_code=None))
     _restricted(world, ws, "weekend parking", "blocked", ["GB"])
     assert _refusal(world, texan["id"]) is None
     assert _refusal(world, british["id"]) == "blocked_claim"
@@ -862,8 +895,7 @@ def test_the_approval_recheck_reads_the_library_in_the_drafts_jurisdiction(
     disclaimers = world.workspace("claims recheck disclaimer")
     texan = _generate(world, disclaimers, world.seed_brief(disclaimers, jurisdiction_code="US-TX"))
     legacy = _generate(world, disclaimers, world.seed_brief(disclaimers, jurisdiction_code="US-TX"))
-    with world.witness.begin() as conn:
-        conn.execute(update(table).where(table.c.id == legacy["id"]).values(jurisdiction_code=None))
+    legacy = _legacy_draft(world, legacy)
     _restricted(world, disclaimers, "Licensed in Kenya.", "required_disclaimer", ["KE"])
     assert _refusal(world, texan["id"]) is None
     assert _refusal(world, legacy["id"]) == "disclaimer_missing"  # B-2
@@ -880,7 +912,6 @@ def test_b2_at_the_service_a_legacy_draft_gets_every_restricted_entry(
     disclaimer it does not carry, whatever jurisdiction they are restricted to; a restricted
     approved entry changes nothing for it."""
     world = snapshot_world
-    table = CreativeDraft.__table__
     for kind, text, codes, expected in (
         ("blocked", "weekend parking", ["NG-LA"], "blocked_claim"),
         ("prohibited", "weekend parking", ["KE"], "blocked_claim"),
@@ -888,11 +919,8 @@ def test_b2_at_the_service_a_legacy_draft_gets_every_restricted_entry(
         ("approved", "Family run since 1998", ["GB"], None),
     ):
         ws = world.workspace(f"b2 service {kind}")
-        legacy = _generate(world, ws, world.seed_brief(ws, jurisdiction_code="US-TX"))
-        with world.witness.begin() as conn:
-            conn.execute(
-                update(table).where(table.c.id == legacy["id"]).values(jurisdiction_code=None)
-            )
+        coded = _generate(world, ws, world.seed_brief(ws, jurisdiction_code="US-TX"))
+        legacy = _legacy_draft(world, coded)
         assert world.row(CreativeDraft, legacy["id"])["jurisdiction_code"] is None
         assert _refusal(world, legacy["id"]) is None  # the library is empty so far
         _restricted(world, ws, text, kind, codes)

@@ -31,6 +31,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import DBAPIError
 
 from app.audit.models import AuditLog
 from app.brands.service import get_primary_brand
@@ -1133,19 +1134,59 @@ def test_item_31_is_checked_before_approval_at_the_generate_route(
     assert _jobs_for(world, ws) == 0 and model.requests == []
 
 
+#: The SQLSTATE of D-N4 item 37's PostgreSQL append-only backstop (#318, ``d0a8bce8de6a``).
+APPEND_ONLY_SQLSTATE = "SNA01"
+
+
+def backstop_refuses_update(world: CreativeWorld, model, row_id: str, **values) -> None:
+    """On PostgreSQL, D-N4 item 37's backstop refuses an UPDATE of a guarded row, whoever issues
+    it (here the test's own witness connection, outside any privacy-writer transaction), and the
+    row is unchanged. The test never takes the privacy-writer mark, which is for the privacy
+    writers only (37 ruling)."""
+    assert world.witness.dialect.name == "postgresql"
+    table = model.__table__
+    before = world.row(model, row_id)
+    with pytest.raises(DBAPIError) as refused:
+        with world.witness.begin() as conn:
+            conn.execute(update(table).where(table.c.id == row_id).values(**values))
+    assert getattr(refused.value.orig, "sqlstate", None) == APPEND_ONLY_SQLSTATE, refused.value
+    assert world.row(model, row_id) == before
+
+
+def _job_for_a_brief_without_a_code(world: CreativeWorld, ws: str, stored) -> tuple[str, str]:
+    """A queued ``creative.generate`` job whose brief holds ``stored`` (not a code) when the job
+    runs: ``(brief id, job id)``. Item 31 must refuse it in the job itself.
+
+    * **SQLite** (no backstop): the brief is coded when the generate route checks it, and is
+      changed afterwards through the witness, the window between enqueue and run.
+    * **PostgreSQL**: since D-N4 item 37 (#318) the append-only backstop refuses that change
+      (asserted), so the window does not exist there. The job's own check is exercised on a
+      brief inserted with ``stored``, as legacy rows are written (an INSERT is never refused),
+      its job enqueued exactly as the route builds one but without the route's check."""
+    if world.witness.dialect.name != "postgresql":
+        brief_id = world.seed_brief(ws, jurisdiction_code="US-TX")
+        r = world.generate(brief_id, ws=ws)
+        assert r.status_code == 202, r.text
+        table = RecommendationBrief.__table__
+        with world.witness.begin() as conn:
+            conn.execute(
+                update(table).where(table.c.id == brief_id).values(jurisdiction_code=stored)
+            )
+        return brief_id, r.json()["job_id"]
+    coded = world.seed_brief(ws, jurisdiction_code="US-TX")
+    backstop_refuses_update(world, RecommendationBrief, coded, jurisdiction_code=stored)
+    legacy = world.seed_brief(ws, jurisdiction_code=stored)
+    assert world.row(RecommendationBrief, legacy)["jurisdiction_code"] == stored
+    return legacy, _enqueue_generation(world, legacy)
+
+
 @pytest.mark.parametrize("stored", NOT_CAPTURED, ids=repr)
 def test_item_31_the_job_refuses_a_brief_nulled_between_enqueue_and_run(
     capture_world, phase5_on, model, stored
 ):
     world = capture_world
     ws = world.workspace("item 31 job")
-    brief_id = world.seed_brief(ws, jurisdiction_code="US-TX")
-    r = world.generate(brief_id, ws=ws)
-    assert r.status_code == 202, r.text
-    job_id = r.json()["job_id"]
-    table = RecommendationBrief.__table__
-    with world.witness.begin() as conn:
-        conn.execute(update(table).where(table.c.id == brief_id).values(jurisdiction_code=stored))
+    brief_id, job_id = _job_for_a_brief_without_a_code(world, ws, stored)
     world.drain()
     job = world.job(job_id)
     assert (job["status"], job["last_error_code"], job["last_error_summary"]) == (
@@ -1175,11 +1216,7 @@ def test_item_31_the_job_refusal_is_terminal_and_releases_the_generation_locks(
     second job in the same workspace runs right after it."""
     world = capture_world
     ws = world.workspace("item 31 terminal")
-    legacy = world.seed_brief(ws, jurisdiction_code="US-TX")
-    refused = world.generate(legacy, ws=ws).json()["job_id"]
-    table = RecommendationBrief.__table__
-    with world.witness.begin() as conn:
-        conn.execute(update(table).where(table.c.id == legacy).values(jurisdiction_code=None))
+    legacy, refused = _job_for_a_brief_without_a_code(world, ws, None)
     world.drain()
     job = world.job(refused)
     assert (job["status"], job["last_error_code"], job["attempt_count"]) == (
