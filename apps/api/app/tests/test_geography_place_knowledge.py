@@ -811,3 +811,54 @@ def test_p3_r16_a_part_in_another_script_equal_to_the_city_asks():
     assert _resolve(_location("Moscow", None, "Russia"), "1 Tverskaya St, Moscow, Russia").code == (
         "RU"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Review W21-REV-GEO P3 r1, condition C-1 (ruling P3-r1-R-1): rule 3a's second reading keeps
+# every other part in its place
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "evidence"),
+    [
+        (WASHINGTON_DC, "Washington, Dallas TX, 1 Main St, DC 20001", "states subdivision US-TX"),
+        (
+            _location("Georgetown", "District of Columbia", "United States"),
+            "Washington, Dallas TX, 1 Main St, DC 20001",
+            "states subdivision US-TX",
+        ),
+        (
+            _location("Lagos", "Lagos", "Nigeria"),
+            "Lagos, Kano KN, 1 Allen Ave, Lagos State",
+            "states country KN",
+        ),
+    ],
+)
+def test_p3_r1_c1_a_part_after_a_left_out_first_part_keeps_its_place(location, address, evidence):
+    """When rule 3a leaves out a first part equal to the location's city, the next part is not read
+    as the address's first part, whose town and code D1 never refuses. So "Dallas TX" or "Kano KN"
+    there is refused, as it is for a location whose city field is "Georgetown" and on GEO-P2: the
+    city field never turns a contradiction in another part into a clarification."""
+    _refused(location, address, evidence)
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "evidence"),
+    [
+        (
+            _location("Abia", "Adamawa", "Nigeria"),
+            "Abia, 1 Main St, Nigeria",
+            "is ambiguous: a town's name or subdivision NG-AB",
+        ),
+        (
+            _location("Abia", "Adamawa", "Nigeria"),
+            "1 Main St, Abia, Nigeria",
+            "is ambiguous: a town's name or subdivision NG-AB",
+        ),
+        (WASHINGTON_DC, "US-DC, Washington", "is ambiguous: a town's name or subdivision US-WA"),
+    ],
+)
+def test_p3_r1_c1_the_town_parts_own_ask_is_unchanged(location, address, evidence):
+    """Beside C-1's rows: where the refused part is the town part itself, rule 3a still asks."""
+    _clarified(location, address, ADDRESS_PLACE_UNCLEAR, evidence)

@@ -473,6 +473,13 @@ def without_town_parts(text: str | None, towns: frozenset[str]) -> str | None:
     kept = [as_written for as_written, raw in pairs if not _town_part(as_written, raw, towns)]
     if len(kept) == len(pairs) or not any(address_part_key(raw) for raw in kept):
         return None
+    named = [(as_written, raw) for as_written, raw in pairs if address_part_key(raw)]
+    if len(named) > 1 and _town_part(*named[0], towns):
+        # Review W21-REV-GEO P3 r1 F-1: a part after a left-out first part keeps its place, so it is
+        # not read as the address's first part ("Washington, Dallas TX, 1 Main St, DC 20001"). The
+        # first part is kept as a word that names nothing, in the town part's case.
+        first = named[0][0].strip()
+        kept.insert(0, "ZZYZX" if first.isupper() else "zzyzx" if first.islower() else "Zzyzx")
     return ", ".join(raw.strip() for raw in kept if raw.strip())
 
 
