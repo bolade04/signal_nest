@@ -531,13 +531,29 @@ def test_the_text_refusal_is_worded_as_a_reading() -> None:
     )
 
 
+#: RI-1 (lane GEO-P4): the reader category the coordinator named on 2026-11-13. The web copy
+#: carries it before GEO-P4 merges, with GEO-P4's provisional wording; once the reader's
+#: ``CLARIFICATIONS`` holds it, its line is checked word for word like every other.
+RI1_CATEGORY = "address_territory_unclear"
+
+
 def test_the_web_copy_mirrors_these_categories_and_messages() -> None:
     """The web's static copy (``apps/web/src/lib/jurisdictionClarifications.ts``), which the brief
-    panel shows for ``error.details.reason``, holds exactly these five lines and the remedy."""
+    panel shows for ``error.details.reason`` (#313), holds exactly the vocabulary: this package's
+    five lines in ``ADDRESS_CLARIFICATIONS``, the reader's in ``READER_CLARIFICATIONS``, each word
+    for word, and the remedy. RI-1's category is the one line allowed ahead of the reader."""
     mirror = (APP.parents[1] / "web/src/lib/jurisdictionClarifications.ts").read_text()
+    address, _, reader = mirror.partition("export const READER_CLARIFICATIONS")
+    assert reader, "the reader's categories have their own export"
     for category, message in ADDRESS_CLARIFICATIONS.items():
-        assert f'  {category}: "{message}",\n' in mirror, category
-    assert mirror.count('",\n') == len(ADDRESS_CLARIFICATIONS)
+        assert f'  {category}: "{message}",\n' in address, category
+    for category, message in CLARIFICATIONS.items():
+        assert f'  {category}: "{message}",\n' in reader, category
+    pending = {RI1_CATEGORY} - set(CLARIFICATIONS)
+    for category in pending:
+        assert reader.count(f'  {category}: "') == 1, category
+    assert address.count('",\n') == len(ADDRESS_CLARIFICATIONS)
+    assert reader.count('",\n') == len(CLARIFICATIONS) + len(pending)
     assert f'export const TEXT_REMEDY = "{TEXT_REMEDY}";' in mirror
 
 
