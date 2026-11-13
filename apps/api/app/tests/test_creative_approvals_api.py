@@ -152,19 +152,22 @@ def test_a_required_disclaimer_added_after_the_review_blocks_approval(world):
 def _ui_claim(world, ws: str, text: str, kind: str) -> str:
     """A claim created the way the campaign-context UI creates one: a steward's POST to
     ``/claims`` with the form's fields (``kind`` from its select: approved / restricted /
-    prohibited)."""
+    blocked / required_disclaimer; D-N4 item 36 replaced the select's "Prohibited" with
+    "Blocked", value ``blocked``, and the API refuses ``prohibited`` with a 422)."""
     r = world.send("POST", f"/workspaces/{ws}/claims", "compliance_reviewer",
                    {"text": text, "kind": kind, "risk_level": "high", "category": "parking"})
     assert r.status_code == 201, r.text
     return r.json()["id"]
 
 
-def test_a_claim_the_ui_marks_prohibited_blocks_the_draft_end_to_end(world):
-    """DEFECT-5CW4-2 through the API: the UI's "Prohibited" kind blocks the review of a
-    draft generated after it, and the approval of a draft generated before it; the UI's
-    "Restricted" blocks nothing."""
-    ws = world.workspace("ui prohibited")
-    claim = _ui_claim(world, ws, "weekend parking", "prohibited")
+def test_a_claim_the_ui_marks_blocked_blocks_the_draft_end_to_end(world):
+    """DEFECT-5CW4-2 through the API: the UI's blocking kind ("Blocked", formerly
+    "Prohibited") blocks the review of a draft generated after it, and the approval of a
+    draft generated before it; the UI's "Restricted" blocks nothing. A stored
+    ``prohibited`` is migrated to ``blocked`` (D-N4 item 36) and is still read as blocking
+    (``test_creative_generation``, ``test_claim_kinds``)."""
+    ws = world.workspace("ui blocked")
+    claim = _ui_claim(world, ws, "weekend parking", "blocked")
     draft = _draft(world, ws, channel="email")
     [review] = world.rows(ContentReview, draft_id=draft["id"])
     assert (review["is_blocked"], review["blocked_claim_ids"]) == (True, [claim])
@@ -172,10 +175,10 @@ def test_a_claim_the_ui_marks_prohibited_blocks_the_draft_end_to_end(world):
     rejected = _decide(world, ws, draft["id"], "rejected", reason_code="brand_or_compliance_risk")
     assert rejected.status_code == 201, rejected.text
 
-    later = world.workspace("ui prohibited later")
-    _ui_claim(world, later, "weekend parking", "restricted")  # the UI's other kind: inert
+    later = world.workspace("ui blocked later")
+    _ui_claim(world, later, "weekend parking", "restricted")  # restricted: inert
     before = _draft(world, later)
-    _ui_claim(world, later, "weekend parking", "prohibited")  # added after the review
+    _ui_claim(world, later, "weekend parking", "blocked")  # added after the review
     r = _decide(world, later, before["id"])
     assert _error(r) == (409, "approval_review_blocked")
     assert "claims library now blocks" in r.json()["error"]["message"]
