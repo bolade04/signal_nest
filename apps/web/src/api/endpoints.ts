@@ -42,6 +42,7 @@ import type {
   RecommendationBriefOut,
   GeoCoverageBase,
   GeoCoverageOut,
+  LocalityConfirmationIn,
   GeocodeRequest,
   GeocodeResponse,
   InvitationCreate,
@@ -406,6 +407,21 @@ export const upsertGeoCoverage = (
     method: 'PUT',
     body,
   });
+
+/**
+ * W21 ADDR: confirm (or withdraw) that the SAVED business town lies within this location's
+ * area. The API binds what is stored, never what the dialog shows; a confirmation is the
+ * customer's own statement, recorded as confirmed by the customer.
+ */
+export const setLocalityConfirmation = (
+  workspaceId: string,
+  locationId: string,
+  body: LocalityConfirmationIn,
+) =>
+  apiRequest<GeoCoverageOut>(
+    `/workspaces/${workspaceId}/locations/${locationId}/geo-coverage/locality-confirmation`,
+    { method: 'PUT', body },
+  );
 
 // Workspace-scoped like every other tenant call: the route resolves its tenant through
 // get_tenant_context, so `workspace_id` is a REQUIRED query parameter (openapi.json);

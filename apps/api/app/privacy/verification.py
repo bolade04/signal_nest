@@ -31,7 +31,7 @@ W21 CF-1, Project Phase 5B ``approvals`` rows and, since CF-3, Project Phase 5E 
 rows — whose ``organization_id`` is the subject are reported as *retained*, and each must have
 every identifying column cleared, or it is a finding. Nothing here writes.
 
-Cost: the content scan reads every text column of every table (359 at this writing) once
+Cost: the content scan reads every text column of every table (519 at W21 ADDR) once
 per identifier. That is acceptable for an operator tool and for the pilot's data volume; it
 is not an online path. The deletion routes therefore run only the reference check
 (``content=False``: one equality count per reference column, bounded by the schema, not by

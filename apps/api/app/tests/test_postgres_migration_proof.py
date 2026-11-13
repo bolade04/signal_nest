@@ -58,13 +58,24 @@ from app.db.base import Base
 from app.tests._auth2_support import pg_database, require_postgres
 
 API_DIR = Path(__file__).resolve().parents[2]
-#: The code head (Project Phase 5D 5D-W1, W21 Amendment D-1: the campaign-location data repair;
-#: data only, so the schema at head is CF-3's).
-HEAD = "d5f616c0ec97"
-#: One below head (Project Phase 5 CF-3, W21: campaign hardening and ``campaign_locations``,
+#: The code head (W21 ADDR, under the operator's limited CF-3 migration-freeze exception of
+#: 2026-11-12: the structured business address and its locality confirmation, ten nullable
+#: columns on ``geo_coverage_rules``).
+HEAD = "6f8a80cf1785"
+#: The columns the head revision adds (and its downgrade removes).
+ADDR_COLUMNS = {
+    "business_address_street", "business_address_locality", "business_address_region",
+    "business_address_postcode", "business_address_country", "locality_confirmed_locality",
+    "locality_confirmed_city", "locality_confirmed_jurisdiction", "locality_confirmed_at",
+    "locality_confirmed_by_user_id",
+}
+#: One below head (Project Phase 5D 5D-W1, W21 Amendment D-1: the campaign-location data
+#: repair; data only, so the schema there is CF-3's).
+BELOW_HEAD = "d5f616c0ec97"
+#: Two below head (Project Phase 5 CF-3, W21: campaign hardening and ``campaign_locations``,
 #: the jurisdiction columns, ``exports``, ``notifications`` / ``notification_preferences``,
 #: the ``deleted_at`` retention markers, and the widened capability-override CHECK).
-BELOW_HEAD = "c3f8e1a6d2b9"
+CF3 = "c3f8e1a6d2b9"
 #: Two below head (Project Phase 5 CF-2, W21: adds ``creative_drafts``, ``content_reviews``,
 #: ``approvals.draft_id``, ``claims_library.retired_at`` and widens two CHECKs).
 CF2 = "a7d2e9f4c1b8"
@@ -297,20 +308,31 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     assert cf3_tables <= _tables(pg_url)
     assert {"jurisdiction_code", "deleted_at"} <= _columns(pg_url, "creative_drafts")
     assert "jurisdiction_code" in _columns(pg_url, "business_locations")
+    assert ADDR_COLUMNS <= _columns(pg_url, "geo_coverage_rules")
 
-    # One guarded step down undoes exactly the head revision: 5D-W1's data-only repair, so no
-    # table or column goes; the spent token does not authorize the next step, and the base
-    # token minted at head is refused from the moved source.
+    # One guarded step down undoes exactly the head revision: W21 ADDR's ten columns go from
+    # geo_coverage_rules and nothing else changes; the spent token does not authorize the next
+    # step, and the base token minted at head is refused from the moved source.
     base_token_at_head = _confirmation(pg_url, "base")
     step_token = _confirmation(pg_url, "-1")
     schema_at_head = {t: _columns(pg_url, t) for t in _tables(pg_url)}
     _alembic(pg_url, "-x", f"confirm={step_token}", "downgrade", "-1")
     assert _version(pg_url) == [BELOW_HEAD]
-    assert {t: _columns(pg_url, t) for t in _tables(pg_url)} == schema_at_head
+    schema_below = {t: _columns(pg_url, t) for t in _tables(pg_url)}
+    assert schema_below == {
+        **schema_at_head,
+        "geo_coverage_rules": schema_at_head["geo_coverage_rules"] - ADDR_COLUMNS,
+    }
     spent = _run(["-x", f"confirm={step_token}", "downgrade", "-1"], pg_url)
     assert spent.returncode != 0 and _version(pg_url) == [BELOW_HEAD]
     stale = _run(["-x", f"confirm={base_token_at_head}", "downgrade", "base"], pg_url)
     assert stale.returncode != 0 and _version(pg_url) == [BELOW_HEAD]
+
+    # The next guarded step undoes 5D-W1's data-only repair: no table or column goes.
+    repair_token = _confirmation(pg_url, "-1")
+    _alembic(pg_url, "-x", f"confirm={repair_token}", "downgrade", "-1")
+    assert _version(pg_url) == [CF3]
+    assert {t: _columns(pg_url, t) for t in _tables(pg_url)} == schema_below
 
     # The next guarded step undoes exactly CF-3.
     cf3_token = _confirmation(pg_url, "-1")

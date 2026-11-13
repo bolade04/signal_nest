@@ -104,6 +104,7 @@ const EXPORT: AccountExportOut = {
   exports_performed: [],
   notifications_received: [],
   notification_preferences: [],
+  locality_confirmations_made: [],
 };
 
 function RoleProbe() {
