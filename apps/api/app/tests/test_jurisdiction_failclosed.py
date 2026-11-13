@@ -1882,6 +1882,37 @@ def test_t1_every_category_reaches_the_422_with_its_reason_before_any_model_or_b
     assert "unresolved:" not in r.text and "unresolved:" not in everything
 
 
+@pytest.mark.parametrize(
+    "reason", [None, "address_from_a_later_release", "1 Main St, Quillbrook"], ids=repr
+)
+def test_a_category_outside_the_vocabulary_is_never_named(
+    capture_world, phase5_on, model, caplog, reason
+) -> None:
+    """RV-A13, redefined for the clarification contract (INTEGRATION-PLAN-v3 §2.5): the answer
+    never names a reason outside the closed vocabulary, nor any text the check carries. An
+    UNRESOLVED check with no category or another one (``resolve_for_action`` returns neither)
+    gets the generic answer with no ``details``, and the log its fixed reason."""
+    world = capture_world
+    ws = world.workspace("outside the vocabulary")
+    opp, record, _ = evidence(world, ws, location=DALLAS_FIELDS, addresses=("Dallas, TX",))
+    forged = JurisdictionResolution(
+        code=UNRESOLVED, codes=(), confidence=0.0,
+        evidence=("unresolved: Quillbrook evidence",), reason=reason,
+    )  # fmt: skip
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(brief_service, "resolve_for_action", lambda location, rules=(): forged)
+        with caplog.at_level(logging.INFO):
+            r = capture(world, ws, opp, record)
+    assert r.status_code == 422, r.text
+    error = r.json()["error"]
+    assert set(error) == {"code", "message", "request_id"}
+    assert error["message"] == brief_service.JURISDICTION_UNRESOLVED_MESSAGE
+    (logged,) = _refusal_logs(caplog)
+    assert logged.extra_fields["reason"] == brief_service.UNRESOLVED_OUTSIDE_VOCABULARY
+    assert "Quillbrook" not in r.text and "Quillbrook" not in _logged(caplog)
+    assert model.requests == [] and world.count(RecommendationBrief, opportunity_id=opp) == 0
+
+
 #: (case, location fields, coverage addresses, structured fields, where the location lives):
 #: locations outside the opportunity's workspace or organization whose own data would give a
 #: category, or resolve, if they were the workspace's own.
