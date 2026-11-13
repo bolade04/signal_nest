@@ -862,3 +862,17 @@ def test_p3_r1_c1_a_part_after_a_left_out_first_part_keeps_its_place(location, a
 def test_p3_r1_c1_the_town_parts_own_ask_is_unchanged(location, address, evidence):
     """Beside C-1's rows: where the refused part is the town part itself, rule 3a still asks."""
     _clarified(location, address, ADDRESS_PLACE_UNCLEAR, evidence)
+
+
+def test_p3_r1_c2_the_reviewers_surviving_mutants_have_a_row():
+    """Review W21-REV-GEO P3 r1, condition C-2 (ruling P3-r1-R-2). Mutant Q2: rule 3a asks only when
+    its second reading states a country, so the G-2 residual, whose second reading ("District Of
+    Columbia, 1 Main St") states none, stays refused. Mutant Q3: a part equal to the location's
+    city is left out only when the tables read it as an area and it names none read alone; "AN"
+    is Anambra's listed code, so it is compared and refused (ruling P3-R-8)."""
+    _refused(
+        WASHINGTON_DC, "District Of Columbia, 1 Main St, Washington", "states subdivision US-WA"
+    )
+    _refused(
+        _location("AN", "Abia", "Nigeria"), "AN, 1 Main St, Nigeria", "states subdivision NG-AN"
+    )
