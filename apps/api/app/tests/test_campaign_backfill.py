@@ -45,6 +45,10 @@ from app.tests._auth2_support import pg_database, require_postgres, sqlite_file_
 
 API_DIR = Path(__file__).resolve().parents[2]
 CF2, CF3, REPAIR = "a7d2e9f4c1b8", "c3f8e1a6d2b9", "d5f616c0ec97"
+#: The repair cases upgrade to the repair itself, never to ``head``, as main's
+#: ``test_campaign_locations_repair.py`` does: later revisions (W21 ADDR, D-N4 items 37 and 36)
+#: follow the repair, so ``head`` is no longer the repair and ``downgrade -1`` from ``head``
+#: would not undo it. From the repair, ``downgrade -1`` is CF-3.
 VERSIONS = API_DIR / "alembic" / "versions"
 BACKFILL_PREFIX = "CF-3 campaign_locations back-fill"
 REPAIR_PREFIX = "5D-W1 campaign_locations repair"
@@ -507,7 +511,7 @@ def changed(request, tmp_path) -> Iterator[tuple[Db, dict, str]]:
         for campaign, value in CHANGED_AFTER_BACKFILL.items():
             _set_json(db, campaign, value)
         before = db.identity()
-        output = db.ok("upgrade", "head")
+        output = db.ok("upgrade", REPAIR)
         yield db, before, output
 
 
@@ -553,6 +557,10 @@ def test_a_list_changed_after_the_backfill_is_repaired_and_never_crosses_a_tenan
             )
         ).all()
     assert crossing == []
+    # The revisions after the repair apply on top of it and leave its rows as they are.
+    db.ok("upgrade", "head")
+    assert len(db.version()) == 1 and db.version() != [REPAIR]
+    assert db.identity() == after
 
 
 def test_a_second_run_after_an_api_write_changes_nothing(changed):
@@ -571,7 +579,8 @@ def test_a_second_run_after_an_api_write_changes_nothing(changed):
     _set_json(db, "r-swap", ["la1", "la1b"])
     settled = (db.identity(), db.raw_json())
     db.ok("downgrade", "-1")
-    again = db.ok("upgrade", "head")
+    again = db.ok("upgrade", REPAIR)
+    assert db.version() == [REPAIR]
     assert (db.identity(), db.raw_json()) == settled
     assert (
         "0 membership(s) inserted, 0 deleted, 0 mirror(s) rewritten, 0 reference(s) dropped"
@@ -585,7 +594,8 @@ def test_a_second_run_after_a_stale_json_write_repairs_again(changed):
     settled = db.identity()
     _set_json(db, "r-steady", ["la1b", "lb1"])  # la1 removed; another organization's added
     db.ok("downgrade", "-1")
-    again = db.ok("upgrade", "head")
+    again = db.ok("upgrade", REPAIR)
+    assert db.version() == [REPAIR]
     assert db.memberships()["r-steady"] == {"la1b"}
     assert json.loads(db.raw_json()["r-steady"]) == ["la1b"]
     after = db.identity()
@@ -624,7 +634,7 @@ def test_a_campaign_naming_another_organization_than_its_workspaces_never_gains_
         )
         db.ok("upgrade", CF3)
         assert db.memberships()["r-b-in-a1"] == {"la1", "la1b"}  # CF-3 checks workspaces only
-        out = db.ok("upgrade", "head")
+        out = db.ok("upgrade", REPAIR)
         assert "r-b-in-a1" not in db.memberships()
         for location in ("la1", "la1b"):
             assert (
