@@ -35,6 +35,7 @@ from app.llm.providers_real import AnthropicProvider
 from app.llm.service import LLMService
 from app.opportunities.models import Opportunity
 from app.organizations.models import User
+from app.tests._address_support import complete_rule
 from app.tests._auth2_support import pg_database, require_postgres
 from app.tests._llm_offline import offline_llm, offline_settings
 
@@ -85,10 +86,14 @@ def _seed(make) -> None:  # pragma: no cover - gated on PostgreSQL
         s.flush()
         s.add(Brand(id="br-p", organization_id="org-p", workspace_id="ws-p", name="B"))
         s.flush()
-        # A location that resolves (5D-W3 captures US-TX for Dallas, TX).
-        s.add(BusinessLocation(id="loc-p", organization_id="org-p", workspace_id="ws-p",
-                               brand_id="br-p", name="Dallas", city="Dallas",
-                               state_province="TX", country="US"))
+        # A location that resolves (5D-W3 captures US-TX for Dallas, TX), with the complete
+        # structured business address the capture's check requires since #313 (W21 ADDR).
+        place = BusinessLocation(id="loc-p", organization_id="org-p", workspace_id="ws-p",
+                                 brand_id="br-p", name="Dallas", city="Dallas",
+                                 state_province="TX", country="US")
+        s.add(place)
+        s.flush()
+        s.add(complete_rule(place))
         s.flush()
         s.add(ScoutRequest(id="sr-p", organization_id="org-p", workspace_id="ws-p",
                            brand_id="br-p", name="scout"))

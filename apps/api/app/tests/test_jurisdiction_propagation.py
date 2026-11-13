@@ -646,8 +646,10 @@ from app.briefs.models import RecommendationBrief  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 from app.creative.models import ContentReview, CreativeDraft  # noqa: E402
 from app.creative.service import draft_approval_refusal  # noqa: E402
+from app.jurisdiction.business_address import resolve_for_action  # noqa: E402
 from app.llm import service as llm_service_module  # noqa: E402
 from app.locations.models import BusinessLocation, GeoCoverageRule  # noqa: E402
+from app.tests._address_support import complete_address_of  # noqa: E402
 from app.tests._creative_support import (  # noqa: E402
     CEILINGS,
     CreativeWorld,
@@ -793,8 +795,9 @@ def test_q1_ruled_a_draft_keeps_its_briefs_code_after_the_location_moves(
     brief_id = capture(world, ws, opp, record).json()["id"]
     world.decide(brief_id, "approved")
     locations, rules = BusinessLocation.__table__, GeoCoverageRule.__table__
-    # Each move is consistent (the location and its coverage address move together), so a
-    # fresh resolution would give another code (US-OK, GB) or none at all; the draft keeps US-TX.
+    # Each move is consistent (the location and its coverage address, free text and structured
+    # fields, move together), so a fresh capture would give another code (US-OK, GB) or none at
+    # all; the draft keeps US-TX.
     for moved, address, fresh in (
         ({"city": "Tulsa", "state_province": "OK", "country": "US"}, "Tulsa, OK", "US-OK"),
         (
@@ -809,14 +812,14 @@ def test_q1_ruled_a_draft_keeps_its_briefs_code_after_the_location_moves(
             conn.execute(
                 update(rules)
                 .where(rules.c.location_id == location_id)
-                .values(business_address=address)
+                .values(business_address=address, **complete_address_of(moved))
             )
-        with world.session() as s:  # the move is real: the location now resolves elsewhere
+        with world.session() as s:  # the move is real: the capture's check now answers another
             location = s.get(BusinessLocation, location_id)
             moved_rules = s.scalars(
                 select(GeoCoverageRule).where(GeoCoverageRule.location_id == location_id)
             ).all()
-            assert resolve_jurisdiction(location, moved_rules).code == fresh
+            assert resolve_for_action(location, moved_rules).code == fresh
         draft = _generate(world, ws, brief_id)
         assert draft["jurisdiction_code"] == code, moved
         assert _review(world, draft["id"])["jurisdiction_code"] == code, moved

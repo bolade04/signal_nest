@@ -60,6 +60,7 @@ from app.llm.models import LLMUsageEvent
 from app.llm.service import LLMService, get_llm_service
 from app.main import app
 from app.opportunities.models import Opportunity
+from app.tests._address_support import complete_rule
 from app.tests._auth2_support import live_bearer, pg_database, require_postgres
 from app.tests._llm_offline import offline_llm, offline_settings
 from app.tests.fixtures.briefs import HOLD_SECONDS, add_validation_evidence, capture_hold
@@ -121,10 +122,14 @@ def _seed(s) -> dict:
                            brand_id=f"br-{ws}", name="scout"))
         s.add(Campaign(id=f"camp-{ws[3:]}", organization_id=org, workspace_id=ws,
                        brand_id=f"br-{ws}", name="c"))
-        # A location that resolves (5D-W3 captures US-TX for Dallas, TX).
-        s.add(BusinessLocation(id=f"loc-{ws}", organization_id=org, workspace_id=ws,
-                               brand_id=f"br-{ws}", name="Dallas", city="Dallas",
-                               state_province="TX", country="US"))
+        # A location that resolves (5D-W3 captures US-TX for Dallas, TX), with the complete
+        # structured business address the capture's check requires since #313 (W21 ADDR).
+        place = BusinessLocation(id=f"loc-{ws}", organization_id=org, workspace_id=ws,
+                                 brand_id=f"br-{ws}", name="Dallas", city="Dallas",
+                                 state_province="TX", country="US")
+        s.add(place)
+        s.flush()
+        s.add(complete_rule(place))
         s.flush()
     opps = {"a1": "ws-a1", "a1s": "ws-a1", "a2": "ws-a2", "b1": "ws-b1"}
     for key, ws in opps.items():

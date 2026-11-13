@@ -73,6 +73,7 @@ from app.opportunities.models import Opportunity
 from app.organizations.models import User
 from app.scouting_requests.models import ScoutRequest
 from app.signals.models import NormalizedSignal, RawSignal, SignalCluster
+from app.tests._address_support import complete_address_of
 from app.tests._creative_support import (
     CEILINGS,
     CreativeWorld,
@@ -697,13 +698,20 @@ def evidence(
     ws: str,
     *,
     location: dict | None,
-    addresses: tuple[str, ...] = (),
+    addresses: tuple[str | None, ...] = (),
     location_ws: str | None = None,
     location_org: str | None = None,
+    structured: dict | bool = True,
 ) -> tuple[str, str, str | None]:
     """One opportunity and its intelligence record in ``ws``, bound to a new location (in
     ``location_ws``, default ``ws``) with a coverage rule per address; ``location=None`` binds
-    none. Returns ``(opportunity id, record id, location id)``."""
+    none. Returns ``(opportunity id, record id, location id)``.
+
+    Since #313 the capture checks the structured business address (W21 ADDR item 6), so every
+    rule written here holds, by default, the complete structured address of the location's own
+    fields (``app.tests._address_support``); with no address, one rule holds it alone.
+    ``structured`` may instead give the fields (a dict, merged over nothing) or ``False`` for
+    none, the state of every rule written before W21 ADDR."""
     tag = uuid.uuid4().hex[:12]
     with world.session() as s:
         brand = get_primary_brand(s, ws)
@@ -726,10 +734,17 @@ def evidence(
                 )
             )
             s.flush()
-            for address in addresses:
+            if structured is True:
+                fields = complete_address_of(location)
+            else:
+                fields = dict(structured or {})
+            for address in addresses or ((None,) if fields else ()):
                 s.add(
                     GeoCoverageRule(
-                        location_id=location_id, business_address=address, **home_scoped
+                        location_id=location_id,
+                        business_address=address,
+                        **fields,
+                        **home_scoped,
                     )
                 )
             s.flush()

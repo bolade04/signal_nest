@@ -24,6 +24,7 @@ from app.opportunities.models import Opportunity
 from app.organizations.models import Organization, OrganizationMember, User, Workspace
 from app.scouting_requests.models import ScoutRequest
 from app.signals.models import NormalizedSignal, RawSignal
+from app.tests._address_support import complete_rule
 
 _ID_MAX = 32
 
@@ -78,24 +79,27 @@ class Evidence:
 
 def add_evidence(s: Session, *, org_id: str, ws_id: str, key: str) -> Evidence:
     """One opportunity and its immutable intelligence record in ``ws_id``, bound to a
-    location that resolves to a jurisdiction (Dallas, TX: the 5D-W3 capture stores US-TX)."""
+    location that resolves to a jurisdiction (Dallas, TX: the 5D-W3 capture stores US-TX). The
+    location has one coverage rule with its complete structured business address, which the
+    capture's check requires since #313 (W21 ADDR item 6)."""
     brand = f"br-{key}"
     if s.get(Brand, brand) is None:
         s.add(Brand(id=fit(brand), organization_id=org_id, workspace_id=ws_id, name=f"B {key}"))
         s.flush()
     location = fit(f"loc-{key}")
-    s.add(
-        BusinessLocation(
-            id=location,
-            organization_id=org_id,
-            workspace_id=ws_id,
-            brand_id=brand,
-            name="Dallas",
-            city="Dallas",
-            state_province="TX",
-            country="US",
-        )
+    place = BusinessLocation(
+        id=location,
+        organization_id=org_id,
+        workspace_id=ws_id,
+        brand_id=brand,
+        name="Dallas",
+        city="Dallas",
+        state_province="TX",
+        country="US",
     )
+    s.add(place)
+    s.flush()
+    s.add(complete_rule(place))
     s.flush()
     request = fit(f"sr-{key}")
     s.add(
