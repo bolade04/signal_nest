@@ -120,6 +120,12 @@ def _strip_postcode(folded: str) -> str:
     return " ".join(words)
 
 
+def address_part_key(text: str | None) -> str:
+    """One part of an address as the business-address reader compares it: folded, without a
+    trailing postcode ("Washington DC 20001" -> "washington dc")."""
+    return _strip_postcode(fold(text))
+
+
 # --- indexes built once from the reference tables ---------------------------------
 
 _COUNTRY_BY_NAME: dict[str, str] = {}
@@ -269,6 +275,18 @@ class MarketIdentity:
 
 #: An area reading of a token: ``(country, region key or None)``.
 _Area = tuple[str, str | None]
+
+#: W21-REV-GEO r1 C-2: each two-letter code of a country whose subdivisions only the jurisdiction
+#: module lists (Nigeria) -> that subdivision's area ("la" -> Lagos State, "og" -> Ogun State). A
+#: part that is only such a code ("ACME, LA, Ikeja", "Abeokuta, OG, Nigeria") has this reading
+#: beside any other ("LA" is also Laos and Louisiana), so it is never read as naming nothing.
+_JURISDICTION_CODE_AREAS: Final[dict[str, _Area]] = {
+    code.lower(): (country, f"{country}:{fold(names[0])}")
+    for country, divisions in SUBDIVISION_JURISDICTIONS.items()
+    if country not in SUBDIVISIONS
+    for code, names in divisions.items()
+    if len(code) == 2
+}
 
 
 def _area_candidates(folded: str) -> list[_Area]:
@@ -483,6 +501,53 @@ def street_line_kind(text: str | None) -> str | None:
     return _street_kind(parts[0]) if len(parts) == 1 else None
 
 
+#: How a part of a business address that names a place by itself is read, wherever it stands
+#: (GEO-P1; geography register G-1, G-4, G-5 and G-9). See :class:`PartPlace`.
+PLACE_CODE: Final = "code"
+PLACE_NAME: Final = "name"
+PLACE_UNCLEAR: Final = "unclear"
+PLACE_DIRECTION: Final = "direction"
+PLACE_FIRST_PART: Final = "first_part"
+
+
+@dataclass(frozen=True)
+class PartPlace:
+    """A part of a business address that names a place by itself, in any position (GEO-P1).
+
+    ``kind`` says how explicit it is:
+
+    * :data:`PLACE_CODE`: a listed subdivision code, anywhere in the part ("US-AL", "us al",
+      "Hartford US-CT", "US-CT Hartford", "Lekki NG-LA"), or a subdivision named with its suffix or
+      prefix ("Ogun State", "Federal Capital Territory", "State of Alabama"; a prefixed Nigerian
+      code has its Nigerian reading too, "State of PL" is Poland or Plateau State). No town or
+      business is written so, so it is explicit wherever it stands, the first part included.
+    * :data:`PLACE_NAME`: a country's or a state's or province's name ("Nigeria", "Texas",
+      "Kenya", "Georgia"), or a code of two or three letters written in capitals in an address
+      that mixes capitals and small letters ("ACME, NG, Lagos"). It is explicit, as the reader
+      takes such a name at the end of an address, but a town or a business may bear it
+      ("Lebanon", "Jordan").
+    * :data:`PLACE_UNCLEAR`: a word as likely a town's name as a place: a code of two or three
+      letters in an address written in one case ("ACME, NG, LAGOS"), or written otherwise than in
+      capitals in an address that mixes cases ("Dallas, Tx, 1 Main St"; "Bo, Southern Province",
+      W21-REV-GEO r1 C-3), a Nigerian state's bare name, which is also a town's ("Adamawa",
+      "Kano"; X-5), or a city-first name ("Washington"; X-4).
+    * :data:`PLACE_DIRECTION`: a part that is only a direction ("ACME, NE, Omaha"), which may be a
+      street's direction or a code, as "St NE" may (C-14, C-15).
+    * :data:`PLACE_FIRST_PART` (W21-REV-GEO r1 C-1): the first part of an address of two or more
+      parts read as a town and a code ("Dallas TX, 1 Main St"; "Springfield AN; 1 Main St"), as
+      D1 reads a later part. It may as well be a business's name and its legal form ("ACME SA",
+      "ACME AB", "Jane Doe MD"), so it is an ambiguous reading, never an explicit one.
+
+    ``text``: the part, folded, without a trailing postcode. ``readings``: every area it may name,
+    two or more for a name of two areas ("Georgia": the country or US-GA; "Niger"; a Nigerian
+    code: "LA" is Laos, Louisiana or Lagos State).
+    """
+
+    kind: str
+    text: str
+    readings: tuple[MarketIdentity, ...]
+
+
 @dataclass(frozen=True)
 class BusinessAddressReading:
     """What a business address states (see :func:`read_business_address`).
@@ -492,6 +557,8 @@ class BusinessAddressReading:
     ``parts``: what later parts ending in a code state on their own ("..., Dallas TX").
     ``ambiguous``: the code readings of ambiguous street lines and parts ("1500 Broadway
     Hartford CT", "..., Hartford CT"), which a contradicting location may not ignore.
+    ``places``: every part that names a place by itself, wherever it stands (GEO-P1,
+    :func:`_part_places`); the resolver compares each with the location.
     """
 
     stated: MarketIdentity | None
@@ -502,6 +569,13 @@ class BusinessAddressReading:
     #: (``alternatives``) or an ambiguous street line or part (``ambiguous_alternatives``).
     alternatives: tuple[tuple[MarketIdentity, ...], ...] = ()
     ambiguous_alternatives: tuple[tuple[MarketIdentity, ...], ...] = ()
+    places: tuple[PartPlace, ...] = ()
+    #: GEO-P2 (register G-8, FU-H): the code readings of a route designator written as the whole
+    #: address ("12000 FM 1960", "1 SR 520"), which may be a road and not a place, as C-16 reads one
+    #: in a later part; ambiguous, with their own clarification. (C-16's later-part readings stay
+    #: in ``ambiguous``, with D1's reason.)
+    routes: tuple[MarketIdentity, ...] = ()
+    route_groups: tuple[tuple[MarketIdentity, ...], ...] = ()
 
 
 def _alternatives(text: str) -> tuple[MarketIdentity, ...]:
@@ -545,7 +619,8 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
     """Read a business's own address (a coverage rule's ``business_address``).
 
     Parts are separated by commas, semicolons, slashes or line breaks (C-10;
-    :data:`_PART_SEPARATORS`). An address of one part that
+    :data:`_PART_SEPARATORS`); every line break that :meth:`str.splitlines` knows counts as one
+    (W21-REV-GEO r1 C-4: also VT, FF, NEL, U+2028 and U+2029). An address of one part that
     is an ambiguous street line has an ambiguous reading. In an address of several parts, the
     whole text is read as before (a postcode alone in a later part is left out, so "...,
     Hartford, CT, 06103, USA" reads Connecticut), and each part after the first is also read on
@@ -574,9 +649,100 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
     prefix names ("US-CA" is California). A street type before a post-directional with no house
     number ("St NE" alone, C-14; "5th St NE", R17) is an ambiguous part, and an ordinal ("4th") is a
     street name (C-13).
+
+    Every part that names a place by itself is also read wherever it stands, first, middle or last,
+    at any distance from the end and whatever the separator (GEO-P1, :func:`_part_places`):
+    ``places``. The first part's explicit reading ("Dallas TX, 1 Main St") is one of them, as an
+    ambiguous reading (W21-REV-GEO r1 C-1: :data:`PLACE_FIRST_PART`).
+
+    GEO-P2 (register G-6 and G-8): a floor after the street ("123 Main St Fl 3", "..., Fl 3") is a
+    floor and never Florida (:func:`_without_floors`, :data:`_FLOOR`); an address that is only a
+    route designator ("1 SR 520") has its code reading in ``routes``, and one that is only a street
+    with no house number written as a street ("Main St", "NE 45th St") in ``ambiguous``
+    (:func:`_numberless_street`); a code inside a route's name ("4400 US Hwy 75") is a part place;
+    a last part that is only a direction after a street line ("1200 Pennsylvania Ave, SE") is a part
+    place that is only a direction, never the qualifier's code (review W21-REV-GEO r1 I-3,
+    :func:`_trailing_direction`).
     """
     if text is None:
         return BusinessAddressReading(None)
+    text = "\n".join(text.splitlines())  # W21-REV-GEO r1 C-4: every line break is one
+    text = _without_floors(text)
+    reading = _read_business_address(text)
+    return BusinessAddressReading(
+        reading.stated,
+        reading.parts,
+        reading.ambiguous,
+        reading.alternatives,
+        reading.ambiguous_alternatives,
+        _part_places(text),
+        reading.routes,
+        reading.route_groups,
+    )
+
+
+#: GEO-P2 (register G-6, FU-B): a floor ("Fl 3", "FL 12", "Flr 2", "Floor 3"). A road written with a
+#: hyphen ("FL-12") and a state with its ZIP code ("FL 32801", five digits) are not floors.
+_FLOOR: Final = re.compile(r"(?:fl|flr|floor)\.?\s*#?\s*\d{1,3}[A-Za-z]?", re.IGNORECASE)
+#: A floor at the end of a street line ("123 Main St Fl 3"), which leaves the street line.
+_FLOOR_AFTER_STREET: Final = re.compile(
+    r"(\b(?:" + "|".join(sorted(STREET_SUFFIXES)) + r")\.?)[ \t]+" + _FLOOR.pattern + r"\s*$",
+    re.IGNORECASE,
+)
+
+
+def _without_floors(text: str) -> str:
+    """GEO-P2 (G-6): each part with a floor after its street type left out ("123 Main St Fl 3" reads
+    as "123 Main St"); separators are kept as written. A floor as its own part is a unit
+    (:func:`_unit_or_postcode`)."""
+    pieces = re.split(r"([,;/\r\n])", text)
+    return "".join(
+        _FLOOR_AFTER_STREET.sub(r"\1", piece) if index % 2 == 0 else piece
+        for index, piece in enumerate(pieces)
+    )
+
+
+def _numberless_street(text: str) -> bool:
+    """GEO-P2 (G-8, FU-H): a street name and a street type with no house number, written as a
+    street: the type as a street type ("St", not "ST") in an address that mixes cases ("Main St",
+    "High St", "NE 45th St"), or any such line in an address written in one case ("MAIN ST",
+    "HARTFORD CT"), where case cannot tell a street type from a code, as D1 reads "123 MAIN ST". Its
+    type may also be a code ("ST" is Sao Tome), so the reading is ambiguous. A town and a code
+    written as a code in a mixed-case address ("Hartford CT") stays explicit, as on main."""
+    written = _written_words(text)
+    words = [fold(word) for word in written]
+    if len(words) < 2 or words[-1] not in STREET_SUFFIXES:
+        return False
+    if any(_HAS_DIGIT.search(word) and not _ORDINAL.fullmatch(word) for word in words):
+        return False  # a house number: a street line (D1)
+    if " ".join(words[-2:]) in _FOLDED_SUBDIVISION_CODES:
+        return False  # "US-CT", "US CT": a listed code, as D1's street lines exclude it
+    letters = "".join(word for word in written if not _HAS_DIGIT.search(word))
+    mixed = any(ch.isupper() for ch in letters) and any(ch.islower() for ch in letters)
+    # In one case nothing tells "MAIN ST" from "HARTFORD CT", as D1 reads "123 MAIN ST": ambiguous.
+    return not mixed or not written[-1].isupper()
+
+
+def _trailing_direction(raw_parts: list[str], index: int) -> bool:
+    """GEO-P2 (review W21-REV-GEO r1 I-3, register G-8): is part ``index`` only a direction ("SE")
+    after a street line, with only units or postcodes between them and no named part after it
+    ("1200 Pennsylvania Ave, SE"; "1200 Pennsylvania Ave, Suite 5, SE, 20003")? It may be the
+    street's direction, as "Ave SE" is (C-15), or a code, so the qualifier rules do not read it as
+    Sweden: it is a part place that is only a direction (:data:`PLACE_DIRECTION`), which explicit
+    geography settles and which otherwise asks. After a town it stays the qualifier's code
+    ("Washington, SE")."""
+    if index == 0 or _strip_postcode(fold(raw_parts[index])) not in _DIRECTION_PARTS:
+        return False
+    before = [part for part in raw_parts[:index] if not _unit_or_postcode(part)]
+    return (
+        bool(before)
+        and _street_kind(before[-1]) is not None
+        and not any(_is_named(address_part_key(part)) for part in raw_parts[index + 1 :])
+    )
+
+
+def _read_business_address(text: str) -> BusinessAddressReading:
+    """:func:`read_business_address` as D1 and the exclusion fix read it, without ``places``."""
     raw_parts = _written_parts(text)
     if len(raw_parts) >= 2 and all(_unit_or_postcode(part) for part in raw_parts[1:]):
         # C-6(b): "1500 Broadway CT, Suite 200" and "1 Asylum Hartford CT, 06103" read as their
@@ -589,19 +755,42 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
         if stated is not None and stated.country is not None and _street_name_and_direction(text):
             # C-15: "5th St SE" may be "5th Street Southeast": its code reading is ambiguous.
             ambiguous, stated = stated, MarketIdentity(city=stated.city, label=stated.label)
+        groups = _groups(text) if kind is None and not _street_name_and_direction(text) else ()
+        ambiguous_groups = (
+            _groups(text) if kind == STREET_LINE_AMBIGUOUS else _street_direction_group(text)
+        )
+        routes: tuple[MarketIdentity, ...] = ()
+        route_groups: tuple[tuple[MarketIdentity, ...], ...] = ()
+        if kind is None and _designator(text) and not _us_route(text):
+            # GEO-P2 (G-8, FU-H): a route designator as the whole address ("1 SR 520", "12000 FM
+            # 1960") may be a road, as C-16 reads it in a later part: ambiguous, never refused.
+            routes, route_groups, groups = tuple(_placed(stated)), groups, ()
+            stated = MarketIdentity(city=stated.city, label=stated.label) if stated else None
+        elif kind is None and _numberless_street(text):
+            # GEO-P2 (G-8, FU-H): "Main St", "NE 45th St": the street type may be a code.
+            ambiguous = stated if stated is not None and stated.country is not None else ambiguous
+            ambiguous_groups, groups = ambiguous_groups + groups, ()
+            stated = MarketIdentity(city=stated.city, label=stated.label) if stated else None
         return BusinessAddressReading(
             stated,
             (),
             tuple(_placed(ambiguous)),
-            _groups(text) if kind is None and not _street_name_and_direction(text) else (),
-            _groups(text) if kind == STREET_LINE_AMBIGUOUS else _street_direction_group(text),
+            groups,
+            ambiguous_groups,
+            routes=routes,
+            route_groups=route_groups,
         )
     kept, parts, ambiguous = [raw_parts[0]], [], []
     groups, ambiguous_groups = [], []
-    for part in raw_parts[1:]:
+    for index, part in enumerate(raw_parts[1:], 1):
         folded = _strip_postcode(fold(part))
-        if all(_HAS_DIGIT.search(word) for word in folded.split()):
+        if all(_HAS_DIGIT.search(word) for word in folded.split()) or _FLOOR.fullmatch(
+            part.strip()
+        ):
+            # A postcode alone; GEO-P2 (G-6, FU-B): a floor ("Fl 3") is no qualifier, never Florida.
             continue
+        if _trailing_direction(raw_parts, index):
+            continue  # GEO-P2 (I-3): "1200 Pennsylvania Ave, SE" is a direction part, not Sweden
         kept.append(part)
         stated_here, maybe = _part_reading(part)
         explicit_here, ambiguous_here = _part_groups(part)
@@ -626,6 +815,257 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
     return BusinessAddressReading(
         stated, tuple(parts), tuple(ambiguous), tuple(groups), tuple(ambiguous_groups)
     )
+
+
+#: A code written with a hyphen or a dash inside a part ("US-CT Hartford", "Hartford US-CT",
+#: "Lekki NG–LA"); :func:`_code_form` decides whether it is a listed code.
+_CODE_TOKEN: Final = re.compile(
+    r"(?<![A-Za-z0-9])[A-Za-z]{2}\s*[-\u2010-\u2015\u2212]\s*[A-Za-z0-9]{1,3}(?![A-Za-z0-9])"
+)
+#: A part that is only a direction may be a street's direction ("1200 Pennsylvania Ave, SE") or a
+#: code.
+_DIRECTION_PARTS: Final = frozenset({"ne", "nw", "se", "sw"})
+
+
+def _listed_codes(raw: str, folded: str) -> list[_Form]:
+    """Every listed subdivision code one part (``raw`` as written) writes: the whole part
+    ("US-AL", "us al", "NG LA 100001"), a code with a hyphen or a dash anywhere in it ("US-CT
+    Hartford", "Hartford US-CT", "Lekki NG–LA"), or a code with a space at its end ("1500 Broadway
+    US CT", "1500 Broadway NG AB"). Only a code the tables place is one: a road number or a
+    hyphenated name ("US-9", "GA-400", "AL-AIN", "Ca-Mau") is not, as everywhere a business address
+    is read (W21-REV-5DW2FIX r1 C-1). A listed code written with a space stays explicit (D1's C-12);
+    since the exclusion fix (#312) that includes Nigeria's, so "NG AB" after a word is Abia State,
+    not only a group of Nigeria and Alberta."""
+    whole = _code_form(folded, raw, observed=True)
+    if whole is not None:
+        return [whole] if whole.strict else []
+    found: list[_Form] = []
+    for token in _CODE_TOKEN.findall(raw):
+        form = _code_form(fold(token), token, observed=True)
+        if form is not None and form.strict and form not in found:
+            found.append(form)
+    words = folded.split()
+    if not found and len(words) > 2:
+        country, part = words[-2].upper(), words[-1].upper()
+        key = _subdivision_key(country, part) if country in _CODED_COUNTRIES else None
+        if key is not None:
+            found.append(_Form(country, key, True, f"{country}-{part}"))
+    return found
+
+
+#: Words that make the code before them a road's country or state ("US Hwy 75", "US Route 1").
+_ROUTE_WORDS: Final = frozenset({"hwy", "highway", "route", "rte", "rt"})
+
+
+#: A US ZIP code, five digits or ZIP+4 ("33101", "33101-1234").
+_ZIP_CODE: Final = re.compile(r"\d{5}(?:-\d{4})?")
+
+
+#: A two-letter code and a ZIP code, the whole part ("NE 68102").
+_STATE_AND_ZIP: Final = re.compile(r"[A-Za-z]{2}\s+\d{5}(?:-\d{4})?")
+
+
+def _floor_after_town(raw_parts: list[str], index: int) -> bool:
+    """GEO-P2 (review W21-REV-GEO P2 r1 C-1): is the floor-shaped part at ``index`` right after a
+    bare town and before no street line ("1 Main St, Miami, FL 3")? There it may be a floor or the
+    state with a short postcode. After a street line, a unit, a state or a country ("123 Main St, Fl
+    3", "Dallas, TX 75201, Fl 3"), or before a street line ("Fl 3, 123 Main St"), it is a floor."""
+    before = [part for part in raw_parts[:index] if not _unit_or_postcode(part)]
+    after = [part for part in raw_parts[index + 1 :] if not _unit_or_postcode(part)]
+    if not before or _street_kind(before[-1]) is not None:
+        return False
+    if after and _street_kind(after[0]) is not None:
+        return False
+    town = before[-1]
+    return not _area_candidates(_strip_postcode(fold(town))) and not _part_reading(town)[0]
+
+
+def _route_code(part: str) -> str | None:
+    """GEO-P2 (G-8): the two-letter code before a highway word in ``part`` as written ("4400 US Hwy
+    75" -> "US", "U.S. Route 1" -> "US"), when it names an area and is not a street type ("St Rt 9"
+    is a State Route); ``None`` otherwise."""
+    written = _written_words(part)
+    for word, after in zip(written, written[1:], strict=False):
+        folded = word.lower()
+        if (
+            after.lower() in _ROUTE_WORDS
+            and len(word) == 2
+            and word.isalpha()
+            and folded not in STREET_SUFFIXES
+            # Review W21-REV-GEO P2 r1 C-2: a street's direction ("SE Hwy 212", C-14) or a county
+            # road ("CO Hwy 5") is no route code.
+            and folded not in _DIRECTION_PARTS
+            and folded != "co"
+            and _area_candidates(folded)
+        ):
+            return word
+    return None
+
+
+def _is_named(part: str) -> bool:
+    """Does a folded part name anything but a number (a unit or a postcode alone)?"""
+    return (
+        bool(part)
+        and part not in _EMPTY_PARTS
+        and not all(_HAS_DIGIT.search(word) for word in part.split())
+    )
+
+
+def _part_places(text: str) -> tuple[PartPlace, ...]:
+    """GEO-P1: every part of ``text`` (separated as :data:`_PART_SEPARATORS` separates them) that
+    names a place by itself, wherever it stands.
+
+    A code ("US-AL; Montgomery; 1 Main St; Suite 5"), a state or country before the town ("Ogun
+    State, Abeokuta", "KE, Nairobi") or alone in a middle part ("ACME, NG, Lagos") is read where the
+    qualifier rules (:func:`_form_reading`, :func:`_parse`) do not look. See :class:`PartPlace` for
+    what each kind means.
+
+    Left to other rules, as on main: a floor or unit label that is also a code, before its number
+    ("FL 3", "NO 5"; the unit rules); a road number or a hyphenated name ("US-9", "GA-400",
+    "AL-AIN"; W21-REV-5DW2FIX r1 C-1), whose number would otherwise be dropped as a postcode;
+    route designators ("12000 FM 1960"; C-16) and unlisted code forms ("DE-BY"; C-9, FU-C), which
+    name no listed code; and a code of two or three letters right before the name of a country
+    whose subdivisions are not listed ("Mumbai, MH, India"), the region slot of "town, region,
+    country", which the tables cannot check (the geography register's G-7). In that slot before a
+    country whose subdivisions are listed, the code is read as that country's subdivision first, as
+    the qualifier rules read it ("Ikeja, LA, Nigeria" is Lagos State, "Dallas, TX, USA" Texas,
+    "Abeokuta, OG, Nigeria" Ogun State).
+
+    W21-REV-GEO r1: a Nigerian two-letter code has its Nigerian reading beside any other (C-2,
+    :data:`_JURISDICTION_CODE_AREAS`); a short code that case does not settle is unclear, never a
+    word (C-3); and the first part of an address of two or more parts is read as D1 reads a later
+    part, "Dallas TX" or "Springfield AN" (C-1 and C-1b, :func:`_first_part_readings`), except a
+    route designator ("1 SR 520, Redmond"), whose first-part reading D1 keeps (C-16)."""
+    letters = [ch for ch in text if ch.isalpha()]
+    mixed = any(ch.isupper() for ch in letters) and any(ch.islower() for ch in letters)
+    places: list[PartPlace] = []
+
+    def identities(areas: list[_Area]) -> tuple[MarketIdentity, ...]:
+        return tuple(MarketIdentity(region=r, country=c, label=text) for c, r in areas)
+
+    raw_parts = _written_parts(text)
+    for index, raw in enumerate(raw_parts):
+        folded = _strip_postcode(fold(raw))
+        codes = _listed_codes(raw, folded)
+        if codes:
+            areas = [(form.country, form.region) for form in codes]
+            places += [PartPlace(PLACE_CODE, folded, identities([area])) for area in areas]
+            continue
+        if _CODE_TOKEN.search(raw):
+            continue  # "US-9", "GA-400", "AL-AIN", "DE-BY": no listed code (C-1, C-9)
+        named = _named_subdivision(folded)
+        prefixed = _AREA_PREFIX.sub("", folded) if _AREA_PREFIX.match(folded) else None
+        if named is not None:
+            area = (named.country, named.region)
+            places.append(PartPlace(PLACE_CODE, folded, identities([area])))
+            continue
+        if prefixed:
+            areas = _area_candidates(prefixed) + _homonym_areas(prefixed)
+            coded = _JURISDICTION_CODE_AREAS.get(prefixed)
+            if coded is not None and coded not in areas:
+                # W21-REV-GEO r2 C-9: "State of PL" is Poland or Plateau State, as "PL" is (C-2).
+                areas.append(coded)
+            if areas:
+                places.append(PartPlace(PLACE_CODE, folded, identities(areas)))
+                continue
+        if index == 0 and len(raw_parts) > 1 and not _designator(raw):
+            # W21-REV-GEO r1 C-1: "Dallas TX, 1 Main St". A designator keeps D1's first-part
+            # reading (C-16: "1 SR 520, Redmond"). W21-REV-GEO r2 C-9: it comes after the suffixed
+            # and prefixed readings above, which are explicit in the first part as elsewhere
+            # ("State of WA, 1 Main St, Dallas, TX" is refused for Dallas).
+            found = _first_part_readings(raw, folded)
+            if found:
+                places += [PartPlace(PLACE_FIRST_PART, folded, readings) for readings in found]
+                continue
+        route = _route_code(raw)
+        if route is not None:
+            # GEO-P2 (G-8, FU-H): "4400 US Hwy 75" is a road of the US; read by case, as a code is.
+            areas = _area_candidates(route.lower())
+            if route.isupper() and mixed:
+                places.append(PartPlace(PLACE_NAME, folded, identities(areas)))
+            elif not mixed:
+                places.append(PartPlace(PLACE_UNCLEAR, folded, identities(areas)))
+            continue
+        areas = _area_candidates(folded)
+        coded = _JURISDICTION_CODE_AREAS.get(folded)
+        if coded is not None and coded not in areas:
+            areas = [*areas, coded]  # W21-REV-GEO r1 C-2: "LA" is Lagos State too, "OG" Ogun State
+        homonyms = [area for area in _homonym_areas(folded) if area not in areas]
+        if not areas and not homonyms:
+            continue
+        if folded in _DIRECTION_PARTS and not (
+            index == 0 and _STATE_AND_ZIP.fullmatch(raw.strip())
+        ):
+            # Review W21-REV-GEO P2 r1 I-9: a first part "NE 68102" is a state and its ZIP code, as
+            # "FL 33101" is, never a direction.
+            places.append(PartPlace(PLACE_DIRECTION, folded, identities(areas)))
+            continue
+        # A code of two or three letters ("NG", "TX", "NSW"); a name that short ("Edo", "Imo",
+        # "Oyo", a Nigerian state's bare name) is not one.
+        short = " " not in folded and len(folded) <= 3 and bool(areas)
+        numbers = fold(raw).split()[1:]
+        zip_code = any(_ZIP_CODE.fullmatch(number) for number in numbers)
+        if short and folded in _UNIT_LABELS and numbers and not (folded == "fl" and zip_code):
+            # "FL 3", "NO 5", "No 1234": a floor or a unit before its number. GEO-P2: "FL" before a
+            # ZIP code is Florida ("FL 33101"); any other label stays a unit (review P2 r1 C-3).
+            if folded == "fl" and _floor_after_town(raw_parts, index):
+                # Review W21-REV-GEO P2 r1 C-1: "1 Main St, Miami, FL 3" is a floor, or Florida
+                # with a short postcode: an unclear word, as GEO-P1 reads one.
+                places.append(PartPlace(PLACE_UNCLEAR, folded, identities(areas)))
+            continue
+        following = [p for p in map(address_part_key, raw_parts[index + 1 :]) if _is_named(p)]
+        country_after = _country_code(following[0]) if following else None
+        if short and country_after is not None:
+            if country_after not in _CODED_COUNTRIES:
+                continue  # "Mumbai, MH, India": an unlisted country's region code (G-7)
+            region, _ = normalize_region(folded, country_after)
+            tokens = _JURISDICTION_REGION_TOKENS.get(country_after, {})
+            if region in _CODED_REGIONS or folded in tokens:
+                areas, homonyms = [(country_after, region)], []  # "Ikeja, LA, Nigeria"
+        written = _written_words(raw)
+        if not areas or folded in CITY_FIRST_NAMES:
+            kind = PLACE_UNCLEAR  # "Adamawa", "Kano" (a town's name too, X-5); "Washington" (X-4)
+        elif not short:
+            kind = PLACE_NAME
+        elif not mixed:
+            kind = PLACE_UNCLEAR  # "ACME, NG, LAGOS": case does not tell a code from a word
+        elif len(written) == 1 and written[0].isupper():
+            kind = PLACE_NAME  # "ACME, NG, Lagos": a code written as one
+        else:
+            # W21-REV-GEO r1 C-3: "Dallas, Tx, 1 Main St", "Bo, Southern Province": case does not
+            # settle it, so it is never read as naming nothing. "Bo" for a location in Bo is the
+            # town (the resolver's city exemption; r3b C-4).
+            kind = PLACE_UNCLEAR
+        places.append(PartPlace(kind, folded, identities(areas + homonyms)))
+    return tuple(places)
+
+
+def _first_part_readings(raw: str, folded: str) -> list[tuple[MarketIdentity, ...]]:
+    """W21-REV-GEO r1 C-1: the readings of an address's first part as a town and a code, one group
+    each: D1's explicit reading of a later part (:func:`_part_reading`: "Dallas TX") and its
+    explicit C-8 and C-12 groups (:func:`_part_groups`: "Dallas GA", "Munich DE BY"), each with the
+    Nigerian reading of a two-letter code (C-2: "Springfield LA" is Louisiana, Laos or Lagos
+    State). C-1b (coordinator ruling R-2): a word and a Nigerian code that names nothing else
+    ("Springfield AN", where D1 reads "Springfield TX"), with that code's reading alone, or beside
+    the country of a spaced code form, as C-12 reads one ("Munich DE OG"). Empty for anything
+    else."""
+    explicit, _ = _part_reading(raw)
+    groups, _ = _part_groups(raw)
+    found = [(reading,) for reading in explicit] + [tuple(group) for group in groups]
+    words = folded.split()
+    coded = _JURISDICTION_CODE_AREAS.get(words[-1]) if words else None
+    if coded is None:
+        return found
+    nigerian = MarketIdentity(region=coded[1], country=coded[0], label=raw)
+    if found:
+        return [(*readings, nigerian) for readings in found]
+    if len(words) < 2 or _area_candidates(words[-1]):
+        return []  # "OG" alone is a short part (C-2); "12 Allen Pl" is D1's ("PL" is Poland too)
+    spaced = _spaced_code_form(raw)
+    if spaced is not None:
+        # C-12: "Munich DE OG" is Germany's code form or the code OG after a word.
+        return [(MarketIdentity(country=spaced[0], label=raw), nigerian)]
+    return [(nigerian,)]
 
 
 def _part_groups(
@@ -746,10 +1186,19 @@ def _spaced_group(spaced: tuple[str, str], label: str) -> tuple[MarketIdentity, 
 _NUMBER_LABELS: Final = frozenset({"no", "nr", "num", "number"})
 
 
+def _us_route(text: str) -> bool:
+    """GEO-P2 (G-8, FU-H): is ``text`` a route designator whose code is "US" ("1000 US-75", "1000
+    us 75")? Its road reading is a United States route and its code reading the United States, so
+    both name the same country: it names the United States, as "4400 US Hwy 75" does, and is not an
+    ambiguous route ("1 SR 520": a road, or Suriname)."""
+    return _designator(text) and _strip_postcode(fold(text)).split()[-1] == "us"
+
+
 def _designator(part: str, unit: bool = False) -> bool:
     """C-16: is the last word of ``part`` a code only once a trailing number is dropped, and after
     a number or a unit label ("12000 FM 1960", "1 SR 520", "Unit 5 NY 10001"), or a unit label
-    after a street type ("123 Main St Fl 3")? In a later part such a code is ambiguous. With
+    after a street type ("123 Main St No 5"; a floor, "Fl 3", is left out first, GEO-P2)? In a
+    later part such a code is ambiguous. With
     ``unit``: is it a number label after a unit label ("Flat No 3", "Plot No 12"), which states
     nothing?"""
     words, kept = fold(part).split(), _strip_postcode(fold(part)).split()
@@ -801,6 +1250,8 @@ def _unit_or_postcode(part: str) -> bool:
         return True
     if all(_HAS_DIGIT.search(word) for word in words):
         return True
+    if _FLOOR.fullmatch(part.strip()):
+        return True  # GEO-P2 (G-6): "Fl 3" is a floor, never Florida
     # A label that is also a code ("FL-12" Florida road, "NO 5") is not a unit.
     return (
         len(words) >= 2

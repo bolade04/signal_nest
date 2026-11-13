@@ -118,8 +118,12 @@ CF2 = "a7d2e9f4c1b8"
 # exports, notifications, retention markers, capability CHECK widened.
 CF3 = "c3f8e1a6d2b9"
 # Project Phase 5D 5D-W1 (W21, Amendment D-1): the campaign-location data repair (data only).
-REPAIR = "d5f616c0ec97"
-# D-N4 item 37 (W21): the PostgreSQL append-only backstop (triggers; nothing on SQLite).
+D1_REPAIR = "d5f616c0ec97"
+# W21 ADDR (the operator's limited CF-3 migration-freeze exception, 2026-11-12): the structured
+# business address on geo_coverage_rules. It follows the D-1 repair.
+ADDR = "6f8a80cf1785"
+# D-N4 item 37 (W21): the PostgreSQL append-only backstop (triggers; nothing on SQLite). It
+# follows ADDR.
 CODE_HEAD = "d0a8bce8de6a"
 
 
@@ -272,8 +276,9 @@ def _insert(con, table: str, id_: str, *, user: str = "u-1", **kw) -> None:
 def test_this_revision_follows_invitations_and_precedes_the_single_head() -> None:
     script = _script()
     assert [r.revision for r in script.get_revisions("heads")] == [CODE_HEAD]
-    assert script.get_revision(CODE_HEAD).down_revision == REPAIR
-    assert script.get_revision(REPAIR).down_revision == CF3
+    assert script.get_revision(CODE_HEAD).down_revision == ADDR
+    assert script.get_revision(ADDR).down_revision == D1_REPAIR
+    assert script.get_revision(D1_REPAIR).down_revision == CF3
     assert script.get_revision(CF3).down_revision == CF2
     assert script.get_revision(CF2).down_revision == CF1
     assert script.get_revision(CF1).down_revision == FINDING

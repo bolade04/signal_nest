@@ -59,16 +59,26 @@ from app.tests._auth2_support import pg_database, require_postgres
 
 API_DIR = Path(__file__).resolve().parents[2]
 #: The code head (D-N4 item 37, W21: the PostgreSQL append-only backstop: one trigger function
-#: and two triggers on each table the application guard covers; no table or column, so the
-#: schema's tables and columns at head are CF-3's).
+#: and two triggers on each table the application guard covers; no table or column).
 HEAD = "d0a8bce8de6a"
-#: One below head (Project Phase 5D 5D-W1, W21 Amendment D-1: the campaign-location data repair;
+#: One below head (W21 ADDR, under the operator's limited CF-3 migration-freeze exception of
+#: 2026-11-12: the structured business address and its locality confirmation, ten nullable
+#: columns on ``geo_coverage_rules``).
+ADDR = "6f8a80cf1785"
+#: The columns ADDR adds (and its downgrade removes).
+ADDR_COLUMNS = {
+    "business_address_street", "business_address_locality", "business_address_region",
+    "business_address_postcode", "business_address_country", "locality_confirmed_locality",
+    "locality_confirmed_city", "locality_confirmed_jurisdiction", "locality_confirmed_at",
+    "locality_confirmed_by_user_id",
+}
+#: Two below head (Project Phase 5D 5D-W1, W21 Amendment D-1: the campaign-location data repair;
 #: data only).
 REPAIR = "d5f616c0ec97"
-#: Two below head (Project Phase 5 CF-3, W21: campaign hardening and ``campaign_locations``,
+#: Three below head (Project Phase 5 CF-3, W21: campaign hardening and ``campaign_locations``,
 #: the jurisdiction columns, ``exports``, ``notifications`` / ``notification_preferences``,
 #: the ``deleted_at`` retention markers, and the widened capability-override CHECK).
-BELOW_HEAD = "c3f8e1a6d2b9"
+CF3 = "c3f8e1a6d2b9"
 #: The tables the backstop's triggers are on (the application guard's set,
 #: ``app.db.append_only``).
 BACKSTOP_TABLES = frozenset({
@@ -333,6 +343,7 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     assert cf3_tables <= _tables(pg_url)
     assert {"jurisdiction_code", "deleted_at"} <= _columns(pg_url, "creative_drafts")
     assert "jurisdiction_code" in _columns(pg_url, "business_locations")
+    assert ADDR_COLUMNS <= _columns(pg_url, "geo_coverage_rules")
 
     # One guarded step down undoes exactly the head revision: D-N4 item 37's append-only
     # backstop, so its triggers and function go and no table or column does; the spent token
@@ -342,19 +353,30 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     step_token = _confirmation(pg_url, "-1")
     schema_at_head = {t: _columns(pg_url, t) for t in _tables(pg_url)}
     _alembic(pg_url, "-x", f"confirm={step_token}", "downgrade", "-1")
-    assert _version(pg_url) == [REPAIR]
+    assert _version(pg_url) == [ADDR]
     assert {t: _columns(pg_url, t) for t in _tables(pg_url)} == schema_at_head
     assert _backstop_triggers(pg_url) == set()
     spent = _run(["-x", f"confirm={step_token}", "downgrade", "-1"], pg_url)
-    assert spent.returncode != 0 and _version(pg_url) == [REPAIR]
+    assert spent.returncode != 0 and _version(pg_url) == [ADDR]
     stale = _run(["-x", f"confirm={base_token_at_head}", "downgrade", "base"], pg_url)
-    assert stale.returncode != 0 and _version(pg_url) == [REPAIR]
+    assert stale.returncode != 0 and _version(pg_url) == [ADDR]
+
+    # The next guarded step undoes W21 ADDR: its ten columns go from geo_coverage_rules and
+    # nothing else changes.
+    addr_token = _confirmation(pg_url, "-1")
+    _alembic(pg_url, "-x", f"confirm={addr_token}", "downgrade", "-1")
+    assert _version(pg_url) == [REPAIR]
+    schema_below = {t: _columns(pg_url, t) for t in _tables(pg_url)}
+    assert schema_below == {
+        **schema_at_head,
+        "geo_coverage_rules": schema_at_head["geo_coverage_rules"] - ADDR_COLUMNS,
+    }
 
     # The next guarded step undoes 5D-W1's data-only repair: no table or column goes.
     repair_token = _confirmation(pg_url, "-1")
     _alembic(pg_url, "-x", f"confirm={repair_token}", "downgrade", "-1")
-    assert _version(pg_url) == [BELOW_HEAD]
-    assert {t: _columns(pg_url, t) for t in _tables(pg_url)} == schema_at_head
+    assert _version(pg_url) == [CF3]
+    assert {t: _columns(pg_url, t) for t in _tables(pg_url)} == schema_below
 
     # The next guarded step undoes exactly CF-3.
     cf3_token = _confirmation(pg_url, "-1")

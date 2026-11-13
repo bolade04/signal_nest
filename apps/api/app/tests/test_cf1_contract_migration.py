@@ -4,8 +4,9 @@ Through the real Alembic CLI on a throwaway SQLite database (as CI validates mig
 
 * ``f3a9c1e7b2d5`` follows ``e7b3c5a9d1f4``, CF-2's ``a7d2e9f4c1b8`` follows it, CF-3's
   ``c3f8e1a6d2b9`` follows CF-2, 5D-W1's campaign-location data repair ``d5f616c0ec97`` follows
-  CF-3 and the single head (D-N4 item 37's append-only backstop ``d0a8bce8de6a``, triggers on
-  PostgreSQL only) follows the repair; ``upgrade head`` then ``alembic
+  CF-3, W21 ADDR's structured business address ``6f8a80cf1785`` follows the repair, and the
+  single head (D-N4 item 37's append-only backstop ``d0a8bce8de6a``, triggers on PostgreSQL
+  only) follows ADDR; ``upgrade head`` then ``alembic
   check`` reports no drift between the models and the migrations (Phase 5 plan §6.2.0);
 * **the migrated database's CHECKs equal their Python authorities, in both directions** — the
   capability set (``persisted_values()``), the approval decision / subject-type / decided-role
@@ -49,9 +50,11 @@ API_DIR = Path(__file__).resolve().parents[2]
 CF1 = "f3a9c1e7b2d5"
 #: W21 CF-3, which follows CF-2.
 CF3 = "c3f8e1a6d2b9"
-#: 5D-W1's campaign-location data repair (Amendment D-1), which follows CF-3.
-REPAIR = "d5f616c0ec97"
-#: The code head (D-N4 item 37's PostgreSQL append-only backstop), which follows the repair.
+#: 5D-W1's campaign-location data repair (Amendment D-1, data only), which follows CF-3.
+D1_REPAIR = "d5f616c0ec97"
+#: W21 ADDR: the structured business address on ``geo_coverage_rules``, which follows the repair.
+ADDR = "6f8a80cf1785"
+#: The code head (D-N4 item 37's PostgreSQL append-only backstop), which follows ADDR.
 HEAD = "d0a8bce8de6a"
 #: W21 CF-2, between this revision and the head.
 CF2 = "a7d2e9f4c1b8"
@@ -191,8 +194,9 @@ def test_the_head_is_single_and_follows_the_finding_identity() -> None:
 
     script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
     assert [r.revision for r in script.get_revisions("heads")] == [HEAD]
-    assert script.get_revision(HEAD).down_revision == REPAIR
-    assert script.get_revision(REPAIR).down_revision == CF3
+    assert script.get_revision(HEAD).down_revision == ADDR
+    assert script.get_revision(ADDR).down_revision == D1_REPAIR
+    assert script.get_revision(D1_REPAIR).down_revision == CF3
     assert script.get_revision(CF3).down_revision == CF2
     assert script.get_revision(CF2).down_revision == CF1
     assert script.get_revision(CF1).down_revision == PREV
