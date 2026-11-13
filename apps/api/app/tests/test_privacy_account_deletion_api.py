@@ -313,7 +313,7 @@ def test_anonymous_is_401(env: PrivacyEnv):
 # What the request checks
 # --------------------------------------------------------------------------- #
 def test_the_request_runs_no_content_scan(env: PrivacyEnv, monkeypatch):
-    """The scan of every text column (359 at this head) stays out of the request path."""
+    """The scan of every text column (519 at W21 ADDR) stays out of the request path."""
     scans: list[object] = []
     real = verification._content_findings
 

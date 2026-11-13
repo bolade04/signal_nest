@@ -35,7 +35,7 @@ import pytest
 API_DIR = Path(__file__).resolve().parents[2]
 # Revision immediately before the workspace_capability_overrides migration.
 PREV = "4945b98229e6"
-HEAD = "d5f616c0ec97"  # 5D-W1's campaign-location data repair (Amendment D-1)
+HEAD = "6f8a80cf1785"  # W21 ADDR: the structured business address (after the D-1 repair)
 TABLE = "workspace_capability_overrides"
 
 

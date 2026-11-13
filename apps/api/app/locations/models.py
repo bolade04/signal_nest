@@ -8,11 +8,33 @@ attempted or captured"; the resolver's ``UNRESOLVED`` is never stored (the CHECK
 Nothing writes or reads either column yet: the resolver and its consumers are lane 5D-W2's.
 ``uq_business_locations_id_workspace`` is the target of the campaign-membership table's
 workspace-consistency key (:class:`app.campaign_context.models.CampaignLocation`).
+
+**The structured business address (W21 ADDR; operator instruction of 2026-11-12, under its
+limited CF-3 migration-freeze exception).** A coverage rule holds its business address as five
+separate, nullable fields beside the free-text ``business_address``: street, town or locality,
+state or province, postcode and country, stored as the customer entered them. Nothing back-fills
+them and nothing copies the location's own fields into them. What they must hold before a
+jurisdiction-dependent action, and how they are compared with the location, is
+:mod:`app.jurisdiction.business_address`. The five ``locality_confirmed_*`` columns record a
+customer's confirmation that the business town lies within the location's area, bound to the
+values it was made for; it is the customer's statement (confirmed by the customer).
 """
 
 from __future__ import annotations
 
-from sqlalchemy import Boolean, CheckConstraint, Float, ForeignKey, Index, Integer, String, Text
+from datetime import datetime
+
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
 
@@ -67,14 +89,32 @@ class BusinessLocation(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     jurisdiction_code: Mapped[str | None] = mapped_column(String(JURISDICTION_CODE_MAX_LENGTH))
 
 
+#: All four values that bind a locality confirmation are set together or not at all; the
+#: confirming account is outside it, because deleting that account clears it (SET NULL).
+LOCALITY_CONFIRMATION_COMPLETE_SQL = (
+    "(locality_confirmed_at IS NULL) = (locality_confirmed_jurisdiction IS NULL) AND "
+    "(locality_confirmed_at IS NULL) = (locality_confirmed_locality IS NULL) AND "
+    "(locality_confirmed_at IS NULL) = (locality_confirmed_city IS NULL)"
+)
+
+
 class GeoCoverageRule(Base, UUIDPrimaryKeyMixin, TimestampMixin):
-    """Scout Reach configuration for a location (radius / markets / exclusions)."""
+    """Scout Reach configuration for a location (radius / markets / exclusions), and the
+    location's business address (free text, and the structured fields of W21 ADDR)."""
 
     __tablename__ = "geo_coverage_rules"
     __table_args__ = (
         CheckConstraint(
             jurisdiction_code_check_sql(nullable=True),
             name="ck_geo_coverage_rule_jurisdiction_code",
+        ),
+        CheckConstraint(
+            jurisdiction_code_check_sql("locality_confirmed_jurisdiction", nullable=True),
+            name="ck_geo_coverage_rule_locality_confirmed_jurisdiction",
+        ),
+        CheckConstraint(
+            LOCALITY_CONFIRMATION_COMPLETE_SQL,
+            name="ck_geo_coverage_rule_locality_confirmation_complete",
         ),
     )
 
@@ -101,3 +141,24 @@ class GeoCoverageRule(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     #: Normalised jurisdiction this rule is scoped to (Project Phase 5D, W21 CF-3); NULL
     #: until captured.
     jurisdiction_code: Mapped[str | None] = mapped_column(String(JURISDICTION_CODE_MAX_LENGTH))
+
+    # --- The structured business address (W21 ADDR): as the customer entered it ----------
+    business_address_street: Mapped[str | None] = mapped_column(String(400))
+    business_address_locality: Mapped[str | None] = mapped_column(String(160))
+    business_address_region: Mapped[str | None] = mapped_column(String(160))
+    business_address_postcode: Mapped[str | None] = mapped_column(String(40))
+    business_address_country: Mapped[str | None] = mapped_column(String(120))
+
+    # --- A customer's confirmation that the business town lies within this location's area,
+    # bound to the town, the location's city and the jurisdiction it was made for
+    # (confirmed by the customer). ----------------------------------------------------------
+    locality_confirmed_locality: Mapped[str | None] = mapped_column(String(160))
+    locality_confirmed_city: Mapped[str | None] = mapped_column(String(160))
+    locality_confirmed_jurisdiction: Mapped[str | None] = mapped_column(
+        String(JURISDICTION_CODE_MAX_LENGTH)
+    )
+    locality_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: The confirming account; SET NULL when it is deleted (the confirmation is kept).
+    locality_confirmed_by_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )

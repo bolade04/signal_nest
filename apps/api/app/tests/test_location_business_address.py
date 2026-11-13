@@ -83,6 +83,19 @@ STORED = {
     "online_global": True,
 }
 SPACES = {"ws-a1": "org-a", "ws-a2": "org-a", "ws-b1": "org-b"}
+#: What W21 ADDR adds to every answer: the structured business address (these tests never set
+#: it, and a PUT that does not name it leaves it as it was) and what is computed about its town.
+#: ``test_location_structured_address`` covers them.
+ADDR_UNSET = {
+    "business_address_street": None,
+    "business_address_locality": None,
+    "business_address_country": None,
+    "business_address_region": None,
+    "business_address_postcode": None,
+    "locality_matches_city": None,
+    "locality_confirmed_at": None,
+    "locality_confirmation_applies": False,
+}
 
 
 def _seed(s) -> dict[str, dict[str, str]]:
@@ -299,6 +312,7 @@ def test_put_stores_the_corrected_business_address_and_keeps_every_other_field(w
         "business_address": CORRECTED,
         "id": "geo-a1",
         "location_id": "loc-a1",
+        **ADDR_UNSET,
     }
 
     got = w.coverage("GET", "ws-a1", "loc-a1")
@@ -308,6 +322,7 @@ def test_put_stores_the_corrected_business_address_and_keeps_every_other_field(w
         "business_address": CORRECTED,
         "id": "geo-a1",
         "location_id": "loc-a1",
+        **ADDR_UNSET,
     }
 
     after = w.row(GeoCoverageRule, "geo-a1")
@@ -326,7 +341,9 @@ def test_put_stores_null_for_an_emptied_business_address(w: W) -> None:
     r = w.coverage("PUT", "ws-a1", "loc-a1", {**STORED, "business_address": None})
     assert r.status_code == 200, r.text
     got = w.coverage("GET", "ws-a1", "loc-a1").json()
-    assert got == {**STORED, "business_address": None, "id": "geo-a1", "location_id": "loc-a1"}
+    assert got == {
+        **STORED, "business_address": None, "id": "geo-a1", "location_id": "loc-a1", **ADDR_UNSET
+    }
     assert w.row(GeoCoverageRule, "geo-a1")["business_address"] is None
 
 

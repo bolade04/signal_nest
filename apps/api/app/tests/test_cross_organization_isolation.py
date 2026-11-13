@@ -912,6 +912,31 @@ class TestLocations:
         own = pov.send("GET", _ws_path(world, a, f"/locations/{a.location_id}/geo-coverage"))
         assert own.status_code == 200 and own.json()["radius_miles"] == 25
 
+    def test_locality_confirmation_with_foreign_location_id_404_unchanged(
+        self, world: World, pov: Pov
+    ):
+        """W21 ADDR: the confirmation route is scoped like the coverage PUT."""
+        a, b = pov.a, pov.b
+        rule_id = next(
+            r["id"] for r in _rows(world, GeoCoverageRule) if r["location_id"] == b.location_id
+        )
+        before = world.row(GeoCoverageRule, rule_id)
+        path = f"/locations/{b.location_id}/geo-coverage/locality-confirmation"
+        for confirmed in (True, False):
+            r = pov.send("PUT", _ws_path(world, a, path), {"confirmed": confirmed})
+            _assert_404(r, "Location not found in this workspace.")
+            _assert_membership_403(
+                pov.send("PUT", _ws_path(world, b, path), {"confirmed": confirmed})
+            )
+        assert world.row(GeoCoverageRule, rule_id) == before
+        # Positive: A withdraws (always allowed) on a location of its own.
+        own = pov.send(
+            "PUT",
+            _ws_path(world, a, f"/locations/{a.location_id}/geo-coverage/locality-confirmation"),
+            {"confirmed": False},
+        )
+        assert own.status_code == 200 and own.json()["locality_confirmation_applies"] is False
+
     def test_deactivate_and_reactivate_with_foreign_location_id_404_unchanged(
         self, world: World, pov: Pov
     ):
@@ -2097,6 +2122,9 @@ COVERAGE: dict[tuple[str, str], tuple[str, ...]] = {
     ("PUT", f"{W}/locations/{{location_id}}/geo-coverage"): (
         "TestLocations::test_geo_coverage_with_foreign_location_id_404_unchanged",
     ),
+    ("PUT", f"{W}/locations/{{location_id}}/geo-coverage/locality-confirmation"): (
+        "TestLocations::test_locality_confirmation_with_foreign_location_id_404_unchanged",
+    ),
     **{
         ("POST", f"{W}/locations/{{location_id}}/{verb}"): (
             "TestLocations::test_deactivate_and_reactivate_with_foreign_location_id_404_unchanged",
@@ -2324,8 +2352,9 @@ class TestCoverageCompleteness:
         # operation came or went. 93 -> 97 (W21 P5C): the creative-capability reflection,
         # list/generate a brief's drafts and fetch one draft (TestCreativeDrafts); 97 -> 99:
         # decide on a draft and its decision history (TestCreativeDraftDecisions). 99 -> 100
-        # (Project Phase 5D, 5D-W1): read one campaign (TestCampaignRead).
-        assert len(served) == 100
+        # (Project Phase 5D, 5D-W1): read one campaign (TestCampaignRead). 100 -> 101 (W21 ADDR):
+        # the locality confirmation (TestLocations).
+        assert len(served) == 101
 
     def test_every_named_proof_exists(self):
         here = _tests_defined_in(Path(__file__))

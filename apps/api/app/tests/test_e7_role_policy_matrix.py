@@ -238,6 +238,15 @@ E7_POLICY: tuple[Policy, ...] = (
         RANK_FLOOR,
         _body_422(),
     ),
+    # W21 ADDR: confirm or withdraw that the business town lies within the location's area.
+    _row(
+        "PUT",
+        f"{_W}/locations/{{location_id}}/geo-coverage/locality-confirmation",
+        "workspace",
+        EDITORS,
+        RANK_FLOOR,
+        _body_422(),
+    ),
     # P6-UI-023: no body; an admitted role reaches the handler's 404 for the sentinel id.
     *(
         _row(
@@ -678,7 +687,8 @@ class TestPolicyTableCompleteness:
             # .../briefs/{brief_id}/drafts), +3 workspace membership (the two draft reads and
             # the creative-capability reflection). Recomputed from the served routes.
             # +2 W21 P5C draft decisions (POST and GET .../drafts/{draft_id}/approvals).
-            "role_gated": 65,
+            # +1 W21 ADDR (PUT .../geo-coverage/locality-confirmation).
+            "role_gated": 66,
             # +1 Project Phase 5D (5D-W1): GET /workspaces/{workspace_id}/campaigns/{item_id}.
             MEMBER_WS: 32,
             MEMBER_ORG: 1,
@@ -691,8 +701,8 @@ class TestPolicyTableCompleteness:
         }
         assert by_category == {
             # 48 at CF-1; +1 Phase 5A (brief capture); -3 W21 CF-2 (claims writes -> WS_EXACT);
-            # +1 W21 P5C (generate a draft).
-            RANK_FLOOR: 47,
+            # +1 W21 P5C (generate a draft). +1 W21 ADDR (the locality confirmation).
+            RANK_FLOOR: 48,
             # 1 at CF-1 (audit-logs); +3 Phase 5B (approvals); +3 W21 CF-2 (claims writes).
             # Both sides moved this pin from 1 to 4, so git kept one 4: the union is 7.
             # +2 W21 P5C (the draft decision POST and its history GET).
@@ -744,7 +754,9 @@ class TestPolicyTableCompleteness:
         # /workspaces/{workspace_id}/drafts/{draft_id}/approvals, two WS_EXACT rows above.
         # 140 -> 141 (Project Phase 5D, 5D-W1): GET /workspaces/{workspace_id}/campaigns/{item_id},
         # a MEMBER_WS row above.
-        assert len(served) == 141
+        # 141 -> 142 (W21 ADDR): PUT .../locations/{location_id}/geo-coverage/
+        # locality-confirmation, a RANK_FLOOR row above.
+        assert len(served) == 142
 
     def test_one_row_per_route(self):
         keys = [p.key for p in E7_POLICY]
@@ -753,7 +765,8 @@ class TestPolicyTableCompleteness:
     def test_rows_are_machine_readable_and_partition_the_roles(self):
         rows = json.loads(json.dumps([asdict(p) for p in E7_POLICY]))
         # 93 on the I-5AB + CF-2 base; +6 W21 P5C (the draft routes); +1 5D-W1 (one campaign).
-        assert len(rows) == 100
+        # +1 W21 ADDR (the locality confirmation).
+        assert len(rows) == 101
         for row in rows:
             assert set(row) == {"method", "path", "scope", "allowed", "denied", "category", "probe"}
             assert set(row["allowed"]) | set(row["denied"]) == set(ALL_ROLES)

@@ -175,6 +175,9 @@ class AccountExportOut(BaseModel):
     notifications_received: list[dict[str, Any]]
     #: Project Phase 5E (W21 CF-3): the account's own per-event notification preferences.
     notification_preferences: list[dict[str, Any]]
+    #: W21 ADDR: the confirmations the account made that a location's business town lies within
+    #: its area (the coverage rule, its location and the instant; never the address).
+    locality_confirmations_made: list[dict[str, Any]]
 
 
 class ExportedTableOut(BaseModel):
