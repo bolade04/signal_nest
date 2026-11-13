@@ -14,7 +14,25 @@ authority for each:
   (:func:`app.brands.service.run_onboarding`, coordinator ruling R1) both gate on it.
 * :func:`audit_claim_created` — the ``claims_library_entry.created`` audit record, in the
   shape the ``/claims`` create route writes: entity ``claims_library_entry``, the entry id,
-  and the request model's field *names* (:data:`CLAIM_CREATE_FIELDS`), never their values.
+  the request model's field *names* (:data:`CLAIM_CREATE_FIELDS`) in ``context``, and the new
+  entry's ``text``, ``kind`` and ``jurisdiction_codes`` in ``new_state``
+  (:func:`claim_audit_values`).
+* :func:`claim_audit_values` — what every claims-library audit record carries of the entry
+  (operator ruling D-N4 item 40, 2026-11-12: "record the previous and new claim text and kind
+  under the applicable access, retention and erasure controls. Free-form claim text must not
+  automatically be classified as containing no personal data."): its ``text`` and ``kind``,
+  and its ``jurisdiction_codes`` (:data:`CLAIM_AUDIT_VALUES`). The codes are a coordinator
+  addition beyond the ruling's minimum (DN4-A ruling A-R-3): since 5D-W1 they decide where an
+  entry applies, so without them the trail could not rebuild an entry's applicability after an
+  edit; they are jurisdiction codes, not personal data. A create records them as ``new_state``,
+  an update as
+  ``previous_state`` and ``new_state`` (both on every update, changed or not), a retirement as
+  ``previous_state``, so the library a draft was reviewed against can be rebuilt from the audit
+  trail after an edit (review W21-REV-R4 F-2). The text is free-form tenant text that may name
+  a person: it lives in ``audit_logs`` under that table's controls (the audit read's exact
+  roles, the organization export, account, invitee-email and organization erasure, the
+  verifier and the ``audit_logs`` retention class), as ``docs/operations/data-inventory.md``
+  states, and is never classified as containing no personal data.
 * :func:`load_library` — the workspace's entries as the engine reads them
   (:class:`app.claims.engine.LibraryEntry`). Retired entries are not loaded, and the engine
   ignores any that reach it (:func:`app.claims.engine.active_entries`): two independent
@@ -45,6 +63,11 @@ CLAIM_ENTITY_TYPE = "claims_library_entry"
 #: (``ClaimIn.model_dump()`` always carries every one), sorted.
 CLAIM_CREATE_FIELDS: tuple[str, ...] = tuple(sorted(ClaimIn.model_fields))
 
+#: The entry values every claims-library audit record carries (operator ruling D-N4 item 40):
+#: the claim's free-form ``text`` (which may contain personal data) and its ``kind``; and its
+#: ``jurisdiction_codes`` (codes only; coordinator addition A-R-3, beyond the ruling's minimum).
+CLAIM_AUDIT_VALUES: tuple[str, ...] = ("jurisdiction_codes", "kind", "text")
+
 
 def is_claims_steward(role: Role | str) -> bool:
     """Whether ``role`` may write the claims library (exact membership)."""
@@ -52,6 +75,18 @@ def is_claims_steward(role: Role | str) -> bool:
         return Role(role) in CLAIMS_STEWARD_ROLES
     except ValueError:
         return False
+
+
+def claim_audit_values(entry: ClaimsLibraryEntry) -> dict[str, object]:
+    """The entry's :data:`CLAIM_AUDIT_VALUES` as an audit state, exactly as stored (D-N4 item
+    40; A-R-3): ``{"jurisdiction_codes": …, "kind": …, "text": …}``. ``jurisdiction_codes`` is
+    the stored list (an empty list or ``None`` both mean every jurisdiction), copied so the
+    state never shares the entry's list."""
+    values: dict[str, object] = {}
+    for name in CLAIM_AUDIT_VALUES:
+        value = getattr(entry, name)
+        values[name] = list(value) if isinstance(value, list) else value
+    return values
 
 
 def audit_claim_created(
@@ -62,7 +97,15 @@ def audit_claim_created(
     actor_user_id: str,
     entry_id: str,
 ) -> None:
-    """Write ``claims_library_entry.created`` for one new entry, as ``/claims`` does."""
+    """Write ``claims_library_entry.created`` for one new entry, as ``/claims`` does: the
+    field names in ``context`` and the entry's ``jurisdiction_codes``, ``kind`` and ``text``
+    (:data:`CLAIM_AUDIT_VALUES`) in ``new_state``.
+
+    The entry is the one the caller has just added and flushed in ``db``, so it is read from
+    the session (no query)."""
+    entry = db.get(ClaimsLibraryEntry, entry_id)
+    if entry is None:  # a programming error: the caller audits an entry it never wrote
+        raise LookupError(f"claims library entry {entry_id!r} is not in this session")
     record_audit(
         db,
         organization_id=organization_id,
@@ -71,6 +114,7 @@ def audit_claim_created(
         action=AuditAction.CLAIMS_LIBRARY_ENTRY_CREATED,
         entity_type=CLAIM_ENTITY_TYPE,
         entity_id=entry_id,
+        new_state=claim_audit_values(entry),
         context={"fields": list(CLAIM_CREATE_FIELDS)},
     )
 
@@ -109,9 +153,11 @@ def load_library(db: Session, workspace_id: str) -> list[LibraryEntry]:
 
 __all__ = [
     "CLAIMS_STEWARD_ROLES",
+    "CLAIM_AUDIT_VALUES",
     "CLAIM_CREATE_FIELDS",
     "CLAIM_ENTITY_TYPE",
     "audit_claim_created",
+    "claim_audit_values",
     "is_claims_steward",
     "load_library",
 ]

@@ -1,15 +1,30 @@
 """Daily cost and call ceilings for generation calls (Project Phase 5C, W21 lane P5C).
 
-The four ceiling settings (``Settings.CREATIVE_GENERATION_CEILINGS``, W21 CF-2) bound text
-generation per UTC day:
+The four ceiling settings (``Settings.CREATIVE_GENERATION_CEILINGS``, W21 CF-2) constrain text
+generation per UTC day, and nothing else:
 
-* ``llm_daily_cost_ceiling_usd_global`` — model spend across every workspace;
-* ``llm_daily_cost_ceiling_usd_per_workspace`` — model spend of one workspace;
+* ``llm_daily_cost_ceiling_usd_global`` — a generation attempt is refused once the day's
+  counted model spend across every workspace has reached it, or the attempt could cross it;
+* ``llm_daily_cost_ceiling_usd_per_workspace`` — the same, for the counted spend of the
+  attempt's workspace;
 * ``llm_max_calls_per_workspace_per_day`` — generation calls (provider attempts) of one
   workspace;
 * ``llm_max_output_tokens_per_call`` — applied by the caller as the request's output limit,
   ``min(llm_max_output_tokens, llm_max_output_tokens_per_call)``
   (:meth:`app.llm.service.LLMService.run`, ``max_output_tokens``).
+
+**Which operations the ceilings constrain (operator ruling D-N4 item 29, 2026-11-12: "creative
+admission counts Scout spend as specified. State accurately which operations the ceilings
+constrain; do not strengthen this into an unproven platform-wide spending guarantee.").** The
+ceilings are checked only by :class:`CeilingMeter`, and only creative generation uses that
+meter (:func:`app.creative.service.execute_generation`, task ``generate_creative``). They
+decide whether a *generation attempt* is admitted. The two cost ceilings *count* every task's
+spend of the day, Scouting included, but they *refuse* only generation attempts. A Scout call,
+a recommendation brief or any other model call is never refused by them: it is governed by the
+meter it runs under (:class:`app.llm.metering.LLMMeter`: the per-run cap and the monthly
+workspace budget), not by these ceilings. So the day's total model spend can pass a cost
+ceiling: Scouting goes on after generation is refused. The ceilings are generation admission
+limits, not a platform-wide spending cap or guarantee.
 
 **Fail closed while unset.** None of the four has an approved value; each defaults to
 ``None``. While any is unset every generation attempt is refused (``ceilings_unset``) —
@@ -20,11 +35,12 @@ on that — NaN compares false against every spend and would never refuse.
 
 **What is counted — the ledger, never a draft's snapshot** (coordinator decision I-4 / R5).
 Spend is read from the Phase 6 usage ledger: the day's ``llm_usage_events.cost_usd`` (every
-task's, legacy scouting calls included, since the cost ceilings bound model spend) plus the
-charge of each of the day's ``llm_budget_reservations`` that has no usage row yet (a call in
-flight at its worst case, or one released or expired by recovery at its worst case). Calls are
-the day's ``llm_usage_events`` rows of the generation task. The attempts this meter has made
-but not yet written (the same-session path keeps them in memory until ``flush``) are added.
+task's, legacy scouting calls included: creative admission counts Scout spend, D-N4 item 29)
+plus the charge of each of the day's ``llm_budget_reservations`` that has no usage row yet (a
+call in flight at its worst case, or one released or expired by recovery at its worst case).
+Calls are the day's ``llm_usage_events`` rows of the generation task. The attempts this meter
+has made but not yet written (the same-session path keeps them in memory until ``flush``) are
+added.
 
 **Would breach → refused, before the call.** :class:`CeilingMeter` checks every provider
 attempt in :meth:`~CeilingMeter.before_attempt`, with that attempt's exact worst case

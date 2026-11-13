@@ -536,9 +536,13 @@ class Settings(BaseSettings):
     #: must be a finite number greater than 0 (NaN would compare false against every
     #: spend and fail open; infinity is no ceiling). ``creative_generation_ceilings_unset()``
     #: names the unset ones.
-    #: Daily (UTC) model-spend ceiling across every workspace, in USD.
+    #: Daily (UTC) creative-generation cost ceiling across every workspace, in USD: a
+    #: generation attempt is refused once the day's counted model spend of every workspace
+    #: (every task's, Scouting included) reaches it or could cross it. It refuses no other
+    #: model call, so it is not a platform-wide spending cap (D-N4 item 29; app.llm.quota).
     llm_daily_cost_ceiling_usd_global: float | None = None
-    #: Daily (UTC) model-spend ceiling per workspace, in USD.
+    #: Daily (UTC) creative-generation cost ceiling per workspace, in USD: the same, for the
+    #: counted spend of the attempt's workspace.
     llm_daily_cost_ceiling_usd_per_workspace: float | None = None
     #: Model calls one workspace may make per UTC day (generation).
     llm_max_calls_per_workspace_per_day: int | None = None
