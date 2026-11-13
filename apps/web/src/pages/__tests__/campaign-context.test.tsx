@@ -570,7 +570,9 @@ describe('editing campaign context (P6-PLAT-9)', () => {
     const screen = renderApp(<App />, { route: '/context' });
     const panel = await openTab(screen, 'Claims library');
     const dialog = await openEditor(screen, panel, 'claim', 'Better than everyone');
-    expect(within(dialog).getByRole('combobox', { name: /^kind/i })).toHaveTextContent('Legacy Kind');
+    expect(within(dialog).getByRole('combobox', { name: /^kind/i })).toHaveTextContent(
+      '"legacy-kind" (unsupported kind)',
+    );
     expect(within(dialog).getByRole('combobox', { name: /^risk level/i })).toHaveTextContent('Blocked');
     await retype(screen, dialog, /^notes/i, 'Never use');
     await save(screen, dialog);
@@ -908,7 +910,7 @@ describe('claim kinds are a closed set (D-N4 item 36)', () => {
     expect(posts()[0]!.body).toMatchObject({ text: `A ${label} claim`, kind });
   });
 
-  it('the list names each stored kind: the four by their labels, an older one as stored', async () => {
+  it('the list names each stored kind: the four by their labels, an older one by its stored text, marked', async () => {
     contextModel.seed('claims', 'row-b', { text: 'Cures everything', kind: 'blocked' });
     contextModel.seed('claims', 'row-d', { text: 'Terms apply', kind: 'required_disclaimer' });
     contextModel.seed('claims', 'row-l', { text: 'Older claim', kind: LEGACY_KIND });
@@ -916,6 +918,41 @@ describe('claim kinds are a closed set (D-N4 item 36)', () => {
     const panel = await openTab(screen, 'Claims library');
     expect(await within(panel).findByText('Blocked · Low risk')).toBeInTheDocument();
     expect(within(panel).getByText('Required disclaimer · Low risk')).toBeInTheDocument();
-    expect(within(panel).getByText('Legacy Kind · Low risk')).toBeInTheDocument();
+    expect(within(panel).getByText('"legacy-kind" (unsupported kind) · Low risk')).toBeInTheDocument();
+  });
+
+  // Review W21-REV-DN4-36 r1 C-2: a stored kind outside the set that the 5C review ignores must
+  // never read as one of the four labels, even when its title case would ("blocked_" -> "Blocked").
+  const BLOCKED_ = 'blocked_' as unknown as NonNullable<ContextPatchByKind['claims']['kind']>;
+  const REQUIRED_DISCLAIMER_TEXT = 'Required disclaimer' as unknown as NonNullable<
+    ContextPatchByKind['claims']['kind']
+  >;
+
+  it.each([
+    ['blocked_', BLOCKED_, 'Blocked · Low risk'],
+    ['Required disclaimer', REQUIRED_DISCLAIMER_TEXT, 'Required disclaimer · Low risk'],
+  ])('a stored kind %s is listed by its stored text, marked, never as a supported label', async (stored, kind, supported) => {
+    contextModel.seed('claims', 'row-x', { text: 'Inert claim', kind });
+    const screen = renderApp(<App />, { route: '/context' });
+    const panel = await openTab(screen, 'Claims library');
+    const subtitle = await within(panel).findByText((text) => text.includes(stored) && text.endsWith('Low risk'));
+    expect(subtitle.textContent).toContain(stored);
+    expect(subtitle.textContent).not.toBe(supported);
+    expect(within(panel).queryByText(supported)).not.toBeInTheDocument();
+  });
+
+  it('the edit dialog shows a stored blocked_ by its stored text, marked, and saving notes sends only the notes', async () => {
+    contextModel.seed('claims', 'row-x', { text: 'Inert claim', kind: BLOCKED_ });
+    const screen = renderApp(<App />, { route: '/context' });
+    const panel = await openTab(screen, 'Claims library');
+    const dialog = await openEditor(screen, panel, 'claim', 'Inert claim');
+    const kindBox = within(dialog).getByRole('combobox', { name: /^kind/i });
+    expect(kindBox.textContent).toContain('blocked_');
+    expect(kindBox.textContent).not.toBe('Blocked');
+    await retype(screen, dialog, /^notes/i, 'Kept as stored');
+    await save(screen, dialog);
+    await waitFor(() => expect(patches()).toHaveLength(1));
+    expect(patches()[0]!.body).toEqual({ notes: 'Kept as stored' });
+    expect(contextModel.rows('claims')[0]).toMatchObject({ kind: 'blocked_', notes: 'Kept as stored' });
   });
 });

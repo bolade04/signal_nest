@@ -50,6 +50,8 @@ interface FieldDefBase {
   placeholder?: string;
   description?: string;
   options?: Record<string, string>;
+  /** A select's label for a stored value its options do not offer (default: title case). */
+  storedValueLabel?: (value: string) => string;
   defaultValue?: unknown;
   colSpan?: boolean;
 }
@@ -83,13 +85,18 @@ const str = (v: unknown): string | null =>
 const arr = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : []);
 
 // The API's closed set of claim kinds (D-N4 item 36). A stored kind outside it (one written
-// before the set was closed) is shown as it is and is never sent unless the user picks one of these.
+// before the set was closed) is kept and never sent unless the user picks one of these.
 const claimKindOptions = {
   approved: 'Approved',
   restricted: 'Restricted',
   blocked: 'Blocked',
   required_disclaimer: 'Required disclaimer',
 };
+// A stored kind outside the set is shown with its stored text, quoted, and marked as unsupported,
+// so it never reads as one of the four labels: the 5C review gives such a kind no meaning, so a
+// stored "blocked_" or "Required disclaimer" must not look like "Blocked" or "Required disclaimer"
+// (review W21-REV-DN4-36 r1 C-2).
+const unsupportedKindLabel = (kind: string): string => `"${kind}" (unsupported kind)`;
 const riskOptions = { low: 'Low', medium: 'Medium', high: 'High' };
 const campaignModeOptions = {
   same_for_all: 'Same for all locations',
@@ -188,12 +195,19 @@ const KINDS: KindConfig[] = [
         kind &&
         (Object.prototype.hasOwnProperty.call(claimKindOptions, kind)
           ? claimKindOptions[kind as keyof typeof claimKindOptions]
-          : titleCase(kind));
+          : unsupportedKindLabel(kind));
       return [kindLabel, risk && `${titleCase(risk)} risk`].filter(Boolean).join(' · ') || null;
     },
     fields: [
       { key: 'text', label: 'Claim text', type: 'textarea', required: true, colSpan: true },
-      { key: 'kind', label: 'Kind', type: 'select', options: claimKindOptions, defaultValue: 'approved' },
+      {
+        key: 'kind',
+        label: 'Kind',
+        type: 'select',
+        options: claimKindOptions,
+        storedValueLabel: unsupportedKindLabel,
+        defaultValue: 'approved',
+      },
       { key: 'risk_level', label: 'Risk level', type: 'select', options: riskOptions, defaultValue: 'low' },
       { key: 'category', label: 'Category', type: 'text' },
       { key: 'notes', label: 'Notes', type: 'textarea', colSpan: true },
@@ -457,13 +471,14 @@ function renderControl(
         </div>
       );
     case 'select': {
-      // A stored row can hold a value this list does not offer (the seed's claim kind
-      // "blocked", a value set through the API or onboarding). Show it as it is, so an edit
-      // never displays a blank or a different value than the one stored, and keeping it
-      // sends nothing.
+      // A stored row can hold a value this list does not offer (the seed's risk level
+      // "blocked", a claim kind stored before the kinds were closed). Show it, so an edit never
+      // displays a blank or a different value than the one stored, and keeping it sends
+      // nothing. A field may label such a value itself (the claim kind marks it as unsupported);
+      // otherwise it is title-cased.
       const options: Record<string, string> = { ...f.options };
       if (typeof value === 'string' && value && !Object.prototype.hasOwnProperty.call(options, value)) {
-        options[value] = titleCase(value);
+        options[value] = f.storedValueLabel ? f.storedValueLabel(value) : titleCase(value);
       }
       return (
         <Select value={(value as string) || ''} onValueChange={(v) => onChange(v)}>
