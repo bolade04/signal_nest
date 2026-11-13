@@ -460,35 +460,59 @@ _PART_SEPARATORS: Final = re.compile(r"[,;/\r\n]")
 def without_town_parts(text: str | None, towns: frozenset[str]) -> str | None:
     """GEO-P3 (register G-2): ``text`` without its parts that are the location's town (``towns``:
     folded keys of the location's city field) but that the reader would take for an area
-    ("Washington" is also Washington State, "Minna" a region of the country Niger), joined by
-    commas; ``None`` when no such part is left out or nothing that names anything is left. A listed
-    code or a suffixed or prefixed subdivision is never left out (a city field "US-AL" must not
-    hide the code "US-AL"), and a part that names no area is kept. The location's city is
-    structured input the location already holds; this is not a city table."""
+    ("Washington" is also Washington State, "Ogun" also Ogun State), joined by commas; ``None``
+    when no such part is left out or nothing that names anything is left. Only a plain name is
+    left out (ruling P3-R-8): a part that, read alone, names no area (:func:`_names_an_area_alone`).
+    So a city field "AL", "Texas State", "Georgia" or "Wash." never hides that part, and a part
+    that names no area is kept. The location's city is structured input the location already
+    holds; this is not a city table."""
     if not text or not towns:
         return None
+    # The parts as written and as the reader reads them (the listed aliases written as the tables
+    # read them, part for part: "Wash." is read as "Washington").
+    written = _PART_SEPARATORS.split(_other_separators("\n".join(text.splitlines())))
     parts = _PART_SEPARATORS.split(_address_text(text))
-
-    def explicit(raw: str) -> bool:
-        folded = _strip_postcode(fold(raw))
-        return (
-            bool(_listed_codes(raw, folded))
-            or _named_subdivision(folded) is not None
-            or bool(_AREA_PREFIX.match(folded))
-        )
+    if len(written) != len(parts):
+        return None
 
     def names_an_area(raw: str) -> bool:
         folded = _strip_postcode(fold(raw))
         return bool(_area_candidates(folded) or _homonym_areas(folded) or _alias_readings(raw))
 
     kept = [
-        raw
-        for raw in parts
-        if address_part_key(raw) not in towns or explicit(raw) or not names_an_area(raw)
+        as_written
+        for as_written, raw in zip(written, parts, strict=True)
+        if address_part_key(raw) not in towns
+        or not names_an_area(raw)
+        or _names_an_area_alone(as_written)
     ]
     if len(kept) == len(parts) or not any(address_part_key(raw) for raw in kept):
         return None
     return ", ".join(raw.strip() for raw in kept if raw.strip())
+
+
+def _names_an_area_alone(part: str) -> bool:
+    """GEO-P3 (ruling P3-R-8): does ``part``, read alone as a whole address, name an area? Only a
+    word the reader takes for a possible town's name names none: "Washington", "Lagos", "Ogun"
+    (:data:`PLACE_UNCLEAR` and no reading of an area). A listed code in any case ("AL", "al",
+    "US-AL", "DE-BY"), a name with a subdivision word ("Texas State", "Ontario Province", "State of
+    Texas", "Lagos State"), a country's name or code ("Georgia", "Nigeria", "NG"), a subdivision's
+    name that the reader reads as that area ("Alabama") and a listed alias all name one. An alias
+    is tested as written, since the reader writes "Wash." as "Washington"."""
+    if _listed_alias(part) is not None:
+        return True
+    reading = read_business_address(part)
+    return bool(
+        any(s is not None and s.country for s in (reading.stated, *reading.parts))
+        or reading.ambiguous
+        or reading.alternatives
+        or reading.ambiguous_alternatives
+        or reading.routes
+        or reading.route_groups
+        or reading.homonyms
+        or reading.alias_groups
+        or any(place.kind != PLACE_UNCLEAR for place in reading.places)
+    )
 
 
 def nigerian_readings_of_stated_code(

@@ -212,6 +212,37 @@ def test_p3_the_city_never_hides_a_contradiction():
     _refused(city_field_is_a_code, "US-AL, 1 Main St, Anchorage, AK", "states subdivision US-AK")
 
 
+@pytest.mark.parametrize(
+    ("city", "state", "country", "address", "subdivision"),
+    [
+        ("AL", "Alaska", "United States", "1 Main St, AL, United States", "US-AL"),
+        ("al", "Alaska", "United States", "1 Main St, al, United States", "US-AL"),
+        ("Texas State", "Alaska", "United States", "1 Main St, Texas State, USA", "US-TX"),
+        ("Ontario Province", "Alberta", "Canada", "1 Main St, Ontario Province, Canada", "CA-ON"),
+        ("Lagos State", "Kano", "Nigeria", "1 Main St, Lagos State, Nigeria", "NG-LA"),
+        ("Alabama", "Alaska", "United States", "1 Main St, Alabama, USA", "US-AL"),
+        ("Georgia", "Alaska", "United States", "1 Main St, Georgia, USA", "US-GA"),
+        ("Washington", "District of Columbia", "United States", "1 Main St, Wash., USA", "US-WA"),
+    ],
+)
+def test_p3_r8_the_city_never_hides_a_part_that_names_an_area_alone(
+    city, state, country, address, subdivision
+):
+    """Ruling P3-R-8: the location's city leaves out only a plain name, a part that, read alone,
+    names no area. A code in any case, a name with a subdivision word, a subdivision's or a
+    country's name and a listed alias (tested as written: the reader writes "Wash." as
+    "Washington") each name one, so a city field equal to it hides nothing: the address is refused
+    as before. With rule 3a's earlier test these resolved."""
+    _refused(_location(city, state, country), address, f"states subdivision {subdivision}")
+
+
+def test_p3_r8_a_plain_name_equal_to_the_city_is_still_the_town():
+    """A word the reader takes for a possible town's name ("Washington", "Ogun") is still left out
+    when it is the location's town (register G-2)."""
+    assert _resolve(WASHINGTON_DC, "1 Main St, Washington, USA").code == "US-DC"
+    assert _resolve(_location("Ogun", "Niger", "Nigeria"), "Ogun, NG-NI, Niger").code == "NG-NI"
+
+
 # --------------------------------------------------------------------------- #
 # 3b. "Niger": the country, or Niger State (register G-2; ruling P3-R-6)
 # --------------------------------------------------------------------------- #
