@@ -639,3 +639,28 @@ def test_p3b_an_alias_whose_letters_were_read_reads_as_before():
     assert read_business_address("1 Main St, New York, N. Y.") == read_business_address(
         "1 Main St, New York, N.Y."
     )
+
+
+# --------------------------------------------------------------------------- #
+# Ruling P3-R-10: rows for the mutants that survived at c65e05b4 (R2c, S2)
+# --------------------------------------------------------------------------- #
+
+
+def test_p3_r10_nigeria_written_after_a_town_and_shared_code_settles_it():
+    """Mutant R2c: Nigeria written settles a later part that is a town and a shared Nigerian code
+    ("Springfield DE": Germany, Delaware or Delta State), so the address resolves."""
+    assert _resolve(ASABA, "1 Main St, Springfield DE, Nigeria").code == "NG-DE"
+    assert _resolve(IKEJA, "1 Main St, Springfield LA, Nigeria").code == "NG-LA"
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "code"),
+    [
+        (DALLAS, "Café Rouge, 1 Main St, Dallas, TX", "US-TX"),
+        (MUNICH, "Marienplatz 1, 80331 München, Germany", "DE"),
+    ],
+)
+def test_p3_r10_accented_latin_in_a_name_a_street_or_a_town_is_read(location, address, code):
+    """Mutant S2: accented letters are Latin. A business name, a street or a town written with them
+    is read as before and does not ask as another script would."""
+    assert _resolve(location, address).code == code
