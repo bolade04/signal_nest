@@ -22,10 +22,13 @@ invalid codes.
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import uuid
 from collections.abc import Iterator
+from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
@@ -37,6 +40,7 @@ from app.audit.models import AuditLog
 from app.brands.service import get_primary_brand
 from app.briefs import service as brief_service
 from app.briefs.models import RecommendationBrief
+from app.briefs.routes import create_opportunity_brief
 from app.claims.engine import (
     LibraryEntry,
     active_entries,
@@ -47,21 +51,33 @@ from app.claims.engine import (
 )
 from app.connectors.policy import ConnectorPolicy
 from app.core.config import get_settings
+from app.core.errors import SignalNestError
 from app.creative.models import ContentReview, CreativeDraft
 from app.creative.schemas import CreativeGeneratePayload
 from app.geography.places_data import COUNTRIES
 from app.intelligence.records import SignalIntelligenceRecord
 from app.jobs.context import ExecutionContext
 from app.jobs.models import Job
+from app.jobs.pipeline import _coverage_rule_for
 from app.jobs.service import enqueue_job
 from app.jobs.status import JobType
 from app.jurisdiction.business_address import (
     ACTION_CLARIFICATIONS,
+    BUSINESS_ADDRESS_CONFLICT,
+    BUSINESS_ADDRESS_INCOMPLETE,
+    BUSINESS_ADDRESS_LOCALITY_UNCONFIRMED,
     BUSINESS_ADDRESS_TEXT_CONFLICT,
     LOCATION_UNRESOLVED,
+    REFUSALS,
 )
 from app.jurisdiction.codes import UNRESOLVED, is_jurisdiction_code
 from app.jurisdiction.resolver import (
+    ADDRESS_DIRECTION_AMBIGUOUS,
+    ADDRESS_NAMES_ANOTHER_PLACE,
+    ADDRESS_PLACE_UNCLEAR,
+    ADDRESS_ROUTE_AMBIGUOUS,
+    ADDRESS_SUFFIX_AMBIGUOUS,
+    CLARIFICATIONS,
     JurisdictionResolution,
     code_within,
     codes_may_overlap,
@@ -1760,3 +1776,505 @@ def test_q4_item_31_the_job_refuses_an_absent_location_brief_terminally(
     again = world.job(job_id)
     assert (again["status"], again["attempt_count"]) == ("failed", 1)
     assert world.row(RecommendationBrief, brief_id)["jurisdiction_code"] is None
+
+
+# =========================================================================== #
+# The final structured-address and clarification contract (#313, integration v3).
+#
+# The instruction of 2026-11-13: "wire in the final structured-address and clarification
+# contracts". The capture calls ``resolve_for_action`` (W21 ADDR, #316) instead of the reader,
+# and its 422 names the check's category (#316's published body, "The change #313's capture
+# needs", items 1-9; review W21-REV-ADDR r1 BC-1..BC-4; checklist I-10, INFO-6). Rows T-1 to
+# T-11 of INTEGRATION-PLAN-v3 §2.5 (T-8, the split G0 guard, is in
+# ``test_business_address_action``), on SQLite and, with ``TEST_POSTGRES_URL``, PostgreSQL.
+# =========================================================================== #
+#: The API's ``app`` package (product modules outside ``tests``).
+APP_DIR = Path(__file__).resolve().parents[1]
+DALLAS_FIELDS = MATRIX_LOCATIONS["dallas"][0]
+#: Dallas's complete structured business address: its own country, state and city.
+DALLAS_COMPLETE = complete_address_of(DALLAS_FIELDS)
+
+#: One free text per category of the free-text reader (``resolver.CLARIFICATIONS``), each asked
+#: for the Dallas, TX location with its complete structured address (the check's step 5).
+#: RI-1 SLOT (lane GEO-P4): a category GEO-P4 adds to ``resolver.CLARIFICATIONS`` needs one
+#: text here, GEO-P4's own; ``test_the_reader_samples_cover_the_readers_vocabulary`` fails until
+#: it is given. None is invented before GEO-P4's final list.
+READER_SAMPLES = {
+    ADDRESS_SUFFIX_AMBIGUOUS: "1500 Broadway Hartford CT",
+    ADDRESS_NAMES_ANOTHER_PLACE: "Victoria, 1 Main St, Dallas, TX",
+    ADDRESS_PLACE_UNCLEAR: "Washington, 1 Main St, Dallas",
+    ADDRESS_DIRECTION_AMBIGUOUS: "1200 Main St, SE",
+    ADDRESS_ROUTE_AMBIGUOUS: "1 FM 1960",
+}
+
+#: (category, location fields, coverage addresses, structured fields for ``evidence``): every
+#: category of the check's closed vocabulary, the structured-address ones from the fields and
+#: the location, the reader's from free text.
+CATEGORY_CAPTURES = [
+    (LOCATION_UNRESOLVED, {"city": "Quillbrook", "state_province": None, "country": "US"}, (),
+     True),
+    (BUSINESS_ADDRESS_INCOMPLETE, DALLAS_FIELDS, ("Dallas, TX",), False),
+    (BUSINESS_ADDRESS_CONFLICT, DALLAS_FIELDS, (),
+     {**DALLAS_COMPLETE, "business_address_region": "OK"}),
+    (BUSINESS_ADDRESS_TEXT_CONFLICT, DALLAS_FIELDS, ("Tulsa, OK",), True),
+    (BUSINESS_ADDRESS_LOCALITY_UNCONFIRMED, DALLAS_FIELDS, (),
+     {**DALLAS_COMPLETE, "business_address_locality": "Irving"}),
+    *((category, DALLAS_FIELDS, (text,), True) for category, text in READER_SAMPLES.items()),
+]  # fmt: skip
+#: Customer text of those rows, none of which may reach the answer or the logs.
+_CUSTOMER_TEXT = ("Quillbrook", "Dallas", "Tulsa", "Irving", *READER_SAMPLES.values())
+
+
+def _refusal_logs(caplog) -> list:
+    return [r for r in caplog.records if r.getMessage() == "recommendation_brief_not_generated"]
+
+
+def test_the_reader_samples_cover_the_readers_vocabulary() -> None:
+    """The T-1 rows reach every category of the closed vocabulary (a tripwire for RI-1)."""
+    assert set(READER_SAMPLES) == set(CLARIFICATIONS)
+    assert {row[0] for row in CATEGORY_CAPTURES} == set(ACTION_CLARIFICATIONS)
+    assert len(CATEGORY_CAPTURES) == len(ACTION_CLARIFICATIONS)
+
+
+@pytest.mark.parametrize(
+    ("category", "location", "addresses", "structured"),
+    CATEGORY_CAPTURES,
+    ids=[row[0] for row in CATEGORY_CAPTURES],
+)
+def test_t1_every_category_reaches_the_422_with_its_reason_before_any_model_or_budget_use(
+    capture_world, phase5_on, model, budget_checks, caplog, category, location, addresses,
+    structured,
+):
+    """T-1, T-3, T-10 (ADDR items 2, 3 and 7; BC-3): each category of the check reaches the
+    422 as ``details.reason`` with exactly its fixed message, before any model call or budget
+    use and with no row of any kind; the answer holds nothing else (no customer text, no
+    evidence), and the refusal's log line names the category and nothing more."""
+    world = capture_world
+    ws = world.workspace(f"t1 {category[:34]}")
+    opp, record, _ = evidence(
+        world, ws, location=location, addresses=addresses, structured=structured
+    )
+    before = _full_ledger(world, ws)
+    with caplog.at_level(logging.INFO):
+        r = capture(world, ws, opp, record)
+    assert r.status_code == 422, r.text
+    error = r.json()["error"]
+    assert error == {
+        "code": "jurisdiction_unresolved",
+        "message": ACTION_CLARIFICATIONS[category],
+        "details": {"reason": category},
+        "request_id": error["request_id"],
+    }
+    assert set(r.json()) == {"error"}
+    assert model.requests == [] and budget_checks == []
+    assert world.count(RecommendationBrief, opportunity_id=opp) == 0
+    assert _full_ledger(world, ws) == before
+    (logged,) = _refusal_logs(caplog)
+    assert logged.extra_fields == {
+        "outcome": "refused",
+        "workspace_id": ws,
+        "opportunity_id": opp,
+        "reason": category,
+    }
+    everything = _logged(caplog)
+    for text in _CUSTOMER_TEXT:
+        assert text not in everything, text
+    assert "unresolved:" not in r.text and "unresolved:" not in everything
+
+
+#: (case, location fields, coverage addresses, structured fields, where the location lives):
+#: locations outside the opportunity's workspace or organization whose own data would give a
+#: category, or resolve, if they were the workspace's own.
+FOREIGN_CAPTURES = [
+    ("another workspace's location that would be location_unresolved",
+     {"city": "Quillbrook", "state_province": None, "country": "US"}, (), True, "ws2"),
+    ("another organization's location that would be a text refusal",
+     DALLAS_FIELDS, ("Tulsa, OK",), True, "ws_b"),
+    ("another organization's location that would ask", DALLAS_FIELDS, ("1 FM 1960",), True,
+     "ws_b"),
+    ("another workspace's location that would resolve", DALLAS_FIELDS, ("Dallas, TX",), True,
+     "ws2"),
+    ("a row of this workspace naming another organization, that would resolve",
+     DALLAS_FIELDS, ("Dallas, TX",), True, "row_of_org_b"),
+]  # fmt: skip
+
+
+def test_t2_the_tenant_refusal_keeps_its_generic_answer_and_names_no_category(
+    capture_world, phase5_on, model, budget_checks, caplog
+) -> None:
+    """T-2 (ADDR item 3: "The fixed JURISDICTION_UNRESOLVED_MESSAGE stays for the tenant
+    refusal"): a location outside the opportunity's workspace or organization is refused with
+    the one generic answer and no ``details``, whatever its own data would give, so the
+    per-category answer reveals nothing about another tenant's location (R-5D B-8). The
+    tenant check comes first: the check never reads the foreign location."""
+    world = capture_world
+    ws = world.workspace("t2 tenant")
+    checked: list = []
+    real = brief_service.resolve_for_action
+
+    def spy(location, rules=()):
+        checked.append(location.id)
+        return real(location, rules)
+
+    answers = set()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(brief_service, "resolve_for_action", spy)
+        for case, location, addresses, structured, where in FOREIGN_CAPTURES:
+            opp, record, location_id = evidence(
+                world, ws, location=location, addresses=addresses, structured=structured,
+                location_ws=getattr(world, where) if where in ("ws2", "ws_b") else None,
+                location_org=world.org_b if where == "row_of_org_b" else None,
+            )  # fmt: skip
+            caplog.clear()
+            with caplog.at_level(logging.INFO):
+                r = capture(world, ws, opp, record)
+            assert r.status_code == 422, (case, r.text)
+            error = r.json()["error"]
+            assert set(error) == {"code", "message", "request_id"}, case
+            answers.add((error["code"], error["message"]))
+            (logged,) = _refusal_logs(caplog)
+            assert logged.extra_fields["reason"] == brief_service.OUTSIDE_WORKSPACE, case
+            assert world.count(RecommendationBrief, opportunity_id=opp) == 0
+    assert answers == {("jurisdiction_unresolved", brief_service.JURISDICTION_UNRESOLVED_MESSAGE)}
+    assert checked == [] and model.requests == [] and budget_checks == []
+
+
+def _scout_rule_of(world: CreativeWorld, ws: str, location_id: str):
+    """The coverage rule a Scout search of ``location_id`` is run with (``jobs.pipeline``)."""
+    with world.session() as s:
+        location = s.get(BusinessLocation, location_id)
+        request = ScoutRequest(
+            id=f"sr{uuid.uuid4().hex[:12]}", organization_id=location.organization_id,
+            workspace_id=ws, brand_id=location.brand_id, location_id=location_id,
+            name="Scout", status="queued", source_types=[], keywords=["parking"],
+        )  # fmt: skip
+        s.add(request)
+        s.flush()
+        rule = _coverage_rule_for(s, request)
+        s.rollback()
+    return rule
+
+
+def test_t4_empty_fields_or_a_missing_town_refuse_the_capture_but_not_the_scout(
+    capture_world, phase5_on, model
+) -> None:
+    """T-4 (ADDR item 7; the operator: "Existing Scout searches must remain usable; the new
+    completeness requirement applies to jurisdiction-dependent actions"): empty structured
+    fields, or every field but the town of a location that has a city, are refused with
+    ``business_address_incomplete``, and the coverage rule a Scout search of that same
+    location runs with is the one a complete address gives. The Scout run itself, with these
+    fields, is pinned by ADDR's ``test_structured_address_scout`` (S-2)."""
+    world = capture_world
+    ws = world.workspace("t4 incomplete")
+    no_town = {k: v for k, v in DALLAS_COMPLETE.items() if k != "business_address_locality"}
+    scout_rules = []
+    for structured in (False, no_town, DALLAS_COMPLETE):
+        opp, record, location_id = evidence(
+            world, ws, location=DALLAS_FIELDS, addresses=("Dallas, TX",), structured=structured
+        )
+        r = capture(world, ws, opp, record)
+        if structured is DALLAS_COMPLETE:
+            assert r.status_code == 201, r.text
+        else:
+            assert r.status_code == 422, r.text
+            assert r.json()["error"]["details"] == {"reason": BUSINESS_ADDRESS_INCOMPLETE}
+        scout_rules.append(_scout_rule_of(world, ws, location_id))
+    assert len({repr(rule) for rule in scout_rules}) == 1
+    assert scout_rules[0] is not None
+
+
+def _location_rule(world: CreativeWorld, location_id: str) -> str:
+    (rule,) = world.rows(GeoCoverageRule, location_id=location_id)
+    return rule["id"]
+
+
+def _confirm(world: CreativeWorld, ws: str, location_id: str, confirmed: bool = True):
+    return world.send(
+        "PUT",
+        f"/workspaces/{ws}/locations/{location_id}/geo-coverage/locality-confirmation",
+        "marketer",
+        {"confirmed": confirmed},
+    )
+
+
+def test_t5_a_confirmed_town_resolves_and_the_confirmation_lapses_on_any_change(
+    capture_world, phase5_on, model
+) -> None:
+    """T-5 (ADDR item 7): a town that differs from the location's city asks
+    (``business_address_locality_unconfirmed``) until the customer confirms it through the
+    Locations API; then the capture stores the location's code. The confirmation binds the town,
+    the city and the code: a change to any of them makes the capture ask again."""
+    world = capture_world
+    ws = world.workspace("t5 confirmed town")
+    irving = {**DALLAS_COMPLETE, "business_address_locality": "Irving"}
+    opp, record, location_id = evidence(
+        world, ws, location=DALLAS_FIELDS, addresses=(), structured=irving
+    )
+    unconfirmed = capture(world, ws, opp, record)
+    assert unconfirmed.status_code == 422, unconfirmed.text
+    assert unconfirmed.json()["error"]["details"] == {
+        "reason": BUSINESS_ADDRESS_LOCALITY_UNCONFIRMED
+    }
+    assert _confirm(world, ws, location_id).status_code == 200
+    resolved = capture(world, ws, opp, record)
+    assert resolved.status_code == 201, resolved.text
+    assert world.row(RecommendationBrief, resolved.json()["id"])["jurisdiction_code"] == "US-TX"
+    rule_id = _location_rule(world, location_id)
+    rules, locations = GeoCoverageRule.__table__, BusinessLocation.__table__
+    for table, row_id, change, restore in (
+        (rules, rule_id, {"business_address_locality": "Plano"},
+         {"business_address_locality": "Irving"}),
+        (locations, location_id, {"city": "Fort Worth"}, {"city": "Dallas"}),
+        # The code: the location and its address move to Oklahoma together (they agree).
+        (None, None, {"state_province": "OK", "business_address_region": "OK"},
+         {"state_province": "TX", "business_address_region": "TX"}),
+    ):  # fmt: skip
+        with world.witness.begin() as conn:
+            if table is None:
+                conn.execute(update(locations).where(locations.c.id == location_id)
+                             .values(state_province=change["state_province"]))
+                conn.execute(update(rules).where(rules.c.id == rule_id)
+                             .values(business_address_region=change["business_address_region"]))
+            else:
+                conn.execute(update(table).where(table.c.id == row_id).values(**change))
+        lapsed = capture(world, ws, opp, record)
+        assert lapsed.status_code == 422, (change, lapsed.text)
+        assert lapsed.json()["error"]["details"] == {
+            "reason": BUSINESS_ADDRESS_LOCALITY_UNCONFIRMED
+        }, change
+        with world.witness.begin() as conn:
+            if table is None:
+                conn.execute(update(locations).where(locations.c.id == location_id)
+                             .values(state_province=restore["state_province"]))
+                conn.execute(update(rules).where(rules.c.id == rule_id)
+                             .values(business_address_region=restore["business_address_region"]))
+            else:
+                conn.execute(update(table).where(table.c.id == row_id).values(**restore))
+        again = capture(world, ws, opp, record)  # restored: the confirmation binds again
+        assert again.status_code == 201, (change, again.text)
+    assert world.count(RecommendationBrief, opportunity_id=opp) == 4
+
+
+def test_t6_a_contradiction_is_refused_even_with_a_stored_confirmation(
+    capture_world, phase5_on, model
+) -> None:
+    """T-6 (ADDR item 7): a confirmation answers only the town. A structured contradiction or a
+    free text that names another place is refused with its own category even while a
+    confirmation is stored, and the refusal says it cannot be confirmed away."""
+    world = capture_world
+    ws = world.workspace("t6 contradiction")
+    irving = {**DALLAS_COMPLETE, "business_address_locality": "Irving"}
+    rules = GeoCoverageRule.__table__
+    for column, value, category in (
+        ("business_address_region", "OK", BUSINESS_ADDRESS_CONFLICT),
+        ("business_address", "Tulsa, OK", BUSINESS_ADDRESS_TEXT_CONFLICT),
+    ):
+        opp, record, location_id = evidence(
+            world, ws, location=DALLAS_FIELDS, addresses=(), structured=irving
+        )
+        assert _confirm(world, ws, location_id).status_code == 200
+        assert capture(world, ws, opp, record).status_code == 201  # the confirmation applies
+        rule_id = _location_rule(world, location_id)
+        with world.witness.begin() as conn:
+            conn.execute(update(rules).where(rules.c.id == rule_id).values({column: value}))
+        assert world.row(GeoCoverageRule, rule_id)["locality_confirmed_at"] is not None
+        r = capture(world, ws, opp, record)
+        assert r.status_code == 422, r.text
+        assert r.json()["error"]["details"] == {"reason": category}
+        assert category in REFUSALS
+        assert r.json()["error"]["message"].endswith(
+            "This cannot be confirmed instead of corrected."
+        )
+
+
+#: T-7 / S-10: W21-REV-5D-INTEG r1's rows (§2.2: the 13 the battery pins; §2.3: the register's
+#: examples), its probe ``capture_rows_at_head.py`` (``4e602070…``), each location's rules
+#: holding its complete structured address, and the capture's answer at #313's integrated head:
+#: a code (stored) or the check's category (refused or asked). Lane evidence raw/070.
+_US_TX, _NG_LA = ("Dallas", "TX", "US"), ("Lagos", "Lagos State", "NG")
+R1_ROWS = [
+    # §2.2, the 13 pinned rows
+    ("matrix dallas", ("Dallas", "TX", "US"), ("Dallas, TX",), "US-TX"),
+    ("matrix london", ("London", None, "United Kingdom"), ("London, UK",), "GB"),
+    ("matrix lagos", ("Lagos", "Lagos State", "Nigeria"), ("Ikeja, Lagos, NG",), "NG-LA"),
+    ("matrix nairobi", ("Nairobi", None, "Kenya"), ("Nairobi, KE",), "KE"),
+    ("conflict Tulsa, OK", ("Quillbrook", "TX", "US"), ("Tulsa, OK",),
+     BUSINESS_ADDRESS_TEXT_CONFLICT),
+    ("second rule conflicts", ("Quillbrook", "TX", "US"), ("Austin, TX", "Tulsa, OK"),
+     BUSINESS_ADDRESS_TEXT_CONFLICT),
+    ("Ogun for Lagos", _NG_LA, ("Abeokuta, Ogun State, Nigeria",),
+     BUSINESS_ADDRESS_TEXT_CONFLICT),
+    ("Lagos, NG for Nairobi", ("Nairobi", None, "Kenya"), ("Lagos, NG",),
+     BUSINESS_ADDRESS_TEXT_CONFLICT),
+    ("Dallas, Texas for London", ("London", "England", "United Kingdom"), ("Dallas, Texas",),
+     BUSINESS_ADDRESS_TEXT_CONFLICT),
+    ("None then Dallas, TX for London", ("London", None, "GB"), (None, "Dallas, TX"),
+     BUSINESS_ADDRESS_TEXT_CONFLICT),
+    ("Q-1 move: Tulsa", ("Tulsa", "OK", "US"), ("Tulsa, OK",), "US-OK"),
+    ("Q-1 move: Dallas, US no state", ("Dallas", None, "US"), ("Dallas, US",),
+     LOCATION_UNRESOLVED),
+    # The workspace-level rule is not the location's: with no rule of its own the location's
+    # address is incomplete (ADDR step 4: "no rule at all").
+    ("workspace-level address (not read by capture)", _US_TX, "workspace-level",
+     BUSINESS_ADDRESS_INCOMPLETE),
+    # §2.3, the register's examples (G-1..G-10), and D1
+    ("D1: street only", _US_TX, ("123 Main St",), "US-TX"),
+    ("G-1 depth 4 (2,928 shape)", _US_TX, ("US-AL; Montgomery; 1 Main St; 1 Main St",),
+     BUSINESS_ADDRESS_TEXT_CONFLICT),
+    ("G-1 commas", _US_TX, ("US-AL, Montgomery, Bavaria, Suite 5",),
+     BUSINESS_ADDRESS_TEXT_CONFLICT),
+    ("G-4 leading other area", _US_TX, ("Oklahoma, US-TX, Texas, USA",),
+     ADDRESS_NAMES_ANOTHER_PLACE),
+    ("G-6 trailing unit hides country", _US_TX, ("1 Main St, Toronto, Canada, Suite 5",),
+     BUSINESS_ADDRESS_TEXT_CONFLICT),
+    ("G-6 floor read as FL (own)", _US_TX, ("123 Main St, Fl 3",), "US-TX"),
+    ("G-7 country-prefixed postcode", _US_TX, ("ACME, Flat 3, NO-0150 Oslo",),
+     BUSINESS_ADDRESS_TEXT_CONFLICT),
+    ("G-9 code in a middle part", _US_TX, ("ACME, NG, Lagos",), BUSINESS_ADDRESS_TEXT_CONFLICT),
+    ("G-9 KE before town", _US_TX, ("KE, Nairobi",), BUSINESS_ADDRESS_TEXT_CONFLICT),
+    ("G-2 own DC row", ("Washington", "DC", "US"), ("US-DC, Washington, District of Columbia",),
+     ADDRESS_PLACE_UNCLEAR),
+    ("G-3 own two-word row", ("Montgomery", "AL", "US"), ("US-AL, Downtown, Montgomery",),
+     ADDRESS_PLACE_UNCLEAR),
+    ("G-8 own route designator", ("Seattle", "WA", "US"), ("1 SR 520",), ADDRESS_ROUTE_AMBIGUOUS),
+    ("G-8 route contradiction (London loc)", ("London", None, "GB"),
+     ("ACME Corp, Suite 200, 4400 US Hwy 75",), BUSINESS_ADDRESS_TEXT_CONFLICT),
+    ("G-9 state before town (Lagos loc)", _NG_LA, ("Ogun State, Abeokuta",),
+     BUSINESS_ADDRESS_TEXT_CONFLICT),
+]  # fmt: skip
+
+
+def test_t7_r1s_rows_with_complete_fields_through_the_capture(
+    capture_world, phase5_on, model
+) -> None:
+    """T-7 / S-10 (ADDR item 8; checklist I-10's re-check list): the 13 rows the battery pins
+    and r1 §2.3's register examples, captured through the route with complete structured
+    fields. Every contradicting form is refused or asks; every own form resolves or asks; the
+    13 pinned rows keep their pinned answer (a code, or a refusal now naming its category)."""
+    world = capture_world
+    ws = world.workspace("t7 r1 rows")
+    assert len(R1_ROWS) == 27
+    outcomes = {}
+    for case, (city, state, country), addresses, _expected in R1_ROWS:
+        fields = {"city": city, "state_province": state, "country": country}
+        if addresses == "workspace-level":
+            opp, record, _ = evidence(world, ws, location=fields, structured=False)
+            with world.session() as s:
+                s.add(GeoCoverageRule(
+                    organization_id=world.org_of(ws), workspace_id=ws, location_id=None,
+                    business_address="500 Main St, Dallas, TX", **complete_address_of(fields),
+                ))  # fmt: skip
+        else:
+            opp, record, _ = evidence(world, ws, location=fields, addresses=addresses)
+        r = capture(world, ws, opp, record)
+        if r.status_code == 201:
+            outcomes[case] = world.row(RecommendationBrief, r.json()["id"])["jurisdiction_code"]
+        else:
+            assert r.status_code == 422, (case, r.text)
+            outcomes[case] = r.json()["error"]["details"]["reason"]
+    assert outcomes == {case: expected for case, _l, _a, expected in R1_ROWS}
+
+
+def _ordered_rules(world: CreativeWorld, location_id: str, ws: str, rules: list[dict]) -> None:
+    """Coverage rules of the location in an explicit (created_at, id) order."""
+    with world.session() as s:
+        for index, fields in enumerate(rules):
+            s.add(GeoCoverageRule(
+                id=f"r{index}-{uuid.uuid4().hex[:8]}", organization_id=world.org_of(ws),
+                workspace_id=ws, location_id=location_id,
+                created_at=datetime(2026, 1, 1, 0, 0, index, tzinfo=UTC), **fields,
+            ))  # fmt: skip
+
+
+def test_t9_with_several_rules_the_first_failing_step_then_the_first_failing_rule_decides(
+    capture_world, phase5_on, model
+) -> None:
+    """T-9 (ADDR design v3 §4.1; review d1 C-2): each step runs over every rule, in the
+    capture's (created_at, id) order, before the next: a later rule's earlier step decides over
+    an earlier rule's later step, and within one step the earlier rule decides."""
+    world = capture_world
+    ws = world.workspace("t9 several rules")
+    town = {**DALLAS_COMPLETE, "business_address_locality": "Irving"}
+    conflict = {**DALLAS_COMPLETE, "business_address_region": "OK"}
+    for rules, category in (
+        # step 6 (rule 0), step 5 (rule 1), step 2 (rule 2): the structured conflict decides
+        ([town, {**DALLAS_COMPLETE, "business_address": "1 FM 1960"}, conflict],
+         BUSINESS_ADDRESS_CONFLICT),
+        # two of step 5: the first rule's category decides
+        ([{**DALLAS_COMPLETE, "business_address": "1200 Main St, SE"},
+          {**DALLAS_COMPLETE, "business_address": "1 FM 1960"}], ADDRESS_DIRECTION_AMBIGUOUS),
+        ([{**DALLAS_COMPLETE, "business_address": "1 FM 1960"},
+          {**DALLAS_COMPLETE, "business_address": "1200 Main St, SE"}], ADDRESS_ROUTE_AMBIGUOUS),
+        # step 5 (rule 0) against step 4 (rule 1): completeness decides
+        ([{**DALLAS_COMPLETE, "business_address": "1 FM 1960"}, {}],
+         BUSINESS_ADDRESS_INCOMPLETE),
+    ):  # fmt: skip
+        opp, record, location_id = evidence(
+            world, ws, location=DALLAS_FIELDS, structured=False
+        )
+        _ordered_rules(world, location_id, ws, rules)
+        r = capture(world, ws, opp, record)
+        assert r.status_code == 422, r.text
+        assert r.json()["error"]["details"] == {"reason": category}, rules
+
+
+def test_t11_q4_no_location_is_a_null_brief_with_no_check(
+    capture_world, phase5_on, model
+) -> None:
+    """T-11 (Q-4, unchanged): a record with no location gets a brief with jurisdiction NULL,
+    decided from the reference itself: the capture's check is never called."""
+    world = capture_world
+    ws = world.workspace("t11 q4")
+    checked: list = []
+
+    def spy(*args, **kwargs):
+        checked.append(args)
+        raise AssertionError("the check must not run for a record with no location")
+
+    opp, record, _ = evidence(world, ws, location=None)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(brief_service, "resolve_for_action", spy)
+        r = capture(world, ws, opp, record)
+    assert r.status_code == 201, r.text
+    assert world.row(RecommendationBrief, r.json()["id"])["jurisdiction_code"] is None
+    assert checked == []
+
+
+def test_only_the_capture_refusal_carries_error_details() -> None:
+    """N-6: ``SignalNestError`` gained ``details`` for the capture's category only. No error
+    class sets it, and the one product raise that passes it is the capture's refusal."""
+    import app.main  # noqa: F401 - every router and service module loaded
+
+    def subclasses(cls):
+        for sub in cls.__subclasses__():
+            yield sub
+            yield from subclasses(sub)
+
+    classes = [SignalNestError, *subclasses(SignalNestError)]
+    assert len(classes) > 20
+    assert {c.__qualname__ for c in classes if c.details is not None} == set()
+    passing = set()
+    for path in APP_DIR.rglob("*.py"):
+        if "tests" in path.parts:
+            continue
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Call) and any(k.arg == "details" for k in node.keywords):
+                passing.add(path.relative_to(APP_DIR).as_posix())
+    assert passing == {"briefs/service.py"}
+    assert SignalNestError("x").details is None
+    assert SignalNestError("x", details={"reason": "r"}).details == {"reason": "r"}
+
+
+def test_the_route_documents_every_category_of_the_vocabulary() -> None:
+    """The contract names the closed vocabulary (INTEGRATION-PLAN-v3 §2.6): every key of
+    ``ACTION_CLARIFICATIONS`` appears in the brief route's published description, so a category
+    added to the reader (RI-1) fails here until the route names it and the contract is
+    regenerated."""
+    description = create_opportunity_brief.__doc__ or ""
+    published = json.loads((APP_DIR.parent / "openapi.json").read_text())["paths"][
+        "/api/v1/workspaces/{workspace_id}/opportunities/{opportunity_id}/briefs"
+    ]["post"]["description"]
+    for category in ACTION_CLARIFICATIONS:
+        assert f"``{category}``" in description, category
+        assert f"``{category}``" in published, category
+    assert "no ``error.details``" in description
