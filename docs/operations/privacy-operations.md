@@ -295,8 +295,9 @@ Restored data predates later deletions. Before reopening a restored database to 
 re-apply every erasure completed after the backup's timestamp: search the application logs for
 `privacy.account.deleted` and `privacy.organization.deleted` events after that time (they carry
 the pseudonymous `user_id` / `organization_id`), repeat each deletion through the CLI or the
-service functions, and run the verifier for each. This only works while log retention is at
-least as long as backup retention — an operator item.
+service functions (on PostgreSQL this does not yet cover an account deletion; see §7), and run
+the verifier for each. This only works while log retention is at least as long as backup
+retention — an operator item.
 
 ## 5. Relationship to P6-PRIV-3 and P6-PRIV-5 (P1, outside E0 for the pilot)
 
