@@ -123,9 +123,10 @@ from app.tests.test_cf1_append_only_bulk_paths import _seed
 from app.tests.test_postgres_migration_proof import _alembic, _confirmation, _version
 
 API_DIR = Path(__file__).resolve().parents[2]
-#: This revision, and the one below it (5D-W1's campaign-location data repair).
+#: This revision, and the one below it (W21 ADDR's structured business address, which follows
+#: 5D-W1's campaign-location data repair).
 REVISION = "d0a8bce8de6a"
-BELOW = "d5f616c0ec97"
+BELOW = "6f8a80cf1785"
 REVISION_FILE = (
     API_DIR
     / "alembic"

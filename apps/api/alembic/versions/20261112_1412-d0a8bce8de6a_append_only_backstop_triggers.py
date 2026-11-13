@@ -47,7 +47,7 @@ stays the only control.
 **Downgrade** drops the triggers and the function. It removes no data.
 
 Revision ID: d0a8bce8de6a
-Revises: d5f616c0ec97
+Revises: 6f8a80cf1785
 Create Date: 2026-11-12 14:12:00.000000
 """
 
@@ -58,7 +58,7 @@ from collections.abc import Sequence
 from alembic import op
 
 revision: str = "d0a8bce8de6a"
-down_revision: str | None = "d5f616c0ec97"
+down_revision: str | None = "6f8a80cf1785"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
