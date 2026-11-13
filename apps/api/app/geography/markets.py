@@ -99,8 +99,10 @@ _TOKEN_SYNONYMS: Final = {"saint": "st", "sainte": "ste", "mount": "mt", "fort":
 _EMPTY_PARTS: Final = frozenset({"none", "null", "undefined", "n a"})
 #: Suffixes dropped from a free-text region name ("Lagos State" == "Lagos").
 _REGION_SUFFIXES: Final = (" state", " province", " region")
-#: Suffixes that mark a name as a subdivision ("Lagos State", "Federal Capital Territory"):
-#: the jurisdiction resolver's list (``app.jurisdiction.resolver``).
+#: Suffixes that mark a name as a subdivision ("Lagos State", "Federal Capital Territory"), for a
+#: rule's text and an observed market. GEO-P4: the jurisdiction resolver's state reader no longer
+#: drops " territory" (``app.jurisdiction.resolver._SUFFIXES``), and the business-address reader
+#: reads a territory the tables do not list as no area (:func:`_without_territory_names`).
 _SUBDIVISION_SUFFIXES: Final = (" state", " province", " territory", " region")
 _HAS_DIGIT = re.compile(r"\d")
 #: A part written as a jurisdiction code: ISO 3166-1 alpha-2, "-", ISO 3166-2 part.

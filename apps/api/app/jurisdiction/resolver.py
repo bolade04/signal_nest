@@ -16,7 +16,8 @@ federations listed in :mod:`app.jurisdiction.subdivisions`, the first-level subd
 
 * the location names no country, or a country it cannot read (``"Narnia"``);
 * the country resolves at subdivision level and the location names no subdivision of it,
-  or one it cannot read (a United States location without a state);
+  or one it cannot read (a United States location without a state; a state written as a
+  territory the tables do not list, "Washington Territory": GEO-P4, :func:`subdivision_code_of`);
 * the facts disagree: a coverage rule's ``business_address`` states another country or
   another subdivision than the location's own fields, or the location's captured
   ``jurisdiction_code`` is not what its fields resolve to now;
@@ -118,8 +119,13 @@ class CoverageFacts(Protocol):
 #: confidence, it gates on :attr:`JurisdictionResolution.is_resolved`.
 RESOLVED_CONFIDENCE: Final = 1.0
 
-#: Suffixes dropped from a subdivision name ("Lagos State" is Lagos).
-_SUFFIXES: Final = (" state", " province", " territory", " region")
+#: Suffixes dropped from a subdivision name ("Lagos State" is Lagos). GEO-P4 (register RI-1; the
+#: operator's answer of 2026-11-13, "Same rule, in GEO-P4"): " territory" is not one. A historical
+#: territory did not have a present-day state's borders, so "Alabama Territory", "Washington
+#: Territory" and "Lagos Territory" name no subdivision; a name the tables list whole is read as
+#: itself ("Yukon Territory", "Northern Territory", "Northwest Territories", "Australian Capital
+#: Territory", "Federal Capital Territory").
+_SUFFIXES: Final = (" state", " province", " region")
 
 
 def _token_index() -> dict[str, dict[str, str]]:
@@ -262,7 +268,13 @@ def country_code_of(text: str | None) -> str | None:
 
 def subdivision_code_of(country: str, text: str | None) -> str | None:
     """The subdivision of ``country`` that ``text`` names (``"Texas"``, ``"TX"``,
-    ``"US-TX"``, ``"Lagos State"``), as a full code (``"US-TX"``); ``None`` otherwise."""
+    ``"US-TX"``, ``"Lagos State"``), as a full code (``"US-TX"``); ``None`` otherwise.
+
+    It reads a location's own state or province (item 33), the structured business-address state
+    or province (W21 ADDR) and a state the business-address reader names. GEO-P4 (register RI-1):
+    a name with "Territory" that the tables do not list whole ("Alabama Territory", "Washington
+    Territory", "Lagos Territory", "Nunavut Territory") names none, so such a field fails closed:
+    the location is unresolved, and the structured state is unreadable (:data:`_SUFFIXES`)."""
     tokens = _TOKENS.get(country)
     if tokens is None or text is None or not text.strip():
         return None

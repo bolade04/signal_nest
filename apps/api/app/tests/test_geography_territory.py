@@ -12,6 +12,11 @@ Territory", "Yukon Territory", "Northwest Territories", "Australian Capital Terr
 Capital Territory") are read as before, and so is "Territory" alone. No name, list or dataset is
 added.
 
+The operator's answer of 2026-11-13 ("Same rule, in GEO-P4") extends the rule to the state fields:
+the location's own state or province and the structured business-address state or province read an
+unlisted "<Name> Territory" as nothing, so the location is unresolved and the structured state is
+unreadable.
+
 These tests pin the measured classes; they do not show that arbitrary addresses are validated.
 """
 
@@ -20,16 +25,27 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from app.geography.markets import read_business_address
-from app.jurisdiction.business_address import ACTION_CLARIFICATIONS, TEXT_REMEDY, resolve_for_action
+from app.jurisdiction.business_address import (
+    ACTION_CLARIFICATIONS,
+    BUSINESS_ADDRESS_INCOMPLETE,
+    LOCATION_UNRESOLVED,
+    TEXT_REMEDY,
+    location_code,
+    resolve_for_action,
+    structured_status,
+)
 from app.jurisdiction.codes import UNRESOLVED
 from app.jurisdiction.resolver import (
     ADDRESS_PLACE_UNCLEAR,
     ADDRESS_TERRITORY_UNCLEAR,
     CLARIFICATIONS,
     resolve_jurisdiction,
+    subdivision_code_of,
 )
+from app.locations.schemas import UNKNOWN_REGION, GeoCoverageBase, unreadable_address_fields
 
 TERRITORY_ASKS = "is ambiguous: a territory that is not a listed state, province, region or country"
 
@@ -348,3 +364,102 @@ def test_addr_another_parts_contradiction_is_still_a_step_3_refusal():
         ANCHORAGE, [_rule("1 Main St, Dallas, TX, Oklahoma Territory", **anchorage)]
     )
     assert result.reason == "business_address_text_conflict"
+
+
+# --------------------------------------------------------------------------- #
+# The state fields (the operator's answer of 2026-11-13, "Same rule, in GEO-P4"): the location's
+# own state or province (item 33) and the structured business-address state or province read an
+# unlisted "<Name> Territory" as nothing, and fail closed
+# --------------------------------------------------------------------------- #
+UNLISTED_STATES = [
+    ("US", "Alabama Territory"),
+    ("US", "Washington Territory"),
+    ("US", "AL Territory"),
+    ("US", "Territory of Hawaii"),
+    ("CA", "Nunavut Territory"),
+    ("CA", "NT Territory"),
+    ("AU", "NT Territory"),
+    ("NG", "Lagos Territory"),
+    ("NG", "Abuja Territory"),
+    ("NG", "FCT Territory"),
+]
+LISTED_STATES = [
+    ("CA", "Yukon Territory", "CA-YT"),
+    ("CA", "Yukon", "CA-YT"),
+    ("CA", "Northwest Territories", "CA-NT"),
+    ("AU", "Northern Territory", "AU-NT"),
+    ("AU", "Australian Capital Territory", "AU-ACT"),
+    ("NG", "Federal Capital Territory", "NG-FC"),
+    ("NG", "FCT", "NG-FC"),
+    ("NG", "Lagos State", "NG-LA"),
+    ("US", "Texas State", "US-TX"),
+    ("US", "US-AL", "US-AL"),
+]
+
+
+@pytest.mark.parametrize(("country", "state"), UNLISTED_STATES)
+def test_state_reader_reads_an_unlisted_territory_as_nothing(country, state):
+    assert subdivision_code_of(country, state) is None
+
+
+@pytest.mark.parametrize(("country", "state", "code"), LISTED_STATES)
+def test_state_reader_reads_listed_names_as_before(country, state, code):
+    assert subdivision_code_of(country, state) == code
+
+
+@pytest.mark.parametrize("city", ["Seattle", "Washington Territory", "Washington", None])
+def test_a_locations_own_state_written_as_an_unlisted_territory_is_unresolved(city):
+    location = _location(city, "Washington Territory", "United States")
+    result = resolve_jurisdiction(location)
+    assert result.code == UNRESOLVED
+    assert result.evidence[-1] == (
+        "unresolved: 'Washington Territory' is not a state or province of US"
+    )
+    assert location_code(location) is None
+    assert resolve_for_action(location, [_rule(None, **MONTGOMERY_FIELDS)]).reason == (
+        LOCATION_UNRESOLVED
+    )
+
+
+@pytest.mark.parametrize(
+    ("city", "state", "country", "code"),
+    [
+        ("Whitehorse", "Yukon Territory", "Canada", "CA-YT"),
+        ("Yellowknife", "Northwest Territories", "Canada", "CA-NT"),
+        ("Darwin", "Northern Territory", "Australia", "AU-NT"),
+        ("Canberra", "Australian Capital Territory", "Australia", "AU-ACT"),
+        ("Abuja", "Federal Capital Territory", "Nigeria", "NG-FC"),
+    ],
+)
+def test_a_locations_own_listed_territory_still_resolves(city, state, country, code):
+    assert resolve_jurisdiction(_location(city, state, country)).code == code
+    assert resolve_jurisdiction(_location(state, state, country)).code == code
+
+
+@pytest.mark.parametrize("city", ["Montgomery", "Alabama Territory", None])
+def test_a_structured_state_written_as_an_unlisted_territory_is_unreadable(city):
+    location = _location(city, "Alabama", "United States")
+    fields = {**MONTGOMERY_FIELDS, "region": "Alabama Territory"}
+    if city is None:
+        fields.pop("locality")
+    rule = _rule(None, **fields)
+    # Accepted for Montgomery before (read as US-AL); now unreadable, so incomplete (step 4).
+    assert structured_status(rule, "US-AL", city) == "incomplete"
+    assert resolve_for_action(location, [rule]).reason == BUSINESS_ADDRESS_INCOMPLETE
+    # Never a contradiction on that basis: for Anchorage it is incomplete too, not a conflict.
+    assert structured_status(rule, "US-AK", city) == "incomplete"
+    # The coverage PUT refuses to store it, with the fixed message of an unreadable state.
+    assert unreadable_address_fields("United States", "Alabama Territory") == [
+        ("business_address_region", UNKNOWN_REGION)
+    ]
+    with pytest.raises(ValidationError):
+        GeoCoverageBase(
+            business_address_country="United States", business_address_region=("Alabama Territory")
+        )
+
+
+def test_a_structured_listed_territory_still_reads():
+    darwin = _location("Darwin", "NT", "Australia")
+    fields = {"country": "Australia", "region": "Northern Territory", "locality": "Darwin"}
+    assert resolve_for_action(darwin, [_rule(None, **fields)]).code == "AU-NT"
+    assert unreadable_address_fields("Australia", "Northern Territory") == []
