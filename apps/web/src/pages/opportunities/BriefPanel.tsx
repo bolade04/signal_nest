@@ -15,6 +15,7 @@ import { canEditWorkspace, useActorRole } from '@/lib/roles';
 import { Link } from 'react-router-dom';
 import { BriefDecisions } from '@/pages/approvals/BriefDecisions';
 import { useCreativeCapability } from '@/pages/creative/useCreative';
+import { ACTION_CLARIFICATIONS } from '@/lib/jurisdictionClarifications';
 import { formatDateTime } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
 import {
@@ -64,12 +65,14 @@ const NO_LOCATION_NOTE =
   'draft needs the jurisdiction of a location.';
 
 /**
- * The brief capture's `jurisdiction_unresolved` refusal (5D-W3; S1-5D capture rule). Since
- * Q-4 an opportunity with no location is not refused, so the cause is always an existing
- * location: a missing or unknown country, a missing state or province where one is required
- * (the item-33 list: US, CA, AU, NG), or a business address (the location's Service area) that
- * names another place. The API sends only the code, so one static wording covers them all, in
- * the API message's terms. Never the server's text.
+ * The brief capture's `jurisdiction_unresolved` refusal (5D-W3; S1-5D capture rule; since #313
+ * the structured-address check). Since Q-4 an opportunity with no location is not refused, so
+ * the cause is always an existing location. The API names the check's category in
+ * `error.details.reason`; the panel shows that category's static copy
+ * (`ACTION_CLARIFICATIONS`, mirrored from the API's vocabulary) after "No brief was
+ * generated." With no reason (the API's tenant refusal) or a reason the copy does not know,
+ * this one generic wording is shown. Never the server's text: its message is neither read nor
+ * rendered, so the client's 400-character clamp never cuts a category's copy (S-12).
  */
 const JURISDICTION_UNRESOLVED_MESSAGE =
   'No brief was generated because the jurisdiction of this opportunity’s location could not be ' +
@@ -81,6 +84,20 @@ function isJurisdictionUnresolved(error: unknown): boolean {
   if (!(error instanceof ApiError)) return false;
   const detail = error.detail as { error?: { code?: string } } | null;
   return detail?.error?.code === 'jurisdiction_unresolved';
+}
+
+/** The static copy for a `jurisdiction_unresolved` refusal: its category's, or the generic. */
+function jurisdictionUnresolvedCopy(error: unknown): string {
+  const detail = error instanceof ApiError ? (error.detail as { error?: { details?: unknown } } | null) : null;
+  const details = detail?.error?.details;
+  const reason =
+    details && typeof details === 'object' && !Array.isArray(details)
+      ? (details as { reason?: unknown }).reason
+      : undefined;
+  if (typeof reason === 'string' && Object.prototype.hasOwnProperty.call(ACTION_CLARIFICATIONS, reason)) {
+    return `No brief was generated. ${ACTION_CLARIFICATIONS[reason]}`;
+  }
+  return JURISDICTION_UNRESOLVED_MESSAGE;
 }
 
 function ListSection({ title, items }: { title: string; items: string[] }) {
@@ -313,7 +330,7 @@ function BriefPanelBody({
             ) : null}
             {create.isError && isJurisdictionUnresolved(create.error) ? (
               <p role="alert" className="text-sm text-destructive">
-                {JURISDICTION_UNRESOLVED_MESSAGE}
+                {jurisdictionUnresolvedCopy(create.error)}
               </p>
             ) : null}
           </div>

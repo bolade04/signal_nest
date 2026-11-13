@@ -23,6 +23,7 @@ import type {
   RecommendationBriefListOut,
   RecommendationBriefOut,
 } from '@/api/types';
+import { ACTION_CLARIFICATIONS } from '@/lib/jurisdictionClarifications';
 import { OpportunityBriefPanel } from '@/pages/opportunities/BriefPanel';
 import { opportunityDetailFixture } from '@/test/handlers';
 import { server } from '@/test/server';
@@ -259,6 +260,68 @@ describe('Q-4: a capture refused for an existing location (jurisdiction_unresolv
     expect(alert).not.toHaveTextContent(/try again/i);
     expect(screen.queryByText(new RegExp(SERVER_UNRESOLVED))).toBeNull();
   });
+});
+
+// --------------------------------------------------------------------------------------------
+// #313: the capture names the check's category (error.details.reason); the panel shows that
+// category's static copy, never the server's text (W-1; S-12: the client clamps a message to
+// 400 characters, and half the categories' messages are longer, so the text is never used).
+// --------------------------------------------------------------------------------------------
+const SERVER_MARKER = 'SERVER-TEXT-7f3a the server says something else';
+const GENERIC = /complete or correct the location’s details/i;
+
+function refusedWith(error: Record<string, unknown>) {
+  server.use(
+    http.post(BRIEFS, () =>
+      HttpResponse.json({ error: { code: 'jurisdiction_unresolved', message: SERVER_MARKER, ...error } }, { status: 422 }),
+    ),
+  );
+}
+
+async function refusalShown() {
+  asRole('marketer');
+  world({ located: true, briefs: [] });
+  const screen = renderApp(<App />, { route: `/opportunities/${OPP}` });
+  const panel = await briefPanel(screen);
+  await generateBrief(screen);
+  const alert = await within(panel).findByRole('alert');
+  return { screen, alert };
+}
+
+describe('#313: a capture refused with a category shows that category’s static copy', () => {
+  it('the vocabulary the panel knows is the API’s eleven categories (RI-1’s included)', () => {
+    expect(Object.keys(ACTION_CLARIFICATIONS)).toHaveLength(11);
+  });
+
+  for (const reason of Object.keys(ACTION_CLARIFICATIONS)) {
+    it(`${reason}: its own copy, whole, and never the server’s text`, async () => {
+      refusedWith({ details: { reason } });
+      const { screen, alert } = await refusalShown();
+      expect(alert.textContent).toBe(`No brief was generated. ${ACTION_CLARIFICATIONS[reason]}`);
+      expect(document.body.textContent ?? '').not.toContain(SERVER_MARKER);
+      expect(alert.textContent ?? '').not.toMatch(CODE);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(screen.queryByText('No brief was saved')).toBeNull(); // inline only: no toast
+    });
+  }
+
+  for (const [label, error] of [
+    ['no details (the tenant refusal)', {}],
+    ['an unknown reason', { details: { reason: 'address_from_a_later_release' } }],
+    ['a reason that is not text', { details: { reason: { text: SERVER_MARKER } } }],
+    ['a reason named like an object property', { details: { reason: 'constructor' } }],
+    ['details as a list', { details: [{ reason: 'business_address_incomplete' }] }],
+  ] as const) {
+    it(`${label}: the generic copy, and never the server’s text`, async () => {
+      refusedWith(error);
+      const { alert } = await refusalShown();
+      expect(alert).toHaveTextContent(GENERIC);
+      expect(document.body.textContent ?? '').not.toContain(SERVER_MARKER);
+      for (const copy of Object.values(ACTION_CLARIFICATIONS)) {
+        expect(alert.textContent ?? '').not.toContain(copy);
+      }
+    });
+  }
 });
 
 // --------------------------------------------------------------------------------------------
