@@ -336,10 +336,15 @@ def test_only_erasure_and_retention_import_the_writer() -> None:
     in any form."""
     importers = set()
     for rel, tree, _ in _production_modules():
+        package = rel.split("/")[:-1]  # a relative import resolves against the module's package
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
-                if node.module == "app.privacy.writer" or (
-                    node.module == "app.privacy" and any(a.name == "writer" for a in node.names)
+                base = package[: len(package) - node.level + 1] if node.level else []
+                module = ".".join(base + ([node.module] if node.module else []))
+                if (
+                    module == "app.privacy.writer"
+                    or (module == "app.privacy" and any(a.name == "writer" for a in node.names))
+                    or any(a.name == "mark_privacy_writer" for a in node.names)
                 ):
                     importers.add(rel)
             elif isinstance(node, ast.Import):
