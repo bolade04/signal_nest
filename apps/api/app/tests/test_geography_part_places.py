@@ -678,11 +678,12 @@ def test_the_geo_p1_clarifications_are_fixed_text():
     )
     assert CLARIFICATIONS[ADDRESS_PLACE_UNCLEAR] == (
         "We couldn't tell whether a word in the business address is a state, province or "
-        "country, or the name of a town. If it is the town, enter the same town as the "
-        "location's city. If it is a state, province or country, write its full name (for "
-        "example 'Lagos State' or 'Nigeria') after the town, separated by a comma. If it is "
-        "the name of the business or a building, leave it out of the address. Otherwise "
-        "correct or remove it."
+        "country, or the name of a town. If it is the town, write the state, province or "
+        "region code right after it without a comma (for example 'Washington DC' or "
+        "'Victoria BC'), or leave the town out. If it is a state, province or country, write "
+        "its full name (for example 'Lagos State' or 'Nigeria') after the town, separated by a "
+        "comma. If it is the name of the business or a building, leave it out of the address. "
+        "Otherwise correct or remove it."
     )
     assert CLARIFICATIONS[ADDRESS_DIRECTION_AMBIGUOUS] == (
         "We couldn't tell whether a part of the business address that is only a direction "

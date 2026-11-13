@@ -188,12 +188,36 @@ def test_p3_a_building_name_before_a_nigerian_code_asks():
         "US-DC, Washington",
         "US-DC, Washington, District of Columbia",
         "District of Columbia, Washington",
+        "1 Main St, Washington, USA",
     ],
 )
-def test_p3_the_locations_city_is_the_town_not_washington_state(address):
-    """ "Washington" is also Washington State. For a location whose city is Washington it is the
-    town: the address resolves, where it was refused."""
-    assert _resolve(WASHINGTON_DC, address).code == "US-DC"
+def test_p3_r15_the_locations_city_never_settles_washington_it_asks(address):
+    """ "Washington" is a town's name or Washington State. The location's city never settles it
+    (ruling P3-R-15, the operator's answer "make them ask"): it only shows that the refused part may
+    be the town, so the address asks where it was refused, and never resolves through the city."""
+    _clarified(
+        WASHINGTON_DC,
+        address,
+        ADDRESS_PLACE_UNCLEAR,
+        "is ambiguous: a town's name or subdivision US-WA",
+    )
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "code"),
+    [
+        (WASHINGTON_DC, "1 Main St, Washington DC, USA", "US-DC"),
+        (WASHINGTON_DC, "US-DC, Washington DC", "US-DC"),
+        (WASHINGTON_DC, "1 Main St, USA", "US-DC"),
+        (_location("Abia", "Adamawa", "Nigeria"), "1 Main St, Abia AD, Nigeria", "NG-AD"),
+        (_location("Abia", "Adamawa", "Nigeria"), "1 Main St, Nigeria", "NG-AD"),
+        (_location("Quebec", "Alberta", "Canada"), "1 Main St, Quebec AB, Canada", "CA-AB"),
+    ],
+)
+def test_p3_r15_the_remedy_resolves_when_followed_literally(location, address, code):
+    """The clarification's remedy for a town: write the state, province or region code right after
+    it without a comma ("Washington DC"), or leave the town out. Each resolves."""
+    assert _resolve(location, address).code == code
 
 
 def test_p3_the_city_never_hides_a_contradiction():
@@ -236,11 +260,21 @@ def test_p3_r8_the_city_never_hides_a_part_that_names_an_area_alone(
     _refused(_location(city, state, country), address, f"states subdivision {subdivision}")
 
 
-def test_p3_r8_a_plain_name_equal_to_the_city_is_still_the_town():
-    """A word the reader takes for a possible town's name ("Washington", "Ogun") is still left out
-    when it is the location's town (register G-2)."""
-    assert _resolve(WASHINGTON_DC, "1 Main St, Washington, USA").code == "US-DC"
-    assert _resolve(_location("Ogun", "Niger", "Nigeria"), "Ogun, NG-NI, Niger").code == "NG-NI"
+def test_p3_r15_a_plain_name_equal_to_the_city_asks():
+    """A word the reader takes for a possible town's name ("Ogun", "Abia") and that is the
+    location's city is not settled by the city: the address asks (ruling P3-R-15)."""
+    _clarified(
+        _location("Ogun", "Niger", "Nigeria"),
+        "Ogun, NG-NI, Niger",
+        ADDRESS_PLACE_UNCLEAR,
+        "is ambiguous: a town's name or subdivision NG-OG",
+    )
+    _clarified(
+        _location("Abia", "Adamawa", "Nigeria"),
+        "1 Main St, Abia, Nigeria",
+        ADDRESS_PLACE_UNCLEAR,
+        "is ambiguous: a town's name or subdivision NG-AB",
+    )
 
 
 # --------------------------------------------------------------------------- #

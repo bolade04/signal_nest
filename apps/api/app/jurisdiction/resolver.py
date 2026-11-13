@@ -80,6 +80,7 @@ from app.geography.markets import (
     own_reading_of_homonym,
     parts_naming_an_area,
     read_business_address,
+    town_part_readings,
     unread_script_part,
     without_town_parts,
 )
@@ -195,8 +196,10 @@ CLARIFICATIONS: Final[Mapping[str, str]] = MappingProxyType(
         ),
         ADDRESS_PLACE_UNCLEAR: (
             "We couldn't tell whether a word in the business address is a state, province or "
-            "country, or the name of a town. If it is the town, enter the same town as the "
-            "location's city. If it is a state, province or country, write its full name (for "
+            "country, or the name of a town. If it is the town, write the state, province or "
+            "region code right after it without a comma (for example 'Washington DC' or "
+            "'Victoria BC'), or leave the town out. If it is a state, province or country, write "
+            "its full name (for "
             "example 'Lagos State' or 'Nigeria') after the town, separated by a comma. If it is "
             "the name of the business or a building, leave it out of the address. Otherwise "
             "correct or remove it."
@@ -388,12 +391,14 @@ def _address_check(
     location; "Lebanon, PA" for a Lebanon location) is the town and is not compared: the
     location's city is structured input, not a city table. A code is compared whatever the city.
 
-    GEO-P3 (register G-2): the location's city also settles a part that the qualifier rules read
-    as an area. When the address is refused, it is read again without its parts that are the
-    location's town but name an area (:func:`app.geography.markets.without_town_parts`: "US-DC,
-    Washington" for Washington, DC, where "Washington" is also Washington State); the second
-    reading stands only when it states the location's own area and nothing contradicts it. A
-    listed code or a suffixed or prefixed subdivision is never left out.
+    GEO-P3 (register G-2; rulings P3-R-8 and P3-R-15, the operator's answer "make them ask"): the
+    location's city never settles a name that is a town's or an area's. When the address is refused,
+    it is read again without its parts that are the location's town and a plain name
+    (:func:`app.geography.markets.without_town_parts`: "Washington" in "US-DC, Washington" for
+    Washington, DC, also Washington State). When that second reading would agree, the refused part
+    may be the town, so the address asks (:data:`ADDRESS_PLACE_UNCLEAR`: "is ambiguous: a town's
+    name or subdivision US-WA"); it never resolves through the city. A code, a name with a
+    subdivision word, a country's name and a listed alias are never left out.
 
     GEO-P3 (register G-2; ruling P3-R-6): a last part whose name has a listed homonym ("Niger": the
     country, or Niger State, X-5) is read as the country, as before, and the homonym never makes the
@@ -423,7 +428,13 @@ def _address_check(
         if trimmed is not None:
             retry = _reading_check(read_business_address(trimmed), trimmed, country, code, city)
             if retry[0] and retry[1] is None:
-                return retry
+                found = [
+                    conflict
+                    for reading in town_part_readings(address, _town_keys(city))
+                    if (conflict := _conflict(reading, country, code)) is not None
+                ]
+                either = " or ".join(dict.fromkeys(found)) or result[1].removeprefix("states ")
+                return True, f"is ambiguous: a town's name or {either}", ADDRESS_PLACE_UNCLEAR
     return result
 
 

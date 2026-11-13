@@ -465,30 +465,54 @@ def without_town_parts(text: str | None, towns: frozenset[str]) -> str | None:
     left out (ruling P3-R-8): a part that, read alone, names no area (:func:`_names_an_area_alone`).
     So a city field "AL", "Texas State", "Georgia" or "Wash." never hides that part, and a part
     that names no area is kept. The location's city is structured input the location already
-    holds; this is not a city table."""
+    holds; this is not a city table. Ruling P3-R-15: the second reading never resolves through the
+    city; it only shows that the refused part may be the town (the resolver asks)."""
     if not text or not towns:
         return None
-    # The parts as written and as the reader reads them (the listed aliases written as the tables
-    # read them, part for part: "Wash." is read as "Washington").
+    pairs = _written_and_read_parts(text)
+    kept = [as_written for as_written, raw in pairs if not _town_part(as_written, raw, towns)]
+    if len(kept) == len(pairs) or not any(address_part_key(raw) for raw in kept):
+        return None
+    return ", ".join(raw.strip() for raw in kept if raw.strip())
+
+
+def town_part_readings(text: str | None, towns: frozenset[str]) -> tuple[MarketIdentity, ...]:
+    """GEO-P3 (ruling P3-R-15): the areas that the parts :func:`without_town_parts` leaves out
+    name through the tables ("Washington": US-WA), for the clarification's evidence; ``()`` when
+    it leaves out none."""
+    if not text or not towns:
+        return ()
+    found: list[MarketIdentity] = []
+    for as_written, raw in _written_and_read_parts(text):
+        if _town_part(as_written, raw, towns):
+            folded = _strip_postcode(fold(raw))
+            for country, region in (*_area_candidates(folded), *_homonym_areas(folded)):
+                reading = MarketIdentity(region=region, country=country, label=raw.strip())
+                if reading not in found:
+                    found.append(reading)
+    return tuple(found)
+
+
+def _written_and_read_parts(text: str) -> list[tuple[str, str]]:
+    """Each part of ``text`` as written and as the reader reads it (the listed aliases written as
+    the tables read them, part for part: "Wash." is read as "Washington"); ``[]`` when they do not
+    pair up."""
     written = _PART_SEPARATORS.split(_other_separators("\n".join(text.splitlines())))
     parts = _PART_SEPARATORS.split(_address_text(text))
     if len(written) != len(parts):
-        return None
+        return []
+    return list(zip(written, parts, strict=True))
 
-    def names_an_area(raw: str) -> bool:
-        folded = _strip_postcode(fold(raw))
-        return bool(_area_candidates(folded) or _homonym_areas(folded) or _alias_readings(raw))
 
-    kept = [
-        as_written
-        for as_written, raw in zip(written, parts, strict=True)
-        if address_part_key(raw) not in towns
-        or not names_an_area(raw)
-        or _names_an_area_alone(as_written)
-    ]
-    if len(kept) == len(parts) or not any(address_part_key(raw) for raw in kept):
-        return None
-    return ", ".join(raw.strip() for raw in kept if raw.strip())
+def _town_part(as_written: str, raw: str, towns: frozenset[str]) -> bool:
+    """GEO-P3 (rulings P3-R-8 and P3-R-15): is this part the location's town and a plain name that
+    the tables also read as an area ("Washington")? Never a part that, read alone, names an area."""
+    folded = _strip_postcode(fold(raw))
+    return (
+        address_part_key(raw) in towns
+        and bool(_area_candidates(folded) or _homonym_areas(folded) or _alias_readings(raw))
+        and not _names_an_area_alone(as_written)
+    )
 
 
 def _names_an_area_alone(part: str) -> bool:
