@@ -68,13 +68,21 @@ from app.geography.markets import (
     PLACE_FIRST_PART,
     PLACE_NAME,
     PLACE_UNCLEAR,
+    BusinessAddressReading,
     MarketIdentity,
     PartPlace,
     address_part_key,
     fold,
+    last_written_part,
+    nigerian_readings_of_stated_code,
     normalize_country,
     normalize_region,
+    own_reading_of_homonym,
+    parts_naming_an_area,
     read_business_address,
+    town_part_readings,
+    unread_script_part,
+    without_town_parts,
 )
 from app.jurisdiction.codes import UNRESOLVED, is_jurisdiction_code
 from app.jurisdiction.subdivisions import SUBDIVISION_JURISDICTIONS
@@ -183,13 +191,17 @@ CLARIFICATIONS: Final[Mapping[str, str]] = MappingProxyType(
         ADDRESS_NAMES_ANOTHER_PLACE: (
             "The business address names a state, province or country that is not this "
             "location's, as well as the location's own. If that part of the address is the "
-            "town, enter the same town as the location's city. If it is the name of the "
-            "business or a building, leave it out of the address. Otherwise correct or remove it."
+            "town, write the state, province or region code right after it without a comma (for "
+            "example 'Victoria BC' or 'Jamaica NY'), or leave the town out. If it is the name of "
+            "the business or a building, leave it out of the address. Otherwise correct or remove "
+            "it."
         ),
         ADDRESS_PLACE_UNCLEAR: (
             "We couldn't tell whether a word in the business address is a state, province or "
-            "country, or the name of a town. If it is the town, enter the same town as the "
-            "location's city. If it is a state, province or country, write its full name (for "
+            "country, or the name of a town. If it is the town, write the state, province or "
+            "region code right after it without a comma (for example 'Washington DC' or "
+            "'Victoria BC'), or leave the town out. If it is a state, province or country, write "
+            "its full name (for "
             "example 'Lagos State' or 'Nigeria') after the town, separated by a comma. If it is "
             "the name of the business or a building, leave it out of the address. Otherwise "
             "correct or remove it."
@@ -377,33 +389,154 @@ def _address_check(
       Anchorage, as on main; otherwise :data:`ADDRESS_PLACE_UNCLEAR`. It is never refused and never
       agrees.
 
-    A name or word that is the location's own city ("Washington, US-DC" for a Washington
-    location; "Lebanon, PA" for a Lebanon location) is the town and is not compared: the
-    location's city is structured input, not a city table. A code is compared whatever the city.
+    GEO-P3 (register G-11; ruling P3-R-16, the operator's answer "fix it in GEO-P3"): a part that
+    is the location's own city is compared like any other part. The location's city never settles
+    whether a name is the town or an area: "Peru, 1 Main St, United Kingdom" for a location whose
+    city is Peru asks (:data:`ADDRESS_NAMES_ANOTHER_PLACE`), as it does for London. Before this,
+    GEO-P1 (#314) left such a part out of the comparison.
+
+    GEO-P3 (register G-2; rulings P3-R-8 and P3-R-15, the operator's answer "make them ask"): the
+    location's city never settles a name that is a town's or an area's. When the address is refused,
+    it is read again without its parts that are the location's town and a plain name
+    (:func:`app.geography.markets.without_town_parts`: "Washington" in "US-DC, Washington" for
+    Washington, DC, also Washington State). When that second reading would agree, the refused part
+    may be the town, so the address asks (:data:`ADDRESS_PLACE_UNCLEAR`: "is ambiguous: a town's
+    name or subdivision US-WA"); it never resolves through the city. A code, a name with a
+    subdivision word, a country's name and a listed alias are never left out.
+
+    GEO-P3 (register G-2; ruling P3-R-6): a last part whose name has a listed homonym ("Niger": the
+    country, or Niger State, X-5) is read as the country, as before, and the homonym never makes the
+    address agree by itself. When the homonym is the only reading that agrees ("Minna, Niger" and
+    "1 Allen Ave, Minna, Niger" for a Niger State location) and nothing settles it, the address
+    asks (:data:`ADDRESS_PLACE_UNCLEAR`: "is ambiguous: country NE or subdivision NG-NI"), after an
+    explicit code elsewhere that contradicts is refused. "Minna, Niger State" and "Minna, Niger,
+    Nigeria" resolve; for any other location the country reading still refuses.
+
+    GEO-P3 (register G-3, criterion amended by the operator): the location's own listed code that
+    the rest of the address cannot be read with ("US-AL, Downtown, Montgomery", and its twin
+    "US-AL, Montgomery, Bavaria") asks (:data:`ADDRESS_PLACE_UNCLEAR`) when no other part names an
+    area; with another area named ("US-TX, Canada") it is refused, as before.
+
+    GEO-P3 (register G-10, operator rulings): the reader reads the listed abbreviations and country
+    aliases (:mod:`app.geography.address_aliases`) as their areas' names, so "1 Main St, Montgomery,
+    Ala." agrees with Montgomery, Alabama and is refused for Anchorage, and "..., Deutschland" is
+    refused for Dallas. A listed name of two or more areas ("Korea": KR or KP) is refused when every
+    reading contradicts the location; when one agrees and another contradicts it asks
+    (:data:`ADDRESS_PLACE_UNCLEAR`), unless the address states one of them elsewhere ("Seoul, Korea,
+    Republic of Korea"). A part in another script asks
+    (:func:`app.geography.markets.unread_script_part`).
     """
-    reading = read_business_address(address)
-    explicit = [s for s in (reading.stated, *reading.parts) if s is not None and s.country]
-    for stated in explicit:
+    result = _reading_check(read_business_address(address), address, country, code)
+    if result[1] is not None and result[2] is None:
+        trimmed = without_town_parts(address, _town_keys(city))
+        if trimmed is not None:
+            retry = _reading_check(read_business_address(trimmed), trimmed, country, code)
+            if retry[0] and retry[1] is None:
+                found = [
+                    conflict
+                    for reading in town_part_readings(address, _town_keys(city))
+                    if (conflict := _conflict(reading, country, code)) is not None
+                ]
+                either = " or ".join(dict.fromkeys(found)) or result[1].removeprefix("states ")
+                return True, f"is ambiguous: a town's name or {either}", ADDRESS_PLACE_UNCLEAR
+    return result
+
+
+def _reading_check(
+    reading: BusinessAddressReading,
+    address: str | None,
+    country: str,
+    code: str,
+) -> tuple[bool, str | None, str | None]:
+    """:func:`_address_check` for one reading of the address. The location's city takes no part in
+    it (ruling P3-R-16)."""
+    # GEO-P3 (ruling P3-R-9): an unlisted form's country (``reading.forms``: "DE-BY" is Germany)
+    # agrees with or contradicts the location as explicit text does, but settles no other part's
+    # reading ("Munich BY, DE-BY" asks, as on GEO-P2: a bare "BY" is also Belarus).
+    settling = [s for s in (reading.stated, *reading.parts) if s is not None and s.country]
+    explicit = settling + [s for s in reading.forms if s.country]
+    homonym_ask = None
+    last = last_written_part(address)
+    nigeria_stated = any(s.country == "NG" for s in settling)
+    code_contradicts = any(
+        p.kind == PLACE_CODE and _part_conflicts(p, country, code) for p in reading.places
+    ) or any(_conflict(form, country, code) is not None for form in reading.forms if form.country)
+    for stated in list(explicit):
         conflict = _conflict(stated, country, code)
         if conflict is not None:
+            agreeing_state = [
+                a
+                for a in nigerian_readings_of_stated_code(stated, address)
+                if _conflict(a, country, code) is None
+            ]
+            if agreeing_state:
+                # GEO-P3 (review I-6): "Springfield AB" is Alberta or Abia State. Nigeria written
+                # settles it, and an explicit code or unlisted form elsewhere that contradicts is
+                # refused below (ruling P3-R-9: "1 Main St, Town BY, DE-BY" for a Bayelsa location
+                # is refused as Germany, as on GEO-P2); otherwise one reading agrees, one
+                # contradicts, and the address asks.
+                if nigeria_stated or code_contradicts:
+                    continue
+                either = " or ".join(
+                    f"subdivision {_stated_subdivision(a, country) or a.region}"
+                    for a in agreeing_state
+                )
+                return True, f"is ambiguous: {conflict} or {either}", ADDRESS_PLACE_UNCLEAR
+            if (
+                _stated_subdivision(stated, country) == f"{code}?"
+                and parts_naming_an_area(address) == 1
+            ):
+                # GEO-P3 (register G-3, criterion amended by the operator): the location's own
+                # listed code with words that name no listed area ("US-AL, Downtown, Montgomery";
+                # its twin "US-AL, Montgomery, Bavaria") cannot be placed, and nothing else in the
+                # address names an area: a town or another country's region. Both ask.
+                return True, f"is ambiguous: {conflict}", ADDRESS_PLACE_UNCLEAR
+            if stated is reading.stated:
+                agreeing = [
+                    MarketIdentity(region=r, country=c, label=stated.label)
+                    for c, r in own_reading_of_homonym(stated, last)
+                ]
+                agreeing = [a for a in agreeing if _conflict(a, country, code) is None]
+                if agreeing:
+                    # "Niger" is the country or Niger State: one reading agrees, one contradicts.
+                    explicit.remove(stated)
+                    settling.remove(stated)
+                    either = " or ".join(
+                        f"subdivision {_stated_subdivision(a, country) or a.region}"
+                        for a in agreeing
+                    )
+                    homonym_ask = f"is ambiguous: {conflict} or {either}"
+                    continue
             return True, f"states {conflict}", None
     for group in reading.alternatives:
         # Every reading is a place: a stated country cannot excuse them ("Dallas GA, Canada").
         found = _group_conflicts(group, (), country, code)
         if found and all(found):
             return True, "states " + " or ".join(found), None
-    towns = _town_keys(city)
+        unsettled = _unsettled_homonym(group, found, reading, settling, country, code)
+        if unsettled is not None:
+            return True, f"is ambiguous: {unsettled}", ADDRESS_PLACE_UNCLEAR
+    for group in reading.alias_groups:
+        # GEO-P3 (register G-10): a listed name of two or more areas ("Korea" for Dallas) whose
+        # every reading contradicts the location is refused, as a C-8 group is.
+        found = _group_conflicts(group, (), country, code)
+        if found and all(found):
+            return True, "states " + " or ".join(found), None
+    if homonym_ask is not None and not any(
+        p.kind == PLACE_CODE and _part_conflicts(p, country, code) for p in reading.places
+    ):
+        return True, homonym_ask, ADDRESS_PLACE_UNCLEAR
     # W21-REV-GEO r1 C-1: the first part's "town code" is compared whatever the city, as a code is.
     first_parts = [p for p in reading.places if p.kind == PLACE_FIRST_PART]
-    places = [
-        p for p in reading.places if p.kind in (PLACE_CODE, PLACE_DIRECTION) or p.text not in towns
-    ]
+    # GEO-P3 (register G-11; ruling P3-R-16): every part place is compared, the location's town
+    # too. Each names an area through the tables, so the city never leaves one out.
+    places = list(reading.places)
     directions = [p for p in places if p.kind == PLACE_DIRECTION]
     places = [p for p in places if p.kind not in (PLACE_DIRECTION, PLACE_FIRST_PART)]
     contradicting = [(p, found) for p in places if (found := _part_conflicts(p, country, code))]
     agreeing = [
         r
-        for r in (*explicit, *(r for group in reading.alternatives for r in group))
+        for r in (*settling, *(r for group in reading.alternatives for r in group))
         if _conflict(r, country, code) is None
     ] + [
         r
@@ -417,8 +550,8 @@ def _address_check(
             place.kind == PLACE_NAME and not _own_area_named(place, agreeing, country, code)
         ):
             return True, "states " + " or ".join(found), None
-    if not any(_stated_subdivision(stated, country) is not None for stated in explicit):
-        countries = {stated.country for stated in explicit}
+    if not any(_stated_subdivision(stated, country) is not None for stated in settling):
+        countries = {stated.country for stated in settling}
         for possible in reading.ambiguous:
             if countries and possible.country not in countries:
                 continue
@@ -460,7 +593,63 @@ def _address_check(
         if place.kind == PLACE_NAME:
             return True, f"also names {either}", ADDRESS_NAMES_ANOTHER_PLACE
         return True, f"is ambiguous: a town's name or {either}", ADDRESS_PLACE_UNCLEAR
+    for group in reading.alias_groups:
+        # GEO-P3 (register G-10, operator ruling: "Korea" still asks): one reading agrees and
+        # another contradicts. Only the address itself settles it, by stating one of the readings
+        # elsewhere ("Seoul, Korea, Republic of Korea"); never the location or place knowledge.
+        if not any(_conflict(r, country, code) for r in group):
+            continue
+        if any(_same_area(s, r) for s in settling for r in group):
+            continue
+        either = " or ".join(
+            f"subdivision {r.region}" if r.region else f"country {r.country}" for r in group
+        )
+        return True, f"is ambiguous: {either}", ADDRESS_PLACE_UNCLEAR
+    if unread_script_part(address):
+        # GEO-P3 (register G-10, operator ruling): a part in another script may name a state or a
+        # country that the tables, which hold Latin names, cannot read: it asks.
+        return True, "is ambiguous: letters outside the Latin script", ADDRESS_PLACE_UNCLEAR
     return bool(explicit), None, None
+
+
+def _unsettled_homonym(
+    group: Sequence[MarketIdentity],
+    found: list[str | None],
+    reading: BusinessAddressReading,
+    explicit: Sequence[MarketIdentity],
+    country: str,
+    code: str,
+) -> str | None:
+    """GEO-P3 (register G-10 N-1; review I-6): the readings of a C-8 group when its only agreeing
+    reading is a Nigerian one the reader added (``homonyms``: "…, Ikeja, LA" for a Lagos location,
+    whose "LA" is also Laos and Louisiana), every other reading contradicts, and nothing settles it.
+    An address that states Nigeria explicitly settles it; an explicit code elsewhere that
+    contradicts the location is refused first (GEO-P1's order). Such a reading never makes the
+    address agree by itself: it asks (RULING-D1-C3). ``None`` otherwise."""
+    added = [i for i, r in enumerate(group) if r in reading.homonyms]
+    others = [i for i in range(len(group)) if i not in added]
+    if not added or not others or len(found) != len(group):
+        return None
+    if any(found[i] is None for i in others) or all(found[i] is not None for i in added):
+        return None
+    if any(s.country == "NG" for s in explicit):
+        return None
+    if any(p.kind == PLACE_CODE and _part_conflicts(p, country, code) for p in reading.places):
+        return None
+    agreeing = [
+        f"subdivision {_stated_subdivision(group[i], country) or group[i].region}"
+        for i in added
+        if found[i] is None
+    ]
+    return " or ".join([found[i] for i in others if found[i]] + agreeing)
+
+
+def _same_area(stated: MarketIdentity, reading: MarketIdentity) -> bool:
+    """GEO-P3 (G-10): does ``stated`` (an explicit reading of the address) state ``reading``'s area:
+    its country, and its subdivision when ``reading`` names one?"""
+    return stated.country == reading.country and (
+        reading.region is None or stated.region == reading.region
+    )
 
 
 def _town_keys(city: str | None) -> frozenset[str]:
