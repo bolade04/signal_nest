@@ -26,7 +26,8 @@ This module pins:
   - every stored ``prohibited`` in the review's canonical form (case, spacing, invisible
     characters, compatibility forms) becomes ``blocked``;
   - every other value outside the set is kept exactly as stored and inventoried in the log (its
-    escaped, capped value, count and ids), never deleted or mapped;
+    count, ids and sha256 prefix only, ruling 36-R-1; the values only in the read-only
+    script), never deleted or mapped;
   - the entries the 5C review treats as blocking are the same before and after;
   - running it again changes nothing;
   - the downgrade is a no-op.
@@ -300,6 +301,8 @@ STORED = {
     "k-long": ("y" * 40, "y" * 40),
     # A free-text kind naming a person: its text must never reach the migration's log (36-R-1).
     "k-person": (PERSON_KIND, PERSON_KIND),
+    # A retired entry with an unsupported kind: inventoried like any other (log and script).
+    "k-other-retired": ("zz-retired-kind", "zz-retired-kind"),
 }
 RETIRED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 CLAIMS = sa.table(
@@ -385,7 +388,7 @@ def test_the_migration_maps_the_alias_and_inventories_the_rest(db: Db) -> None:
         assert line in out, (line, out)
     assert (
         f"{PREFIX}: {len(STORED)} entr(y/ies) read, {len(migrated)} migrated to 'blocked', "
-        f"7 with an unsupported kind kept as stored (6 distinct value(s))" in out
+        f"8 with an unsupported kind kept as stored (7 distinct value(s))" in out
     ), out
     db.ok("check")
 
@@ -398,6 +401,7 @@ UNSUPPORTED_STORED = {
     "zz-unsupported-kind": ["k-other", "k-other-2"],
     "y" * 40: ["k-long"],
     PERSON_KIND: ["k-person"],
+    "zz-retired-kind": ["k-other-retired"],
 }
 
 
@@ -438,7 +442,7 @@ def test_the_read_only_inventory_prints_the_values_beside_the_logs_digests(db: D
     for value, ids in UNSUPPORTED_STORED.items():
         line = f"sha256:{_digest(value)} {value!r}: {len(ids)} entr(y/ies) ids=[{', '.join(ids)}]"
         assert line in lines, (line, lines)
-    assert lines[-1] == "7 entr(y/ies) with an unsupported kind (6 distinct value(s))"
+    assert lines[-1] == "8 entr(y/ies) with an unsupported kind (7 distinct value(s))"
     assert _kinds(db) == before
 
     env = {**os.environ, "DATABASE_URL": db.url}
@@ -472,6 +476,53 @@ def test_an_empty_library_is_read_and_nothing_is_reported(db: Db) -> None:
     out = db.ok("upgrade", "head")
     assert db.version() == [REVISION]
     assert PREFIX not in out, out
+
+
+def test_the_revision_locks_the_table_on_postgresql(db: Db) -> None:
+    """On PostgreSQL the revision takes ``LOCK TABLE claims_library IN SHARE ROW EXCLUSIVE
+    MODE`` inside its transaction, so a concurrent writer waits until it ends (SQLite admits
+    one writer at a time)."""
+    _world_at_below(db)
+    with db.engine.connect() as conn, conn.begin():
+        report = _revision().close_claim_kinds(conn)
+        if db.pg:
+            modes = set(
+                conn.execute(
+                    sa.text(
+                        "SELECT mode FROM pg_locks WHERE granted AND pid = pg_backend_pid()"
+                        " AND relation = 'claims_library'::regclass"
+                    )
+                ).scalars()
+            )
+            assert "ShareRowExclusiveLock" in modes, modes
+    assert report.read == len(STORED)
+
+
+def test_more_than_two_chunks_of_the_alias_are_all_migrated(db: Db) -> None:
+    """The UPDATE runs in chunks of 500 ids: 1,001 more stored 'prohibited' entries cross two
+    chunk boundaries, and every one becomes 'blocked'."""
+    _world_at_below(db)
+    db.execute(
+        CLAIMS.insert(),
+        [
+            {
+                "id": f"k-bulk-{i:04d}",
+                "organization_id": "org-k",
+                "workspace_id": "ws-k",
+                "brand_id": "brand-k",
+                "text": "bulk",
+                "kind": "prohibited",
+                "risk_level": "low",
+                "retired_at": None,
+            }
+            for i in range(1001)
+        ],
+    )
+    out = db.ok("upgrade", "head")
+    kinds = _kinds(db)
+    assert sum(k == "blocked" for i, k in kinds.items() if i.startswith("k-bulk-")) == 1001
+    assert "prohibited" not in kinds.values()
+    assert f"{PREFIX}: 'prohibited' -> 'blocked': 1007 entr(y/ies)" in out
 
 
 def test_a_long_unsupported_value_is_capped_in_the_inventory() -> None:
