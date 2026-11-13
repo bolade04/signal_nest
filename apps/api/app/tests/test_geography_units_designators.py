@@ -327,7 +327,8 @@ def test_i3_a_trailing_direction_after_a_street_line_is_a_direction(address):
 
 
 def test_i3_explicit_geography_settles_a_trailing_direction_and_a_town_does_not_hide_it():
-    assert _resolve(WASHINGTON_DC, "1200 Pennsylvania Ave, SE, Washington, DC").code == "US-DC"
+    # GEO-P3 (ruling P3-R-16): the town written with its code; "Washington, DC" asks (G-11).
+    assert _resolve(WASHINGTON_DC, "1200 Pennsylvania Ave, SE, Washington DC").code == "US-DC"
     assert _resolve(WASHINGTON_DC, "1200 Pennsylvania Avenue Southeast").code == "US-DC"
     # Before a named part it stays where the qualifier rules read it, as on main: before the country
     # it is the region slot ("NE" is Nebraska).
