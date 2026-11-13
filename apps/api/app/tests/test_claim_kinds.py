@@ -68,7 +68,8 @@ from app.tests.test_campaign_locations_repair import BRANDS, ORGS, WORKSPACES, D
 
 API_DIR = Path(__file__).resolve().parents[2]
 REVISION = "1574637e56d3"
-BELOW = "d5f616c0ec97"
+#: The revision below (D-N4 item 37: the PostgreSQL append-only backstop).
+BELOW = "d0a8bce8de6a"
 REVISION_FILE = API_DIR / "alembic" / "versions" / "20261112_1700-1574637e56d3_close_claim_kinds.py"
 PREFIX = "D-N4 item 36 claim kinds"
 #: The fixed 422 message for a kind outside the set (Pydantic's enum error for ClaimKind).

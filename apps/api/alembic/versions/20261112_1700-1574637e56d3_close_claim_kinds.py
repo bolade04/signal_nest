@@ -61,7 +61,7 @@ fixes an unsupported entry by choosing one of the four.
 ``prohibited`` do the same thing, so nothing a downgrade could restore changes behaviour.
 
 Revision ID: 1574637e56d3
-Revises: d5f616c0ec97
+Revises: d0a8bce8de6a
 Create Date: 2026-11-12 17:00:00.000000
 """
 
@@ -79,7 +79,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "1574637e56d3"
-down_revision: str | None = "d5f616c0ec97"
+down_revision: str | None = "d0a8bce8de6a"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

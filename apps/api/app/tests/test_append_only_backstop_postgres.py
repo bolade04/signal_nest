@@ -127,6 +127,8 @@ API_DIR = Path(__file__).resolve().parents[2]
 #: 5D-W1's campaign-location data repair).
 REVISION = "d0a8bce8de6a"
 BELOW = "6f8a80cf1785"
+#: The single head above this revision (D-N4 item 36: the closed claim kinds; data only).
+CODE_HEAD = "1574637e56d3"
 REVISION_FILE = (
     API_DIR
     / "alembic"
@@ -211,7 +213,7 @@ def _migrated_world(prefix: str) -> Iterator[PrivacyEnv]:
     require_postgres()
     with pg_database(prefix) as url:
         _alembic(url, "upgrade", "head")
-        assert _version(url) == [REVISION]
+        assert _version(url) == [CODE_HEAD]
         with _built(create_engine(url, future=True), create_engine(url, future=True)) as env:
             assert _backstop(env.engine) == _expected_catalog()
             yield env
@@ -409,7 +411,7 @@ def test_sqlite_keeps_the_application_guard_only(tmp_path) -> None:
     )
     assert up.returncode == 0, up.stdout + up.stderr
     with sqlite3.connect(db_file) as conn:
-        assert conn.execute("SELECT version_num FROM alembic_version").fetchall() == [(REVISION,)]
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchall() == [(CODE_HEAD,)]
         triggers = conn.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'")
         assert triggers.fetchall() == []
     engine = create_engine(f"sqlite:///{db_file}", future=True)
@@ -1156,14 +1158,13 @@ def test_the_revision_upgrades_downgrades_and_upgrades_again_on_postgresql() -> 
                 )
                 conn.execute(text(UPDATES["audit_logs"]), {"id": "mp-log"})  # no backstop yet
 
-            _alembic(url, "upgrade", "head")
+            _alembic(url, "upgrade", REVISION)
             assert _version(url) == [REVISION]
             assert _backstop(engine) == _expected_catalog() and _function_exists(engine)
             with engine.connect() as conn:
                 with _refused("UPDATE", "audit_logs"):
                     conn.execute(text(UPDATES["audit_logs"]), {"id": "mp-log"})
                 conn.rollback()
-            _alembic(url, "check")
 
             unconfirmed = subprocess.run(
                 [sys.executable, "-m", "alembic", "downgrade", "-1"],
@@ -1181,8 +1182,9 @@ def test_the_revision_upgrades_downgrades_and_upgrades_again_on_postgresql() -> 
                 assert conn.execute(text("SELECT count(*) FROM audit_logs")).scalar_one() == 1
                 conn.execute(text(DELETES["audit_logs"]), {"id": "mp-log"})  # no backstop
 
+            # Back to the head, through D-N4 item 36 (data only), where ``alembic check`` runs.
             _alembic(url, "upgrade", "head")
-            assert _version(url) == [REVISION]
+            assert _version(url) == [CODE_HEAD]
             assert _backstop(engine) == _expected_catalog()
             _alembic(url, "check")
         finally:
