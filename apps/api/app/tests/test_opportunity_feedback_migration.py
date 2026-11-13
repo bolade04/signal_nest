@@ -141,7 +141,7 @@ def test_single_head(db_path) -> None:
     # Exactly one head line — no divergent branches.
     heads = [ln for ln in result.stdout.splitlines() if ln.strip()]
     assert len(heads) == 1, result.stdout
-    assert "d0a8bce8de6a" in heads[0]  # D-N4 item 37: the PostgreSQL append-only backstop
+    assert "1574637e56d3" in heads[0]  # D-N4 item 36: the closed claim kinds (data only)
 
 
 def test_downgrade_is_surgical_and_preserves_business_data(db_path) -> None:

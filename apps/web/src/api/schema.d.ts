@@ -3221,11 +3221,8 @@ export interface components {
              * @description Jurisdiction codes the entry applies in: an ISO 3166-1 alpha-2 country code (GB, PR, US), or a state or province code of the United States, Canada, Australia or Nigeria (US-TX, NG-LA). Empty means every jurisdiction.
              */
             jurisdiction_codes?: string[];
-            /**
-             * Kind
-             * @default approved
-             */
-            kind: string;
+            /** @default approved */
+            kind: components["schemas"]["ClaimKind"];
             /** Notes */
             notes?: string | null;
             /**
@@ -3236,6 +3233,11 @@ export interface components {
             /** Text */
             text: string;
         };
+        /**
+         * ClaimKind
+         * @enum {string}
+         */
+        ClaimKind: "approved" | "restricted" | "blocked" | "required_disclaimer";
         /** ClaimPatch */
         ClaimPatch: {
             /** Category */
@@ -3245,8 +3247,7 @@ export interface components {
              * @description Jurisdiction codes the entry applies in: an ISO 3166-1 alpha-2 country code (GB, PR, US), or a state or province code of the United States, Canada, Australia or Nigeria (US-TX, NG-LA). Empty means every jurisdiction.
              */
             jurisdiction_codes?: string[];
-            /** Kind */
-            kind?: string;
+            kind?: components["schemas"]["ClaimKind"];
             /** Notes */
             notes?: string | null;
             /** Risk Level */

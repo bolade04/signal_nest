@@ -35,7 +35,7 @@ import pytest
 API_DIR = Path(__file__).resolve().parents[2]
 # Revision immediately before the workspace_capability_overrides migration.
 PREV = "4945b98229e6"
-HEAD = "d0a8bce8de6a"  # D-N4 item 37: the PostgreSQL append-only backstop (after W21 ADDR)
+HEAD = "1574637e56d3"  # D-N4 item 36: the closed claim kinds (above D-N4 item 37)
 TABLE = "workspace_capability_overrides"
 
 

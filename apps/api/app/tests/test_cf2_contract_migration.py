@@ -20,13 +20,14 @@ with the plumbing of ``test_cf1_contract_migration``:
   ``claims_library.retired_at`` gone, both CHECKs narrowed, every other index and row kept)
   and ``upgrade`` restores it.
 
-The CHECK-equality and insert tests run at the code head (``d0a8bce8de6a``, D-N4 item 37's
-append-only backstop: triggers on PostgreSQL, nothing on SQLite; above W21 ADDR's structured
-business address ``6f8a80cf1785`` on ``geo_coverage_rules`` and 5D-W1's data-only repair
-``d5f616c0ec97``; none of the three touches these tables' CHECKs, so they are CF-3's
-``c3f8e1a6d2b9``: CF-3 adds a jurisdiction CHECK to both tables and widens the capability
-vocabulary); the downgrade tests start from ``a7d2e9f4c1b8`` itself (CF-3's own downgrade is
-pinned by ``test_cf3_contract_migration``).
+The CHECK-equality and insert tests run at the code head (``1574637e56d3``, D-N4 item 36's
+data-only claim-kind migration, above D-N4 item 37's append-only backstop ``d0a8bce8de6a``
+(triggers on PostgreSQL, nothing on SQLite), W21 ADDR's structured business address
+``6f8a80cf1785`` on ``geo_coverage_rules`` and 5D-W1's data-only repair ``d5f616c0ec97``; none
+of the four touches these tables' CHECKs, so they are CF-3's ``c3f8e1a6d2b9``: CF-3 adds a
+jurisdiction CHECK to both tables and widens the capability vocabulary); the downgrade tests
+start from ``a7d2e9f4c1b8`` itself (CF-3's own downgrade is pinned by
+``test_cf3_contract_migration``).
 """
 
 from __future__ import annotations
@@ -66,8 +67,10 @@ CF3 = "c3f8e1a6d2b9"
 D1_REPAIR = "d5f616c0ec97"
 #: W21 ADDR: the structured business address on ``geo_coverage_rules``, which follows the repair.
 ADDR = "6f8a80cf1785"
-#: The code head (D-N4 item 37's PostgreSQL append-only backstop), which follows ADDR.
-HEAD = "d0a8bce8de6a"
+#: D-N4 item 37's PostgreSQL append-only backstop, which follows ADDR.
+BACKSTOP = "d0a8bce8de6a"
+#: The code head (D-N4 item 36's closed claim kinds, data only), which follows the backstop.
+HEAD = "1574637e56d3"
 CF1 = "f3a9c1e7b2d5"
 OVERRIDES = "workspace_capability_overrides"
 NEW_TABLES = {"creative_drafts", "content_reviews"}
@@ -126,7 +129,8 @@ def test_the_head_is_single_and_follows_cf1() -> None:
 
     script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
     assert [r.revision for r in script.get_revisions("heads")] == [HEAD]
-    assert script.get_revision(HEAD).down_revision == ADDR
+    assert script.get_revision(HEAD).down_revision == BACKSTOP
+    assert script.get_revision(BACKSTOP).down_revision == ADDR
     assert script.get_revision(ADDR).down_revision == D1_REPAIR
     assert script.get_revision(D1_REPAIR).down_revision == CF3
     assert script.get_revision(CF3).down_revision == CF2

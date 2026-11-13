@@ -124,7 +124,10 @@ D1_REPAIR = "d5f616c0ec97"
 ADDR = "6f8a80cf1785"
 # D-N4 item 37 (W21): the PostgreSQL append-only backstop (triggers; nothing on SQLite). It
 # follows ADDR.
-CODE_HEAD = "d0a8bce8de6a"
+BACKSTOP = "d0a8bce8de6a"
+# D-N4 item 36: the closed claim kinds (data only: the 'prohibited' alias to 'blocked'). It
+# follows the backstop.
+CODE_HEAD = "1574637e56d3"
 
 
 # --------------------------------------------------------------------------- #
@@ -276,7 +279,8 @@ def _insert(con, table: str, id_: str, *, user: str = "u-1", **kw) -> None:
 def test_this_revision_follows_invitations_and_precedes_the_single_head() -> None:
     script = _script()
     assert [r.revision for r in script.get_revisions("heads")] == [CODE_HEAD]
-    assert script.get_revision(CODE_HEAD).down_revision == ADDR
+    assert script.get_revision(CODE_HEAD).down_revision == BACKSTOP
+    assert script.get_revision(BACKSTOP).down_revision == ADDR
     assert script.get_revision(ADDR).down_revision == D1_REPAIR
     assert script.get_revision(D1_REPAIR).down_revision == CF3
     assert script.get_revision(CF3).down_revision == CF2

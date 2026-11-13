@@ -58,10 +58,13 @@ from app.db.base import Base
 from app.tests._auth2_support import pg_database, require_postgres
 
 API_DIR = Path(__file__).resolve().parents[2]
-#: The code head (D-N4 item 37, W21: the PostgreSQL append-only backstop: one trigger function
+#: The code head (D-N4 item 36, W21: the closed claim kinds; data only: the ``prohibited`` alias
+#: becomes ``blocked``, so no table or column changes).
+HEAD = "1574637e56d3"
+#: One below head (D-N4 item 37, W21: the PostgreSQL append-only backstop: one trigger function
 #: and two triggers on each table the application guard covers; no table or column).
-HEAD = "d0a8bce8de6a"
-#: One below head (W21 ADDR, under the operator's limited CF-3 migration-freeze exception of
+BACKSTOP = "d0a8bce8de6a"
+#: Two below head (W21 ADDR, under the operator's limited CF-3 migration-freeze exception of
 #: 2026-11-12: the structured business address and its locality confirmation, ten nullable
 #: columns on ``geo_coverage_rules``).
 ADDR = "6f8a80cf1785"
@@ -72,10 +75,10 @@ ADDR_COLUMNS = {
     "locality_confirmed_city", "locality_confirmed_jurisdiction", "locality_confirmed_at",
     "locality_confirmed_by_user_id",
 }
-#: Two below head (Project Phase 5D 5D-W1, W21 Amendment D-1: the campaign-location data repair;
-#: data only).
+#: Three below head (Project Phase 5D 5D-W1, W21 Amendment D-1: the campaign-location data
+#: repair; data only).
 REPAIR = "d5f616c0ec97"
-#: Three below head (Project Phase 5 CF-3, W21: campaign hardening and ``campaign_locations``,
+#: Four below head (Project Phase 5 CF-3, W21: campaign hardening and ``campaign_locations``,
 #: the jurisdiction columns, ``exports``, ``notifications`` / ``notification_preferences``,
 #: the ``deleted_at`` retention markers, and the widened capability-override CHECK).
 CF3 = "c3f8e1a6d2b9"
@@ -345,21 +348,28 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     assert "jurisdiction_code" in _columns(pg_url, "business_locations")
     assert ADDR_COLUMNS <= _columns(pg_url, "geo_coverage_rules")
 
-    # One guarded step down undoes exactly the head revision: D-N4 item 37's append-only
-    # backstop, so its triggers and function go and no table or column does; the spent token
-    # does not authorize the next step, and the base token minted at head is refused from the
-    # moved source.
+    # One guarded step down undoes exactly the head revision: D-N4 item 36's data-only claim-kind
+    # migration, so no table or column goes and the backstop stays; the spent token does not
+    # authorize the next step, and the base token minted at head is refused from the moved source.
     base_token_at_head = _confirmation(pg_url, "base")
     step_token = _confirmation(pg_url, "-1")
     schema_at_head = {t: _columns(pg_url, t) for t in _tables(pg_url)}
     _alembic(pg_url, "-x", f"confirm={step_token}", "downgrade", "-1")
+    assert _version(pg_url) == [BACKSTOP]
+    assert {t: _columns(pg_url, t) for t in _tables(pg_url)} == schema_at_head
+    assert _backstop_triggers(pg_url) == backstop | {("", "function")}
+    spent = _run(["-x", f"confirm={step_token}", "downgrade", "-1"], pg_url)
+    assert spent.returncode != 0 and _version(pg_url) == [BACKSTOP]
+    stale = _run(["-x", f"confirm={base_token_at_head}", "downgrade", "base"], pg_url)
+    assert stale.returncode != 0 and _version(pg_url) == [BACKSTOP]
+
+    # The next guarded step undoes D-N4 item 37's append-only backstop: its triggers and function
+    # go, and no table or column does.
+    backstop_token = _confirmation(pg_url, "-1")
+    _alembic(pg_url, "-x", f"confirm={backstop_token}", "downgrade", "-1")
     assert _version(pg_url) == [ADDR]
     assert {t: _columns(pg_url, t) for t in _tables(pg_url)} == schema_at_head
     assert _backstop_triggers(pg_url) == set()
-    spent = _run(["-x", f"confirm={step_token}", "downgrade", "-1"], pg_url)
-    assert spent.returncode != 0 and _version(pg_url) == [ADDR]
-    stale = _run(["-x", f"confirm={base_token_at_head}", "downgrade", "base"], pg_url)
-    assert stale.returncode != 0 and _version(pg_url) == [ADDR]
 
     # The next guarded step undoes W21 ADDR: its ten columns go from geo_coverage_rules and
     # nothing else changes.
