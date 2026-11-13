@@ -622,11 +622,10 @@ def test_the_unresolved_answer_is_never_a_stored_code() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# G0: no product module calls the resolver or the action check yet
+# G0: the product callers of the resolver and of the action check
 # --------------------------------------------------------------------------- #
-def test_no_product_module_calls_the_resolver_or_the_action_check() -> None:
-    """Register gate G0 attaches to ``resolve_jurisdiction``'s first caller outside tests
-    (#313's capture, which will add itself here when it wires :func:`resolve_for_action`)."""
+def product_callers(name: str) -> set[str]:
+    """The product modules (outside tests) that call ``name``, by plain name or attribute."""
     callers = set()
     for path in APP.rglob("*.py"):
         if "tests" in path.parts:
@@ -634,7 +633,17 @@ def test_no_product_module_calls_the_resolver_or_the_action_check() -> None:
         tree = ast.parse(path.read_text())
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
-                name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
-                if name in {"resolve_jurisdiction", "resolve_for_action"}:
+                called = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+                if called == name:
                     callers.add(path.relative_to(APP).as_posix())
-    assert callers == {"jurisdiction/business_address.py"}
+    return callers
+
+
+def test_only_the_brief_capture_calls_the_action_check_and_only_it_calls_the_resolver() -> None:
+    """Register gate G0 attaches to ``resolve_jurisdiction``'s first caller outside tests: #313's
+    brief capture (W21 ADDR item 9, review r1 BC-4; COORDINATOR-RULINGS-ADDR-r1: the guard names
+    :func:`resolve_for_action` as the only function ``briefs/service.py`` may call). So the
+    capture calls the action check and never the resolver, and the resolver is called by the
+    action check's module alone. A new caller of either fails here until it is reviewed."""
+    assert product_callers("resolve_for_action") == {"briefs/service.py"}
+    assert product_callers("resolve_jurisdiction") == {"jurisdiction/business_address.py"}

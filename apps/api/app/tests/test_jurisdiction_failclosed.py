@@ -55,6 +55,11 @@ from app.jobs.context import ExecutionContext
 from app.jobs.models import Job
 from app.jobs.service import enqueue_job
 from app.jobs.status import JobType
+from app.jurisdiction.business_address import (
+    ACTION_CLARIFICATIONS,
+    BUSINESS_ADDRESS_TEXT_CONFLICT,
+    LOCATION_UNRESOLVED,
+)
 from app.jurisdiction.codes import UNRESOLVED, is_jurisdiction_code
 from app.jurisdiction.resolver import (
     JurisdictionResolution,
@@ -955,19 +960,59 @@ def test_an_unresolved_location_refuses_the_brief_before_any_model_or_budget_use
     assert refusals and refusals[-1].extra_fields["outcome"] == "refused"
 
 
-def test_every_unresolved_capture_gets_one_fixed_answer(capture_world, phase5_on) -> None:
-    """Whatever made the location unresolvable, the answer is the same: it cannot reveal which
-    fact was missing or wrong (no resolver evidence)."""
+#: The category of the capture's check (``resolve_for_action``) each ``UNRESOLVED_CAPTURES``
+#: row is refused with; ``None`` is the tenant refusal, which names none. Each row's rules hold
+#: the location's complete structured address (``evidence``'s default), so a coverage text that
+#: names another state is the text refusal, and a location's own missing or unknown fact is
+#: refused before its address is read.
+UNRESOLVED_CAPTURE_CATEGORIES = {
+    "a US location without a state": LOCATION_UNRESOLVED,
+    "a US location with an unknown state": LOCATION_UNRESOLVED,
+    "a city only": LOCATION_UNRESOLVED,
+    "an unknown country": LOCATION_UNRESOLVED,
+    "a conflicting coverage address": BUSINESS_ADDRESS_TEXT_CONFLICT,
+    "a location of another workspace of the organization": None,
+    "a location of another organization": None,
+    "a second coverage rule that conflicts": BUSINESS_ADDRESS_TEXT_CONFLICT,
+    "a location row of this workspace naming another organization": None,
+}
+
+
+def test_every_unresolved_capture_gets_its_categorys_one_fixed_answer(
+    capture_world, phase5_on
+) -> None:
+    """The final clarification contract (W21 ADDR items 3 and 7; checklist I-10, INFO-6): the
+    answer to a capture whose location fails the check names the check's category as
+    ``error.details.reason``, with that category's one fixed message, and nothing else about
+    what was missing or wrong (no resolver evidence, no text). A location outside the
+    opportunity's workspace or organization gets the one generic answer, with no ``details``,
+    exactly as before. Formerly "one fixed answer" for every cause; now one per category."""
     world = capture_world
     ws = world.workspace("refuse fixed answer")
-    answers = set()
-    for _case, location, addresses, where in UNRESOLVED_CAPTURES:
+    assert set(UNRESOLVED_CAPTURE_CATEGORIES) == {row[0] for row in UNRESOLVED_CAPTURES}
+    answers: dict[str | None, set] = {}
+    for case, location, addresses, where in UNRESOLVED_CAPTURES:
         opp, record = _existing_location_evidence(world, ws, location, addresses, where)
         r = capture(world, ws, opp, record)
-        assert r.status_code == 422, r.text
+        assert r.status_code == 422, (case, r.text)
         error = r.json()["error"]
-        answers.add((error["code"], error["message"]))
-    assert len(answers) == 1
+        category = UNRESOLVED_CAPTURE_CATEGORIES[case]
+        if category is None:
+            assert set(error) == {"code", "message", "request_id"}, case
+            assert error["message"] == brief_service.JURISDICTION_UNRESOLVED_MESSAGE, case
+        else:
+            assert set(error) == {"code", "message", "request_id", "details"}, case
+            assert error["details"] == {"reason": category}, case
+            assert error["message"] == ACTION_CLARIFICATIONS[category], case
+        assert error["code"] == "jurisdiction_unresolved", case
+        answers.setdefault(category, set()).add(
+            (error["code"], error["message"], json.dumps(error.get("details")))
+        )
+    assert {category: len(seen) for category, seen in answers.items()} == {
+        LOCATION_UNRESOLVED: 1,
+        BUSINESS_ADDRESS_TEXT_CONFLICT: 1,
+        None: 1,
+    }
 
 
 def test_a_deleted_location_gets_a_null_brief_that_generates_nothing(

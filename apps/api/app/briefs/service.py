@@ -19,17 +19,26 @@ trustworthy compliance record:
     resolver's answer. Nothing is inferred or defaulted: no workspace, scout, market or
     other code stands in. S1-5D item 31 (the creative service) refuses drafts from it.
   - **An existing location reference**: it must load inside the opportunity's workspace and
-    organization, and resolve with the shared
-    :func:`app.jurisdiction.resolver.resolve_jurisdiction` and the coverage rules attached to
-    that location. Otherwise — another workspace's or organization's location, or an
-    ``UNRESOLVED`` answer — the request is refused (422 ``jurisdiction_unresolved``,
+    organization, and pass the check before a jurisdiction-dependent action,
+    :func:`app.jurisdiction.business_address.resolve_for_action` (W21 ADDR), with the coverage
+    rules attached to that location: the location's own country and state or province, then
+    its structured business address (complete, with the town when the location has a city,
+    and agreeing with the location), the free-text business address, and the town. Otherwise
+    the request is refused (422 ``jurisdiction_unresolved``,
     :class:`BriefJurisdictionUnresolvedError`): no model call, no usage or budget, no brief.
     A resolved code is stored once, at insert, as ``jurisdiction_code``.
 
   So ``NULL`` is written for exactly one case, a record with no location; every other
-  ``NULL`` brief was written before 5D-W3. Existing briefs are never back-filled. The answer
-  and the log carry a fixed message and a reason category, never the resolver's evidence or
-  any text of the location.
+  ``NULL`` brief was written before 5D-W3. Existing briefs are never back-filled.
+
+  **The refusal's answer.** For an ``UNRESOLVED`` check it names the check's category, one key
+  of the closed vocabulary :data:`~app.jurisdiction.business_address.ACTION_CLARIFICATIONS`,
+  as ``error.details.reason``, with that category's fixed message. A location outside the
+  opportunity's workspace or organization gets the one fixed
+  :data:`JURISDICTION_UNRESOLVED_MESSAGE` and no ``details``, exactly as before, so the answer
+  says nothing about another tenant's location. The log carries the category (or the tenant
+  refusal's fixed reason) only. Neither ever carries the resolver's evidence, an address or
+  any other text of the location.
 * **Metered model call.** The brief's one model task goes through
   :meth:`app.llm.service.LLMService.run` with the tenant named and an
   :class:`~app.llm.metering.LLMMeter` bound to it: the run cap, the workspace's monthly
@@ -89,7 +98,7 @@ from app.core.config import Settings
 from app.core.errors import NotFoundError, SignalNestError, ValidationDomainError
 from app.core.logging import get_logger, log_event
 from app.intelligence.records import SignalIntelligenceRecord
-from app.jurisdiction.resolver import resolve_jurisdiction
+from app.jurisdiction.business_address import ACTION_CLARIFICATIONS, resolve_for_action
 from app.llm.base import LLMError
 from app.llm.metering import (
     LLMBudgetExceededError,
@@ -150,9 +159,14 @@ class BriefVersionConflictError(BriefNotProducedError):
 
 
 class BriefJurisdictionUnresolvedError(ValidationDomainError):
-    """The record's existing location did not resolve to a jurisdiction, or is not a location
-    of the opportunity's workspace and organization (the S1-5D capture rule; a record with no
-    location is not refused, Q-4): no model call was made and nothing was stored (422).
+    """The record's existing location did not pass the check before a jurisdiction-dependent
+    action, or is not a location of the opportunity's workspace and organization (the S1-5D
+    capture rule; a record with no location is not refused, Q-4): no model call was made and
+    nothing was stored (422).
+
+    For a failed check its ``details`` is ``{"reason": <category>}``, a key of
+    :data:`~app.jurisdiction.business_address.ACTION_CLARIFICATIONS`, and its message is that
+    category's; the tenant refusal has no ``details``.
 
     Not a :class:`BriefNotProducedError`: the refusal comes before any model call or budget
     check, so there is no usage to keep."""
@@ -160,12 +174,11 @@ class BriefJurisdictionUnresolvedError(ValidationDomainError):
     code = "jurisdiction_unresolved"
 
 
-#: The one answer to an unresolved capture. Fixed: it never quotes the location or the
-#: resolver's evidence. Since Q-4 an opportunity with no location is not refused, so every
-#: cause is an existing location: a missing or unknown country, a missing state or province
-#: where the jurisdiction is one (item 33), or a business address that names another place
-#: (correctable on the location's Service area tab since F-1). One wording true for each, as
-#: the brief panel's (review r3 F-4, r4 F-5).
+#: The answer to a capture refused because the record's location is not in the opportunity's
+#: workspace and organization (or is gone). Fixed: it never quotes the location, and it names
+#: no category, so it reveals nothing about another tenant's location. It is also the answer
+#: to a check category outside the vocabulary, which :func:`resolve_for_action` never gives.
+#: One wording, true for every cause (review r3 F-4, r4 F-5).
 JURISDICTION_UNRESOLVED_MESSAGE = (
     "The jurisdiction of this opportunity's location could not be determined, so no brief "
     "was generated. Complete or correct the location's details so that its country, its state "
@@ -177,9 +190,21 @@ JURISDICTION_UNRESOLVED_MESSAGE = (
 #: The brief-created log's category for a brief captured without a location (Q-4).
 NO_LOCATION = "no_location"
 
+#: The capture-refusal log's fixed reasons that are not check categories: the tenant refusal,
+#: and the fallback for a check category outside the vocabulary.
+OUTSIDE_WORKSPACE = "jurisdiction_location_outside_workspace"
+UNRESOLVED_OUTSIDE_VOCABULARY = "jurisdiction_location_unresolved"
 
-def _refuse_capture(opportunity: Opportunity, reason: str) -> BriefJurisdictionUnresolvedError:
-    """Log the capture refusal (a reason category only) and return the error to raise."""
+
+def _refuse_capture(
+    opportunity: Opportunity, reason: str, *, category: str | None = None
+) -> BriefJurisdictionUnresolvedError:
+    """Log the capture refusal and return the error to raise.
+
+    ``category`` is the check's category, a key of ``ACTION_CLARIFICATIONS``: the answer then
+    names it as ``details.reason`` with its fixed message. Without one (the tenant refusal),
+    the answer is the fixed :data:`JURISDICTION_UNRESOLVED_MESSAGE` with no ``details``. The
+    log carries ``reason`` only: a category or a fixed reason, never text."""
     log_event(
         logger,
         "recommendation_brief_not_generated",
@@ -188,7 +213,11 @@ def _refuse_capture(opportunity: Opportunity, reason: str) -> BriefJurisdictionU
         opportunity_id=opportunity.id,
         reason=reason,
     )
-    return BriefJurisdictionUnresolvedError(JURISDICTION_UNRESOLVED_MESSAGE)
+    if category is None:
+        return BriefJurisdictionUnresolvedError(JURISDICTION_UNRESOLVED_MESSAGE)
+    return BriefJurisdictionUnresolvedError(
+        ACTION_CLARIFICATIONS[category], details={"reason": category}
+    )
 
 
 def _capture_jurisdiction(
@@ -203,11 +232,12 @@ def _capture_jurisdiction(
     * **An existing location reference** must load inside the opportunity's workspace and
       organization; one that does not (another workspace's or organization's location, or a
       row that is gone) is refused, never treated as no location, so a tenant-boundary fault
-      can never become a ``NULL`` brief. A loaded location is resolved with its coverage
-      rules, the ones attached to it in the workspace (``GeoCoverageRule.location_id``), the
-      rule set the scout pipeline and the geo-coverage routes already choose for a location;
+      can never become a ``NULL`` brief. A loaded location is checked with
+      :func:`resolve_for_action` and its coverage rules, the ones attached to it in the
+      workspace (``GeoCoverageRule.location_id``), the rule set the scout pipeline and the
+      geo-coverage routes already choose for a location, in ``(created_at, id)`` order;
       workspace-level rules (``location_id`` NULL) are not the location's and are not read.
-      ``UNRESOLVED`` is refused.
+      ``UNRESOLVED`` is refused with its category.
 
     Every refusal logs a reason category only, never location text or resolver evidence.
     """
@@ -219,7 +249,7 @@ def _capture_jurisdiction(
         or location.workspace_id != opportunity.workspace_id
         or location.organization_id != opportunity.organization_id
     ):
-        raise _refuse_capture(opportunity, "jurisdiction_location_outside_workspace")
+        raise _refuse_capture(opportunity, OUTSIDE_WORKSPACE)
     rules = list(
         db.scalars(
             select(GeoCoverageRule)
@@ -230,9 +260,12 @@ def _capture_jurisdiction(
             .order_by(GeoCoverageRule.created_at, GeoCoverageRule.id)
         ).all()
     )
-    resolution = resolve_jurisdiction(location, rules)
+    resolution = resolve_for_action(location, rules)
     if not resolution.is_resolved:
-        raise _refuse_capture(opportunity, "jurisdiction_location_unresolved")
+        category = resolution.reason
+        if category not in ACTION_CLARIFICATIONS:  # never, by resolve_for_action's contract
+            raise _refuse_capture(opportunity, UNRESOLVED_OUTSIDE_VOCABULARY)
+        raise _refuse_capture(opportunity, category, category=category)
     return resolution.code
 
 
