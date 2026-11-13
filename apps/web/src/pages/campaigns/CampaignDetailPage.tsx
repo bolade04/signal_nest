@@ -238,7 +238,7 @@ function CampaignView({ workspaceId, campaignId }: { workspaceId: string; campai
           open={confirmingDelete}
           onOpenChange={setConfirmingDelete}
           title="Delete this campaign?"
-          description={`“${current.name}” and its list of locations are deleted. Scout requests, opportunities, briefs and drafts that used it are kept, without the campaign. This cannot be undone.`}
+          description={`“${current.name}” and its list of locations are deleted. This cannot be undone. Scout requests and opportunities that used it are kept, without the campaign. A campaign that a recommendation brief or creative draft refers to cannot be deleted, because briefs and drafts are kept as they were written.`}
           confirmLabel="Delete campaign"
           destructive
           onConfirm={confirmDelete}

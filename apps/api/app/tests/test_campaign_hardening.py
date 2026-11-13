@@ -26,6 +26,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -34,6 +35,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.briefs.models import RecommendationBrief
+from app.campaign_context.campaigns import CAMPAIGN_IN_USE, CAMPAIGN_IN_USE_CODE
 from app.campaign_context.models import Campaign, CampaignLocation
 from app.core.config import get_settings
 from app.core.enums import CampaignMode, CampaignStatus
@@ -612,3 +614,20 @@ def test_a_failed_commit_of_a_delete_never_answers_success(env) -> None:
     # And a refused cross-workspace write never reached a commit at all.
     assert _stored(env, "a2-campaign") is not None
     assert env.count(ScoutRequest) >= 1
+
+
+# --------------------------------------------------------------------------- #
+# D-N4 item 37 (#318): the campaign pages say the router's fixed 409 reason
+# --------------------------------------------------------------------------- #
+def test_the_campaign_pages_mirror_the_in_use_refusal_word_for_word() -> None:
+    """The router refuses deleting a campaign that a brief or draft refers to with a fixed code
+    and reason (no customer text; ``test_append_only_backstop_postgres`` pins the answer). The
+    campaign pages (``apps/web/src/pages/campaigns/campaignErrors.ts``) key static copy by that
+    code and never render the server's text, so the copy must be the router's reason exactly."""
+    copy = (
+        Path(__file__).resolve().parents[3] / "web/src/pages/campaigns/campaignErrors.ts"
+    ).read_text()
+    assert f"export const CAMPAIGN_IN_USE_CODE = '{CAMPAIGN_IN_USE_CODE}';" in copy
+    assert f"export const CAMPAIGN_IN_USE = '{CAMPAIGN_IN_USE}';" in copy
+    assert "'" not in CAMPAIGN_IN_USE  # so the single-quoted line above is the whole string
+    assert "codeOf(error) === CAMPAIGN_IN_USE_CODE" in copy

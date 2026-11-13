@@ -623,3 +623,59 @@ describe('saving a change', () => {
     expect(alertText(other)).not.toBe(gone);
   });
 });
+
+// =============================================================================================
+// 5. D-N4 item 37 (#318): a campaign a brief or draft refers to cannot be deleted (409)
+// =============================================================================================
+// The router refuses that delete with 409 `campaign_referenced_by_brief_or_draft` and a fixed
+// reason (apps/api/app/campaign_context/campaigns.py `CAMPAIGN_IN_USE`, coordinator ruling
+// 37-R-1): briefs and drafts are append-only, so their campaign cannot be taken from them. The
+// page says that reason as static copy keyed by the code, never the server's text, and the
+// confirmation says it before anything is sent.
+const IN_USE = /cannot be deleted because a recommendation brief or creative draft refers to it/i;
+const KEPT_AS_WRITTEN = /briefs and drafts are kept as they were written/i;
+
+describe('deleting a campaign that a brief or draft refers to (D-N4 item 37)', () => {
+  it('the confirmation says such a campaign cannot be deleted, and no longer that briefs and drafts lose it', async () => {
+    const screen = renderAt(`/campaigns/${CAMPAIGN_A}`);
+    await openDetail(screen, 'Spring opening');
+    await screen.user.click(screen.getByRole('button', { name: /delete/i }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent(/a campaign that a recommendation brief or creative draft refers to cannot be deleted/i);
+    expect(dialog).toHaveTextContent(KEPT_AS_WRITTEN);
+    expect(dialog).toHaveTextContent(/scout requests and opportunities that used it are kept, without the campaign/i);
+    expect(dialog).not.toHaveTextContent(/briefs and drafts that used it are kept/i);
+    expect(writes).toHaveLength(0);
+  });
+
+  it('the 409 says the API’s fixed reason as static copy: no server text, no retry, the campaign stays', async () => {
+    const SERVER = 'SERVER-TEXT campaign in use';
+    server.use(http.delete(ITEM, () => refusal(409, 'campaign_referenced_by_brief_or_draft', SERVER)));
+    const screen = renderAt(`/campaigns/${CAMPAIGN_A}`);
+    await openDetail(screen, 'Spring opening');
+    await screen.user.click(screen.getByRole('button', { name: /delete/i }));
+    await screen.user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: /delete/i }));
+    await waitFor(() => expect(screen.getAllByRole('alert').length).toBeGreaterThan(0));
+    const text = alertText(screen);
+    expect(text).toMatch(/^The campaign was not deleted\./);
+    expect(text).toMatch(IN_USE);
+    expect(text).toMatch(KEPT_AS_WRITTEN);
+    expect(text).not.toMatch(/changed at the same time|try again/i);
+    expect(document.body.textContent ?? '').not.toContain(SERVER);
+    // Still on the campaign, which is still listed.
+    expect(screen.getByRole('heading', { name: 'Spring opening' })).toBeInTheDocument();
+    expect(rows.map((r) => r.id)).toContain(CAMPAIGN_A);
+  });
+
+  it('any other 409 keeps the generic conflict message, not the in-use reason', async () => {
+    server.use(http.delete(ITEM, () => refusal(409, 'conflict', 'Conflict.')));
+    const screen = renderAt(`/campaigns/${CAMPAIGN_A}`);
+    await openDetail(screen, 'Spring opening');
+    await screen.user.click(screen.getByRole('button', { name: /delete/i }));
+    await screen.user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: /delete/i }));
+    await waitFor(() => expect(screen.getAllByRole('alert').length).toBeGreaterThan(0));
+    const text = alertText(screen);
+    expect(text).toMatch(/changed at the same time/i);
+    expect(text).not.toMatch(IN_USE);
+  });
+});
