@@ -6,9 +6,15 @@ decision O-1: exact membership, never a rank floor). This module mounts nothing.
 
 * **Exporting** (``POST /workspaces/{ws}/drafts/{draft_id}/exports``, precondition 4):
   exactly OWNER, ADMIN or MARKETER.
-* **Reading the export history** (``GET …/exports``): the analytics read set — exactly
-  OWNER, ADMIN, MARKETER or REVIEWER — because the history exposes
-  ``exported_by_snapshot``, the compliance identity (the plan's "same gate" as analytics).
+* **Reading the export history** (``GET …/exports``): exactly OWNER, ADMIN, MARKETER,
+  REVIEWER or COMPLIANCE_REVIEWER — the analytics read set
+  (:data:`app.analytics.policy.ANALYTICS_READER_ROLES`) plus COMPLIANCE_REVIEWER. The history
+  exposes ``exported_by_snapshot``, the compliance identity, and records what left the
+  system, which is the compliance role's concern; the audit read already admits that role.
+  Operator ruling D-N4 item 32 (2026-11-12): "add COMPLIANCE_REVIEWER to export history, as
+  recommended. Keep export creation and analytics role sets as specified." So the history
+  set is no longer the analytics set: export creation and analytics keep their CF-3 sets, and
+  only the history read gains COMPLIANCE_REVIEWER. VIEWER is admitted to none of them.
 """
 
 from __future__ import annotations
@@ -18,9 +24,10 @@ from app.core.enums import Role
 
 #: The roles that may export an approved draft (5E §2 precondition 4).
 EXPORTER_ROLES: frozenset[Role] = frozenset({Role.OWNER, Role.ADMIN, Role.MARKETER})
-#: The roles that may read a draft's export history (the analytics read set).
+#: The roles that may read a draft's export history: the analytics read set plus
+#: COMPLIANCE_REVIEWER (operator ruling D-N4 item 32).
 EXPORT_HISTORY_READER_ROLES: frozenset[Role] = frozenset(
-    {Role.OWNER, Role.ADMIN, Role.MARKETER, Role.REVIEWER}
+    {Role.OWNER, Role.ADMIN, Role.MARKETER, Role.REVIEWER, Role.COMPLIANCE_REVIEWER}
 )
 
 #: The exact-set dependency for the export endpoint.

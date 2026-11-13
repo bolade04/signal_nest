@@ -33,11 +33,19 @@ Explanation text is withheld (replaced by fixed copy, ``explanation_source =
   spelled out ("sales (at) deals (dot) com"). A phone number is 10 or more digits
   written like one, with ``+`` or ``( ) - .``. Ordinary copy passes: "Node.js",
   "report.pdf", "long.customers", sizes "10 12 14", year runs, ISO dates;
-* an echoed injection marker (``[quoted:`` from input sanitization, or the
-  phrases themselves) - evidence the model followed or repeated injected text. The
-  one weak marker ``act as`` is common in ordinary text ("parents who act as
-  carers"), so its defanged echo ``[quoted:act as]`` is unwrapped to the plain
-  phrase, not treated as an injection echo;
+* an echoed injection marker - evidence the model followed or repeated injected text.
+  That is ``[quoted:``, the defanged form input sanitization writes for every marker of
+  :data:`app.intelligence.extraction._INJECTION_MARKERS`, or one of four phrases written
+  plainly: ``ignore (all) previous instructions``, ``disregard (the) above``, ``system
+  prompt`` and the delimiter name ``untrusted_data``. **Not every input-side marker is
+  caught written plainly.** ``you are now``, ``act as`` and ``assistant:`` are ordinary copy
+  in plain text ("you are now eligible", "parents who act as carers", "Assistant: managers
+  want clearer rosters"), so they are caught only in their defanged form; those plain-text
+  cases are the exemptions accepted in #244 and kept by operator ruling D-N4 item 41
+  ("preserve the previously accepted exemptions"). ``<system>`` is markup. The one weak
+  marker ``act as`` is not caught even defanged: its echo ``[quoted:act as]`` is unwrapped to
+  the plain phrase, not treated as an injection echo. Generated drafts add one rule of
+  their own, below;
 * a claim the deterministic claim-safety engine rates ``high`` or ``blocked``
   (``app.claims.engine``; regulated industries escalate ``medium`` to ``high``).
 
@@ -47,7 +55,16 @@ truncated rather than withheld.
 **Generated marketing text (Project Phase 5C, :func:`screen_creative`).** A draft's
 ``headline``, ``body`` and ``call_to_action`` are put in their persisted form and capped the
 same way, and the draft is withheld (nothing stored) on the same link, contact-detail, markup
-and instruction-echo rules. The claim check is *not* a withholding rule there: a generated
+and instruction-echo rules, and on one more instruction-echo rule that applies to drafts only
+(operator ruling D-N4 item 41; review W21-REV-R4 F-3): **a line that opens as a chat role
+label**, ``Assistant:`` or ``System:`` in any case, at the start of a field or after any line
+break, after at most eight non-word characters (quotes, ``**``, ``> ``, ``- ``)
+(:data:`_ROLE_LINE`). Such a line is model-originated instruction-shaped text, which the
+defanged-echo rule cannot see because no input carried it. Ordinary marketing copy rarely
+opens a line that way; "Assistant managers", "Systems:" and a mid-line "our assistant:" are
+not role labels, and ``you are now`` and ``act as`` stay exempt. Explanation text and audience
+labels do not get this rule, so #244's accepted "Assistant: managers want clearer rosters"
+explanation is kept as before. The claim check is *not* a withholding rule there: a generated
 draft's claim risk, blocked claims and required disclaimers are the persisted content review
 (:func:`app.claims.engine.review_against_library`), which runs on the returned screening copy
 of exactly the persisted text, and a blocked draft is stored but cannot be approved.
@@ -159,6 +176,19 @@ _INSTRUCTION_ECHO = re.compile(
     r"\[quoted:|ignore\s+(?:all\s+)?previous\s+instructions|disregard\s+(?:the\s+)?above"
     r"|system\s+prompt"
     r"|untrusted_data",
+    re.I,
+)
+#: Every character that starts a new line for ``str.splitlines`` (and for a renderer): line
+#: feed, carriage return, the controls ``\x0b \x0c \x1c-\x1e`` (``_display`` already turns them
+#: into spaces), NEL and the Unicode line and paragraph separators.
+_LINE_BREAKS = "\n\r\x0b\x0c\x1c\x1d\x1e\x85  "
+#: Generated drafts only (:func:`screen_creative`; operator ruling D-N4 item 41): a line that
+#: opens as a chat role label, ``assistant:`` or ``system:`` in any case, at the start of the
+#: text or after a line break, after at most eight non-word characters on that line. Every
+#: part is bounded or anchored, so the scan stays linear.
+_ROLE_LINE = re.compile(
+    rf"(?:^|(?<=[{_LINE_BREAKS}]))[^\w{_LINE_BREAKS}]{{0,8}}(?:assistant|system)"
+    rf"[^\S{_LINE_BREAKS}]{{0,8}}:",
     re.I,
 )
 _TEXT_FIELDS = ("why_it_matters", "who_cares", "ai_inference", "recommended_action", "risk_note")
@@ -365,7 +395,8 @@ def screen_creative(output: dict, limits: Mapping[str, int]) -> ScreenedCreative
     """Screen a ``generate_creative`` output; ``limits`` maps each text field to its cap.
 
     Withheld (``output`` None) on a link, contact detail, markup or instruction echo in any
-    field, or when the body is empty once in persisted form.
+    field, including a line that opens as a chat role label (:data:`_ROLE_LINE`, drafts only),
+    or when the body is empty once in persisted form.
     """
     prepared = {
         name: _prepared(value, limit) if isinstance(value := output.get(name), str) else ("", "")
@@ -373,6 +404,8 @@ def screen_creative(output: dict, limits: Mapping[str, int]) -> ScreenedCreative
     }
     everything = "\n".join(copy for _, copy in prepared.values())
     reason = _pattern_reason(everything)
+    if reason is None and _ROLE_LINE.search(everything):
+        reason = "instruction_echo"
     if reason:
         return ScreenedCreative(None, everything, reason)
     persisted = {name: text for name, (text, _) in prepared.items()}
