@@ -139,6 +139,34 @@ def test_ri1_the_region_slot_no_longer_reads_the_territory_as_the_state():
     _asks(DALLAS, "1 Main St, Dallas, Texas Territory, USA")
 
 
+#: Review W21-REV-GEO-P4 r1, condition C-1 (ruling P4-r1-R-1): the reviewer's rows
+#: (P6-W21-REV-GEO-01/probes/p4r1/c1_rows.tsv), each pinning what one of its mutants showed
+#: unpinned: GEO-P3's other separators (M1), a postcode after the word (M14), the word in
+#: full-width letters, in the text and in the region slot (M13, M11), and a Nigerian state's name
+#: in capitals (M2).
+FULL_WIDTH_TERRITORY = "\uff34\uff45\uff52\uff52\uff49\uff54\uff4f\uff52\uff59"
+REVIEW_R1_C1_ROWS = [
+    (ANCHORAGE, "Alabama Territory | Montgomery | 1 Main St"),
+    (ANCHORAGE, "Alabama Territory\uff0cMontgomery\uff0c1 Main St"),
+    (ANCHORAGE, "Alabama Territory - Montgomery - 1 Main St"),
+    (ANCHORAGE, "1 Main St, Montgomery, Alabama Territory 36104"),
+    (
+        ANCHORAGE,
+        f"Alabama {FULL_WIDTH_TERRITORY}, 1 Main St, United States",
+    ),
+    (
+        ANCHORAGE,
+        f"1 Main St, Montgomery, Alabama {FULL_WIDTH_TERRITORY}, USA",
+    ),
+    (ABUJA, "1 Allen Ave, Ikeja, LAGOS TERRITORY"),
+]
+
+
+@pytest.mark.parametrize(("location", "address"), REVIEW_R1_C1_ROWS)
+def test_review_r1_c1_rows_ask(location, address):
+    _asks(location, address)
+
+
 @pytest.mark.parametrize(
     ("location", "address"),
     [
