@@ -38,8 +38,14 @@ from app.tests.test_postgres_migration_proof import (
 
 #: This revision (W21 CF-3).
 CF3 = "c3f8e1a6d2b9"
-#: The code head (5D-W1's campaign-location data repair, Amendment D-1), which follows it.
-HEAD = "d5f616c0ec97"
+#: 5D-W1's campaign-location data repair (Amendment D-1, data only), which follows CF-3.
+D1_REPAIR = "d5f616c0ec97"
+#: W21 ADDR: the structured business address on ``geo_coverage_rules``, which follows the repair.
+ADDR = "6f8a80cf1785"
+#: D-N4 item 37's PostgreSQL append-only backstop, which follows ADDR.
+BACKSTOP = "d0a8bce8de6a"
+#: The code head (D-N4 item 36's closed claim kinds, data only), which follows the backstop.
+HEAD = "1574637e56d3"
 CF2 = "a7d2e9f4c1b8"
 NEW_TABLES = {"campaign_locations", "exports", "notifications", "notification_preferences"}
 

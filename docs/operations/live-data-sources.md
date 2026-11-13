@@ -155,6 +155,15 @@ simulated path or `not_covered` (the replay seed sets it for its own process).
   and `verified: true` only when every remaining count is zero. Repeating it is safe and
   re-runs the purge; the first purge's counts stay on the record (`purge_summary`) and
   each repeat appends `{at, purged}` to `repeat_purges`.
+* **A takedown that would reach an append-only record is refused** (D-N4 item 37): when an
+  opportunity the purge would delete, or an intelligence record of the source's signals, is
+  referenced by a recommendation brief or creative draft, the call answers **409
+  `takedown_blocked_by_append_only_records`** with a fixed message and changes nothing (no
+  takedown, case record or purge). Briefs and drafts are append-only, and the takedown is not a
+  sanctioned privacy writer; whether it may become one is an operator decision. While the
+  Phase 5 features stay disabled no brief or draft exists, so this cannot occur. A brief or draft
+  created at the same moment as the takedown can make the call fail with the generic 500
+  `internal_error` instead; it then also changes nothing, and repeating it answers the 409.
 * **What the takedown record holds (D-9d):** `source_takedowns` is a permanent suppression
   record and nothing more — the source key, the time it was taken down, and aggregate
   counts (`purge_summary`, `repeat_purges[*].{at, purged}`). It never holds a user id, free

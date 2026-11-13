@@ -25,7 +25,17 @@ marketer whose draft is blocked must not be able to remove the claim that blocks
   is no longer listed, updated or retired again (404, as a missing one);
 * every create, update and retirement writes an audit record
   (``claims_library_entry.created`` / ``.updated`` / ``.retired``) naming the changed field
-  names, never their values.
+  names in ``context`` and carrying the entry's ``text``, ``kind`` and ``jurisdiction_codes``
+  (:func:`app.claims.library.claim_audit_values`; operator ruling D-N4 item 40, 2026-11-12:
+  "record the previous and new claim text and kind under the applicable access, retention and
+  erasure controls. Free-form claim text must not automatically be classified as containing no
+  personal data."): a create records them as ``new_state``; an update as ``previous_state``
+  (before the change) and ``new_state`` (after it), on every update whichever fields changed;
+  a retirement as ``previous_state`` (``new_state`` empty: the entry no longer applies). The
+  ``jurisdiction_codes`` are a coordinator addition beyond the ruling's minimum (DN4-A ruling
+  A-R-3: they decide where an entry applies since 5D-W1; codes only). The other fields' values
+  are not recorded. The claim text may name a person, so it is treated as personal data under
+  the ``audit_logs`` controls (``docs/operations/data-inventory.md``).
 
 **Onboarding is held to the same rules (coordinator ruling R1, closed by the 5C build, W21
 lane P5C).** ``POST /workspaces/{workspace_id}/onboarding`` (:mod:`app.brands.service`) is the
@@ -87,7 +97,7 @@ from app.campaign_context.schemas import (
     SourcePrefIn,
     SourcePrefPatch,
 )
-from app.claims.library import CLAIMS_STEWARD_ROLES
+from app.claims.library import CLAIMS_STEWARD_ROLES, claim_audit_values
 from app.core.enums import Role
 from app.core.errors import NotFoundError, ValidationDomainError
 from app.core.pagination import MAX_PAGE_SIZE, PAGINATION_RESPONSES, paginate
@@ -106,13 +116,15 @@ CLAIMS_STEWARDS = require_exact_roles(*sorted(CLAIMS_STEWARD_ROLES))
 @dataclass(frozen=True)
 class ProtectedCollection:
     """A collection whose writes are a safety control: exact-role writers, soft retirement
-    (the model has ``retired_at``) and audited mutations."""
+    (the model has ``retired_at``) and audited mutations. ``values`` gives what each audit
+    record carries of the entry (its ``previous_state`` / ``new_state``)."""
 
     writers: Callable[..., TenantContext]
     entity_type: str
     created: AuditAction
     updated: AuditAction
     retired: AuditAction
+    values: Callable[[Any], dict]
 
 
 CLAIMS_PROTECTION = ProtectedCollection(
@@ -121,6 +133,7 @@ CLAIMS_PROTECTION = ProtectedCollection(
     created=AuditAction.CLAIMS_LIBRARY_ENTRY_CREATED,
     updated=AuditAction.CLAIMS_LIBRARY_ENTRY_UPDATED,
     retired=AuditAction.CLAIMS_LIBRARY_ENTRY_RETIRED,
+    values=claim_audit_values,
 )
 
 
@@ -149,7 +162,12 @@ def _audit(
     action: AuditAction,
     obj: Any,
     fields: list[str],
+    *,
+    previous: dict | None = None,
+    new: dict | None = None,
 ) -> None:
+    """One audit record of a protected mutation: the changed field names in ``context``, and
+    the entry's audited values before (``previous``) and after (``new``) it (D-N4 item 40)."""
     record_audit(
         db,
         organization_id=ctx.organization.id,
@@ -158,6 +176,8 @@ def _audit(
         action=action,
         entity_type=protection.entity_type,
         entity_id=obj.id,
+        previous_state=previous,
+        new_state=new,
         context={"fields": sorted(fields)},
     )
 
@@ -239,7 +259,10 @@ def register_context_entity(
         db.add(obj)
         db.flush()
         if protection:
-            _audit(db, ctx, protection, protection.created, obj, list(values))
+            _audit(
+                db, ctx, protection, protection.created, obj, list(values),
+                new=protection.values(obj),
+            )
         return _serialize(obj)
 
     # ``from __future__ import annotations`` would stringify a ``body: schema`` hint
@@ -269,12 +292,17 @@ def register_context_entity(
                 changes[location_field],
                 already_stored=stored if isinstance(stored, list) else (),
             )
+        # The audited values as they stand before the change (D-N4 item 40).
+        before = protection.values(obj) if protection else None
         for key, value in changes.items():
             setattr(obj, key, value)
         db.add(obj)
         db.flush()
         if protection and changes:
-            _audit(db, ctx, protection, protection.updated, obj, list(changes))
+            _audit(
+                db, ctx, protection, protection.updated, obj, list(changes),
+                previous=before, new=protection.values(obj),
+            )
         return _serialize(obj)
 
     _update.__annotations__["body"] = patch_schema
@@ -295,10 +323,13 @@ def register_context_entity(
         if not protection:
             db.delete(obj)
             return
+        retired = protection.values(obj)  # what stops applying (D-N4 item 40)
         obj.retired_at = database_now(db)  # soft retirement: never a hard delete
         db.add(obj)
         db.flush()
-        _audit(db, ctx, protection, protection.retired, obj, ["retired_at"])
+        _audit(
+            db, ctx, protection, protection.retired, obj, ["retired_at"], previous=retired
+        )
 
 
 #: Collections that are protected controls (W21 CF-2): only the claims library.

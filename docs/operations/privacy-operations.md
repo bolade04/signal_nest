@@ -295,8 +295,9 @@ Restored data predates later deletions. Before reopening a restored database to 
 re-apply every erasure completed after the backup's timestamp: search the application logs for
 `privacy.account.deleted` and `privacy.organization.deleted` events after that time (they carry
 the pseudonymous `user_id` / `organization_id`), repeat each deletion through the CLI or the
-service functions, and run the verifier for each. This only works while log retention is at
-least as long as backup retention — an operator item.
+service functions (on PostgreSQL this does not yet cover an account deletion; see §7), and run
+the verifier for each. This only works while log retention is at least as long as backup
+retention — an operator item.
 
 ## 5. Relationship to P6-PRIV-3 and P6-PRIV-5 (P1, outside E0 for the pilot)
 
@@ -348,3 +349,65 @@ loop: a 403 is a role (exactly OWNER) or membership problem, a 422 `invalid_curs
 that is not well-formed for the table (use the one the previous page returned), and `limit` above 5000 is refused. Nothing in
 this procedure writes anything, and no usage or accounting figure is adjusted to match an
 export.
+
+## 7. The PostgreSQL append-only backstop (D-N4 item 37)
+
+The operator's ruling of 2026-11-12: "add the PostgreSQL backstop, retaining the application
+guard. Cover applicable destructive SQL paths, including TRUNCATE. Keep the sanctioned
+privacy-writer exception transaction-scoped and test that it cannot leak through pooled
+connections. Document that this does not protect against a deliberate table owner."
+
+**What it is.** Alembic revision `d0a8bce8de6a` adds, on PostgreSQL only, two triggers on each
+table the application's append-only guard covers (`recommendation_briefs`, `approvals`,
+`audit_logs`, `creative_drafts`, `content_reviews`, `exports`). They refuse every UPDATE,
+DELETE and TRUNCATE of those tables, whatever issues it: raw SQL in `psql`, a script, an ORM
+form the application guard does not know, a data-modifying CTE, `MERGE`, an upsert,
+`TRUNCATE … CASCADE` of a parent table, or the `ON DELETE CASCADE` / `SET NULL` action of
+deleting a parent row. A refusal is SQLSTATE `SNA01` with the message
+`append-only: <UPDATE|DELETE|TRUNCATE> on <table> is refused outside a sanctioned privacy-writer
+transaction`; it names no row value. INSERT is never refused. The application guard
+(`app/db/append_only.py`) still refuses the ORM paths first, before anything is sent.
+
+**The one exception: a sanctioned privacy-writer transaction.** Exactly four writers mark their
+transaction, after their own checks and before their first write: organization deletion,
+account deletion, invitee erasure (`erase-email`) and the retention purge (the sweep and the
+`retention.purge` job). The mark is `set_config('signalnest.privacy_writer',
+<current transaction id>, true)`:
+
+- it ends with the transaction (COMMIT or ROLLBACK), so a pooled connection never carries it
+  into the next request;
+- it names the transaction, and the trigger compares it with the current transaction's id, so
+  a value left behind any other way (a session-level `SET`, or `on`) grants nothing.
+
+So the procedures in §1–§3 need nothing new: the API deletions, `erase-email`, and the retention sweep and job mark their own transactions. **After a restore (§4)**, an organization deletion can be repeated with `app.privacy.erasure.erase_organization` (it marks its own transaction), but no operator path repeats an *account* deletion: `delete_account` needs the account's current password, and calling the helpers by hand is refused on PostgreSQL. Re-applying account deletions after a restore is therefore an open operator item; a sanctioned operator writer for it would widen the ruled exception and needs the operator's decision.
+
+Calling an inner helper on its own (an `anonymise_*` function, or `delete_rows`) is refused on
+PostgreSQL. **Never set `signalnest.privacy_writer` by hand.** A refusal means an unsanctioned
+path tried to change or remove a compliance record: investigate it; do not work around it. The
+SQLSTATE `SNA01` and its message appear in the **PostgreSQL server log**; the application's log
+records only `unhandled_error` with `error_class=DatabaseError` (it never logs a driver's
+message).
+
+**What it does not protect against.** The runtime database role owns these tables. A deliberate
+table owner can switch the backstop off (`ALTER TABLE … DISABLE TRIGGER`, `DROP TRIGGER`,
+replacing the function, or `session_replication_role = replica` where that may be set), and any
+session can set the mark for its own transaction. The backstop stops accidental code paths, not
+a deliberate owner. Stopping one would need a separate restricted database role, an
+infrastructure change that is not built (no database-role change is authorized). DDL
+(`DROP TABLE`, `ALTER TABLE`) is not covered either.
+
+**SQLite (local mode)** has no trigger; the application guard is its only control.
+
+**Two existing paths that would reach these tables through a referential action** are
+refused by the application first, on both engines, with a fixed 409 that changes nothing:
+
+- a source takedown (`app/connectors/takedown.py`) whose purge would delete an opportunity, or
+  an intelligence record, that a brief or a creative draft refers to (the cascade would delete
+  them): `takedown_blocked_by_append_only_records`. The takedown is not a sanctioned privacy
+  writer; whether it may become one is an operator decision, recorded as a gate before Phase 5
+  activation;
+- deleting a campaign that a brief or a creative draft names (the `SET NULL` would change
+  them): `campaign_referenced_by_brief_or_draft`.
+
+Neither occurs while the Phase 5 features stay disabled, because nothing then creates a brief
+or a draft.

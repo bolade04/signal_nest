@@ -64,6 +64,8 @@ export type LocationBase = S['LocationBase'];
 export type LocationOut = S['LocationOut'];
 export type GeoCoverageBase = S['GeoCoverageBase'];
 export type GeoCoverageOut = S['GeoCoverageOut'];
+/** W21 ADDR: confirm or withdraw that the business town lies within the location's area. */
+export type LocalityConfirmationIn = S['LocalityConfirmationIn'];
 export type GeocodeRequest = S['GeocodeRequest'];
 export type GeocodeResponse = S['GeocodeResponse'];
 

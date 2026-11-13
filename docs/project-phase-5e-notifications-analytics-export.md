@@ -97,6 +97,13 @@ plan §14).
 - **The export-history read** `GET /workspaces/{ws}/drafts/{draft_id}/exports` carries
   the same gate. It exposes `exported_by_snapshot`, the immutable compliance identity
   that deliberately survives user deletion, so it is not a plain tenant-scoped read.
+  **Amended by operator ruling D-N4 item 32 (2026-11-12):** "add COMPLIANCE_REVIEWER to
+  export history, as recommended. Keep export creation and analytics role sets as
+  specified." The export-history gate is therefore
+  `require_exact_roles(OWNER, ADMIN, MARKETER, REVIEWER, COMPLIANCE_REVIEWER)`: the
+  analytics set above plus COMPLIANCE_REVIEWER, which the audit read already admits.
+  Export creation (precondition 4 below) and the analytics read keep their sets
+  (`apps/api/app/exports/policy.py`, `apps/api/app/analytics/policy.py`).
 - The `RunStats` discipline carries over: incomplete states report `null`, never
   fabricated zeros. Advertising-performance attribution is **excluded** —
   deferred by definition-audit operator decision D-05 ("include operational

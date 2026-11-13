@@ -57,6 +57,7 @@ from app.opportunities.models import Opportunity
 from app.organizations.models import OrganizationInvitation, Workspace
 from app.privacy.erasure import ErasureCounts, delete_rows
 from app.privacy.inventory import PLATFORM_CLASSES, WORKSPACE_CLASSES, RetentionClass
+from app.privacy.writer import mark_privacy_writer
 from app.signals.models import RawSignal, SignalCluster
 
 logger = get_logger("signalnest.privacy.retention")
@@ -149,7 +150,12 @@ def purge_batch(
     batch_size: int,
     workspace_id: str | None = None,
 ) -> BatchResult:
-    """Delete one bounded batch of ``data_class`` rows older than ``cutoff``. Flushes only."""
+    """Delete one bounded batch of ``data_class`` rows older than ``cutoff``. Flushes only.
+
+    Marks the transaction as a sanctioned privacy-writer transaction first
+    (:func:`app.privacy.writer.mark_privacy_writer`): on PostgreSQL the append-only backstop
+    refuses the walk's deletes of guarded rows otherwise (D-N4 item 37)."""
+    mark_privacy_writer(db)
     counts = ErasureCounts()
     complete = True
     for model, ids in _candidates(

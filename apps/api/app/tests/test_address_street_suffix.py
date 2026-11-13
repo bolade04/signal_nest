@@ -50,7 +50,8 @@ These tests prove:
   too, in a comma-free address and in a part (re-bind 3 C-15); in a part after the first, a unit
   number ("Flat No 3") states nothing, and a route or a code after a number or a unit ("12000 FM
   1960", "Unit 5 NY 10001", "123 Main St Fl 3") is ambiguous, never explicit and never nothing
-  (re-bind 3 C-16);
+  (re-bind 3 C-16); GEO-P2 reads a floor after the street as a floor ("123 Main St Fl 3" is "123
+  Main St"; ``test_geography_units_designators.py``);
 * any other text reads exactly as an observed market does, and only the business-address reader
   reads differently (the live Scout readers do not);
 * lane 5DW2FIX's realistic-address corpus (924 rows) resolves to each row's own location, except
@@ -77,6 +78,10 @@ from app.geography.geocoder import fixture_geocode
 from app.geography.markets import parse_business_address, parse_market, parse_observed
 from app.jurisdiction.codes import UNRESOLVED
 from app.jurisdiction.resolver import (
+    ADDRESS_DIRECTION_AMBIGUOUS,
+    ADDRESS_NAMES_ANOTHER_PLACE,
+    ADDRESS_PLACE_UNCLEAR,
+    ADDRESS_ROUTE_AMBIGUOUS,
     ADDRESS_SUFFIX_AMBIGUOUS,
     CLARIFICATIONS,
     jurisdiction_permits,
@@ -374,7 +379,8 @@ AMBIGUOUS_CONSISTENT = [
     (WARSAW, "PL", "1 Main St, Warszawa PL"),
     (SAO_TOME, "ST", "10 Rua X, Sao Tome ST"),
     (DALLAS, "US-TX", "Suite 5, 3 Kings Ct"),
-    (MUNICH, "DE", "Marienplatz 1, 80331 Munich, DE-BY"),
+    # GEO-P3 (G-7): "Marienplatz 1, 80331 Munich, DE-BY" now states Germany through its code
+    # form, so it agrees for Munich, not stating nothing (test_geography_place_knowledge).
     # FU-R1: the first part's code reading is the location's own area.
     (HARTFORD, "US-CT", "1500 Broadway Hartford CT, Hartford"),
     (HARTFORD, "US-CT", "Hartford CT, Hartford"),
@@ -543,9 +549,17 @@ def test_an_address_whose_later_parts_are_only_units_reads_as_its_first_part(add
 
 
 def test_only_an_ambiguous_suffix_carries_a_reason():
-    """Clear lines, explicit contradictions and unresolvable fields carry no reason; the one
-    reason category has exactly one fixed message."""
-    assert set(CLARIFICATIONS) == {ADDRESS_SUFFIX_AMBIGUOUS}
+    """Clear lines, explicit contradictions and unresolvable fields carry no reason; D1's reason
+    category has exactly one fixed message. GEO-P1 adds three categories for parts read wherever
+    they stand (their messages are pinned in ``test_geography_part_places.py``), and GEO-P2 one for
+    a route designator written as the whole address (``test_geography_units_designators.py``)."""
+    assert set(CLARIFICATIONS) == {
+        ADDRESS_SUFFIX_AMBIGUOUS,
+        ADDRESS_NAMES_ANOTHER_PLACE,
+        ADDRESS_PLACE_UNCLEAR,
+        ADDRESS_DIRECTION_AMBIGUOUS,
+        ADDRESS_ROUTE_AMBIGUOUS,
+    }
     assert CLARIFICATIONS[ADDRESS_SUFFIX_AMBIGUOUS] == (
         "We couldn't tell whether the end of the business address is a street type or a "
         "state or country. Write the street type or direction in full (for example "
@@ -973,15 +987,17 @@ ORDINAL_OR_DIRECTION_OWN = [
     (NEW_YORK, "US-NY", "1 W 34th St"),
     (WASHINGTON, "US-DC", "123 4th St NE"),
     (WASHINGTON, "US-DC", "1 1st St SE"),
-    (WASHINGTON, "US-DC", "Suite 200, 123 4th St NE, Washington, DC 20002"),
+    (WASHINGTON, "US-DC", "Suite 200, 123 4th St NE, Washington DC 20002"),
     (WASHINGTON, "US-DC", "Suite 200, 123 4th St NE"),
-    (WASHINGTON, "US-DC", "Suite 5, 1 1st St SE, Washington, DC 20003"),
-    (WASHINGTON, "US-DC", "1 Main St, St NE, Washington, DC"),
+    (WASHINGTON, "US-DC", "Suite 5, 1 1st St SE, Washington DC 20003"),
+    (WASHINGTON, "US-DC", "1 Main St, St NE, Washington DC"),
     (OMAHA, "US-NE", "ST NE"),
     (SAO_TOME, "ST", "ST NE"),
     # The lane's R17 rows: a street name before "St NE" with no house number.
-    (WASHINGTON, "US-DC", "5th St NE, Washington, DC"),
-    (WASHINGTON, "US-DC", "5th St NE, Washington, DC 20002"),
+    # GEO-P3 (ruling P3-R-16, register G-11): "Washington, DC" asks, since the location's city no
+    # longer settles "Washington"; these rows write the town with its code, as the remedy says.
+    (WASHINGTON, "US-DC", "5th St NE, Washington DC"),
+    (WASHINGTON, "US-DC", "5th St NE, Washington DC 20002"),
     (OMAHA, "US-NE", "5th St NE"),
     (NIAMEY, "NE", "5th St NE"),
 ]
@@ -1066,8 +1082,9 @@ def test_explicit_text_after_an_ordinal_street_is_still_refused(location, addres
 # exact evidence. "5th St SE" may be "5th Street Southeast", so its single-area code reading
 # (Sweden) is ambiguous, as "5th St NE" is. In a part after the first, a unit number ("Flat No
 # 3") states nothing, and a route, or a state and its ZIP code after a unit ("12000 FM 1960",
-# "Unit 5 NY 10001", "123 Main St Fl 3"), is ambiguous: explicit geography settles it, and it is
-# never read as nothing. The first part keeps its reading ("1 SR 520, Redmond, WA 98052").
+# "Unit 5 NY 10001", "123 Main St Fl 3"; since GEO-P2 that floor is a floor), is ambiguous:
+# explicit geography settles it, and it is never read as nothing. The first part keeps its reading
+# ("1 SR 520, Redmond, WA 98052").
 # --------------------------------------------------------------------------- #
 
 SEATTLE = _location("Seattle", "WA", "US")
@@ -1077,9 +1094,9 @@ MAHARASHTRA_MUMBAI = _location("Mumbai", "Maharashtra", "India")
 
 DIRECTION_OR_DESIGNATOR_OWN = [
     # C-15
-    (WASHINGTON, "US-DC", "Suite 5, 5th St SE, Washington, DC 20003"),
-    (WASHINGTON, "US-DC", "Suite 5, Massachusetts Ave SE, Washington, DC"),
-    (WASHINGTON, "US-DC", "5th St SE, Washington, DC"),
+    (WASHINGTON, "US-DC", "Suite 5, 5th St SE, Washington DC 20003"),
+    (WASHINGTON, "US-DC", "Suite 5, Massachusetts Ave SE, Washington DC"),
+    (WASHINGTON, "US-DC", "5th St SE, Washington DC"),
     (STOCKHOLM, "SE", "5th St SE"),
     (STOCKHOLM, "SE", "Suite 5, 5th St SE"),
     # C-16

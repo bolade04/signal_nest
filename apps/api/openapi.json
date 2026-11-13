@@ -182,6 +182,14 @@
             "title": "Invitations Sent",
             "type": "array"
           },
+          "locality_confirmations_made": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Locality Confirmations Made",
+            "type": "array"
+          },
           "memberships": {
             "items": {
               "additionalProperties": true,
@@ -255,7 +263,8 @@
           "drafts_authored",
           "exports_performed",
           "notifications_received",
-          "notification_preferences"
+          "notification_preferences",
+          "locality_confirmations_made"
         ],
         "title": "AccountExportOut",
         "type": "object"
@@ -2146,9 +2155,8 @@
             "type": "array"
           },
           "kind": {
-            "default": "approved",
-            "title": "Kind",
-            "type": "string"
+            "$ref": "#/components/schemas/ClaimKind",
+            "default": "approved"
           },
           "notes": {
             "anyOf": [
@@ -2178,6 +2186,16 @@
         "title": "ClaimIn",
         "type": "object"
       },
+      "ClaimKind": {
+        "enum": [
+          "approved",
+          "restricted",
+          "blocked",
+          "required_disclaimer"
+        ],
+        "title": "ClaimKind",
+        "type": "string"
+      },
       "ClaimPatch": {
         "properties": {
           "category": {
@@ -2200,8 +2218,7 @@
             "type": "array"
           },
           "kind": {
-            "title": "Kind",
-            "type": "string"
+            "$ref": "#/components/schemas/ClaimKind"
           },
           "notes": {
             "anyOf": [
@@ -3415,6 +3432,7 @@
         "type": "string"
       },
       "GeoCoverageBase": {
+        "description": "The coverage PUT's body. The structured business-address fields are written only when\nthe request names them (an explicit ``null`` clears one); a value must be readable as what\nit is, and is never compared with the location here (the action does that). The readability\nvalidators belong to this request model only: ``GeoCoverageOut`` does not inherit them, so a\nstored value that no longer reads never turns a GET into a response-validation error.",
         "properties": {
           "business_address": {
             "anyOf": [
@@ -3426,6 +3444,71 @@
               }
             ],
             "title": "Business Address"
+          },
+          "business_address_country": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Country. Provided by the customer.",
+            "title": "Business Address Country"
+          },
+          "business_address_locality": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Town or locality: the town, locality or named place used in the business's postal address (required before jurisdiction-dependent actions when the location has a city). Provided by the customer.",
+            "title": "Business Address Locality"
+          },
+          "business_address_postcode": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Postcode. Provided by the customer.",
+            "title": "Business Address Postcode"
+          },
+          "business_address_region": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "State or province (required for jurisdiction in the United States, Canada, Australia and Nigeria). Provided by the customer.",
+            "title": "Business Address Region"
+          },
+          "business_address_street": {
+            "anyOf": [
+              {
+                "maxLength": 400,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Street. Provided by the customer.",
+            "title": "Business Address Street"
           },
           "center_latitude": {
             "anyOf": [
@@ -3525,6 +3608,71 @@
             ],
             "title": "Business Address"
           },
+          "business_address_country": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Country. Provided by the customer.",
+            "title": "Business Address Country"
+          },
+          "business_address_locality": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Town or locality: the town, locality or named place used in the business's postal address (required before jurisdiction-dependent actions when the location has a city). Provided by the customer.",
+            "title": "Business Address Locality"
+          },
+          "business_address_postcode": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Postcode. Provided by the customer.",
+            "title": "Business Address Postcode"
+          },
+          "business_address_region": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "State or province (required for jurisdiction in the United States, Canada, Australia and Nigeria). Provided by the customer.",
+            "title": "Business Address Region"
+          },
+          "business_address_street": {
+            "anyOf": [
+              {
+                "maxLength": 400,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Street. Provided by the customer.",
+            "title": "Business Address Street"
+          },
           "center_latitude": {
             "anyOf": [
               {
@@ -3580,6 +3728,37 @@
             },
             "title": "Included Markets",
             "type": "array"
+          },
+          "locality_confirmation_applies": {
+            "default": false,
+            "description": "Whether that customer confirmation still applies: to the current business town, the location's current city and its current jurisdiction.",
+            "title": "Locality Confirmation Applies",
+            "type": "boolean"
+          },
+          "locality_confirmed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When a member of the workspace confirmed that the business town or locality lies within this location's area: confirmed by the customer.",
+            "title": "Locality Confirmed At"
+          },
+          "locality_matches_city": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether the business town or locality and the location's city are the same name (ignoring case, accents and punctuation); null when either is empty.",
+            "title": "Locality Matches City"
           },
           "location_id": {
             "anyOf": [
@@ -5064,6 +5243,20 @@
           "dead_letter_count"
         ],
         "title": "JobsOverviewOut",
+        "type": "object"
+      },
+      "LocalityConfirmationIn": {
+        "description": "Confirm (``true``) that the saved business town or locality lies within this location's\narea, or withdraw that confirmation (``false``). The confirmation is the customer's own\nstatement: confirmed by the customer.",
+        "properties": {
+          "confirmed": {
+            "title": "Confirmed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "confirmed"
+        ],
+        "title": "LocalityConfirmationIn",
         "type": "object"
       },
       "LocationBase": {
@@ -10880,7 +11073,7 @@
     },
     "/api/v1/internal/system/data-sources/{source_key}/takedown": {
       "post": {
-        "description": "Take a live source down permanently and purge its signals in every tenant.\n\nThe operator's ``reason`` and ``external_reference`` are written to a restricted\noperator case record only (read through the operator-only cases route); each\naffected workspace's audit log gets a fixed generic explanation, the acting operator\nand the case's opaque ``case_id`` \u2014 never the reason. The suppression record itself\nholds only the source key, the time and counts.",
+        "description": "Take a live source down permanently and purge its signals in every tenant.\n\nThe operator's ``reason`` and ``external_reference`` are written to a restricted\noperator case record only (read through the operator-only cases route); each\naffected workspace's audit log gets a fixed generic explanation, the acting operator\nand the case's opaque ``case_id`` \u2014 never the reason. The suppression record itself\nholds only the source key, the time and counts.\n\nRefused with 409 ``takedown_blocked_by_append_only_records``, changing nothing, when the\npurge would delete an opportunity or intelligence record that an append-only\nrecommendation brief or creative draft refers to.",
         "operationId": "take_down_data_source_api_v1_internal_system_data_sources__source_key__takedown_post",
         "parameters": [
           {
@@ -14215,7 +14408,7 @@
     },
     "/api/v1/workspaces/{workspace_id}/campaigns/{item_id}": {
       "delete": {
-        "description": "Delete a campaign and its location memberships.",
+        "description": "Delete a campaign and its location memberships.\n\nRefused with 409 ``campaign_referenced_by_brief_or_draft`` while a recommendation brief or\na creative draft names the campaign: those records are append-only, and deleting the\ncampaign would clear their ``campaign_id``. Nothing is changed.",
         "operationId": "delete_campaigns_api_v1_workspaces__workspace_id__campaigns__item_id__delete",
         "parameters": [
           {
@@ -16410,6 +16603,7 @@
         ]
       },
       "put": {
+        "description": "Store a location's Scout Reach and business address. The structured business-address\nfields are written only when the request names them (an explicit ``null`` clears one), so a\nclient that does not know them never erases them; nothing is filled from the location.\nTheir values must be readable (422 with a fixed message, never the value); whether they are\ncomplete, or agree with the location, is decided only before a jurisdiction-dependent\naction, never here.",
         "operationId": "upsert_geo_coverage_api_v1_workspaces__workspace_id__locations__location_id__geo_coverage_put",
         "parameters": [
           {
@@ -16480,6 +16674,84 @@
           }
         },
         "summary": "Upsert Geo Coverage",
+        "tags": [
+          "locations"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/locations/{location_id}/geo-coverage/locality-confirmation": {
+      "put": {
+        "description": "Confirm, or withdraw, that the saved business town or locality lies within this\nlocation's area (W21 ADDR). The confirmation is the customer's own statement, recorded as\nconfirmed by the customer, with who made it and when.\n\nIt binds what is saved now: the stored business town, the location's city and the\njurisdiction both resolve to. It lapses when any of them changes. Before a\njurisdiction-dependent action it answers only the question of the town, after every\ncontradiction and completeness check, so it can never override a contradiction. Answers\n422 ``locality_confirmation_refused`` (a fixed message per cause; nothing is recorded) when\nthe location's own country or required state or province does not read, when the business\naddress contradicts the location or is incomplete, or when there is nothing to confirm.\nWithdrawing is always allowed. A change is audited as ``geo_coverage.updated`` naming the\nconfirmation's fields that changed, never their values; a request that changes nothing\nrecords nothing.",
+        "operationId": "set_locality_confirmation_api_v1_workspaces__workspace_id__locations__location_id__geo_coverage_locality_confirmation_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "location_id",
+            "required": true,
+            "schema": {
+              "title": "Location Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LocalityConfirmationIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GeoCoverageOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Locality Confirmation",
         "tags": [
           "locations"
         ]

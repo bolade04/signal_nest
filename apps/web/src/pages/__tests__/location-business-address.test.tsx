@@ -43,13 +43,40 @@ const LOADED: GeoCoverageOut = {
   included_markets: ['Dallas', 'Fort Worth'],
   excluded_markets: ['Houston'],
   online_global: true,
+  // W21 ADDR: the structured business address (empty here) and what is computed about it.
+  business_address_street: null,
+  business_address_locality: null,
+  business_address_country: null,
+  business_address_region: null,
+  business_address_postcode: null,
+  locality_matches_city: null,
+  locality_confirmed_at: null,
+  locality_confirmation_applies: false,
 };
 
-/** The rule's writable fields, exactly as loaded: what an untouched save must send back. */
+/** The rule's writable fields, exactly as loaded: what an untouched save must send back
+ * (W21 ADDR: the computed fields about the town are answers, never sent). */
 function asLoaded(rule: GeoCoverageOut): GeoCoverageBase {
-  const { id: _id, location_id: _location, ...fields } = rule;
+  const {
+    id: _id,
+    location_id: _location,
+    locality_matches_city: _matches,
+    locality_confirmed_at: _at,
+    locality_confirmation_applies: _applies,
+    ...fields
+  } = rule;
   return fields;
 }
+
+/** W21 ADDR: a rule with no structured business address; the dialog always names the five
+ * fields, so a save sends them, null when empty (nothing is filled from the location). */
+const NO_STRUCTURED_ADDRESS = {
+  business_address_street: null,
+  business_address_locality: null,
+  business_address_country: null,
+  business_address_region: null,
+  business_address_postcode: null,
+};
 
 /** GeoCoverageBase's defaults: what the API stores for a field the PUT body omits. */
 const SCHEMA_DEFAULTS: GeoCoverageBase = {
@@ -63,6 +90,11 @@ const SCHEMA_DEFAULTS: GeoCoverageBase = {
   included_markets: [],
   excluded_markets: [],
   online_global: false,
+  business_address_street: null,
+  business_address_locality: null,
+  business_address_country: null,
+  business_address_region: null,
+  business_address_postcode: null,
 };
 
 interface CoverageStore {
@@ -85,7 +117,21 @@ function serveCoverage(initial: Record<string, GeoCoverageOut>): CoverageStore {
       const locationId = String(params.id);
       const body = (await request.json()) as Record<string, unknown>;
       store.puts.push({ locationId, body });
-      const saved = { ...SCHEMA_DEFAULTS, ...body, id: `geo-${locationId}`, location_id: locationId } as GeoCoverageOut;
+      // W21 ADDR: the structured fields are kept unless the body names them (the API's rule).
+      const previous = store.rules.get(locationId);
+      const kept = Object.fromEntries(
+        Object.entries(previous ?? {}).filter(([key]) => key.startsWith('business_address_')),
+      );
+      const saved = {
+        ...SCHEMA_DEFAULTS,
+        ...kept,
+        ...body,
+        locality_matches_city: null,
+        locality_confirmed_at: null,
+        locality_confirmation_applies: false,
+        id: `geo-${locationId}`,
+        location_id: locationId,
+      } as GeoCoverageOut;
       store.rules.set(locationId, saved);
       return HttpResponse.json(saved);
     }),
@@ -291,6 +337,7 @@ describe('location dialog: the business address (F-1)', () => {
           center_latitude: null,
           center_longitude: null,
           business_address: '500 Elm St, Dallas, TX',
+          ...NO_STRUCTURED_ADDRESS,
         },
       },
     ]);
@@ -415,6 +462,7 @@ describe('location dialog: the save preserves untouched fields (F-1)', () => {
           center_latitude: 0,
           center_longitude: 0,
           business_address: '1 London Ave',
+          ...NO_STRUCTURED_ADDRESS,
         },
       },
     ]);

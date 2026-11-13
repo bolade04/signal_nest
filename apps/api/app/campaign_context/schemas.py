@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, create_model, field_validator
@@ -81,9 +82,27 @@ class OfferIn(BaseModel):
         return _unique_location_ids(v)
 
 
+#: The closed set of claims-library kinds (D-N4 item 36, operator ruling 2026-11-12). The API
+#: refuses any other kind with 422, whose message names the four kinds and never the submitted
+#: value. Stored rows are not validated on read: the documented alias ``prohibited`` is migrated
+#: to ``blocked`` (Alembic revision ``1574637e56d3``) and any other unsupported stored value is
+#: kept as it is and inventoried, never deleted or mapped; the 5C review reads every stored
+#: kind through ``app.claims.engine.canonical_kind`` (fail closed). A PATCH that leaves ``kind``
+#: out keeps the stored value, supported or not; a PATCH that sends ``kind`` must send one of
+#: these four.
+class ClaimKind(StrEnum):
+    APPROVED = "approved"
+    RESTRICTED = "restricted"
+    BLOCKED = "blocked"
+    REQUIRED_DISCLAIMER = "required_disclaimer"
+
+
+CLAIM_KINDS: tuple[str, ...] = tuple(kind.value for kind in ClaimKind)
+
+
 class ClaimIn(BaseModel):
     text: str = Field(min_length=1)
-    kind: str = "approved"  # approved | restricted | blocked | required_disclaimer
+    kind: ClaimKind = ClaimKind.APPROVED
     category: str | None = None
     risk_level: str = "low"
     notes: str | None = None
