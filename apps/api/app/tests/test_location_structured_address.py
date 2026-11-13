@@ -277,8 +277,8 @@ def test_a_stored_value_that_no_longer_reads_is_answered_and_asks_at_the_action(
     """Review d1 C-4: the response model does not inherit the request's validators. A value
     that does not read (written directly, or after a reader change) is answered by the GET as
     stored, and the action asks for the business address (row 5c)."""
-    assert _put_clean(w, {"business_address_region": "Texas",
-                          "business_address_country": "US"}).status_code == 200
+    assert _put_clean(w, {"business_address_region": "Texas", "business_address_country": "US",
+                          "business_address_locality": "Dallas"}).status_code == 200
     with w.make() as s:
         s.get(GeoCoverageRule, "geo-a1").business_address_country = "Narnia"
         s.commit()
@@ -286,6 +286,19 @@ def test_a_stored_value_that_no_longer_reads_is_answered_and_asks_at_the_action(
     assert got.status_code == 200, got.text
     assert got.json()["business_address_country"] == "Narnia"
     assert _action(w).reason == "business_address_incomplete"
+
+
+def test_the_get_computes_nothing_from_another_workspaces_location(w: W) -> None:
+    """A rule whose location_id names another workspace's location (a direct write; nothing
+    in the schema forbids it) is answered with nothing computed from that location."""
+    with w.make() as s:
+        s.add(GeoCoverageRule(id="geo-forged", organization_id="org-a", workspace_id="ws-a1",
+                              location_id="loc-b1", business_address_locality="Dallas"))
+        s.commit()
+    got = w.coverage("GET", "ws-a1", "loc-b1")
+    assert got.status_code == 200, got.text
+    assert got.json()["locality_matches_city"] is None
+    assert got.json()["locality_confirmation_applies"] is False
 
 
 def test_too_long_a_value_is_refused_without_its_text(w: W) -> None:

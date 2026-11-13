@@ -306,8 +306,9 @@ def test_anchorage_with_region_alabama_and_no_country_asks_and_is_never_refused(
 
 
 @pytest.mark.parametrize(
-    "fields", [{"country": "Narnia", "region": "Texas"}, {"country": "US", "region": "Bavaria"},
-               {"country": "US", "region": "Lagos"}],
+    "fields", [{"country": "Narnia", "region": "Texas", "locality": "Dallas"},
+               {"country": "US", "region": "Bavaria", "locality": "Dallas"},
+               {"country": "US", "region": "Lagos", "locality": "Dallas"}],
 )
 def test_unreadable_values_ask(fields) -> None:
     assert answer(DALLAS, rule(**fields)) == BUSINESS_ADDRESS_INCOMPLETE
@@ -321,6 +322,12 @@ def test_an_unreadable_country_asks_for_a_country_class_location_too(code: str) 
     unreadable = rule(**{**fields, "country": "Narnia"})
     assert answer(location, unreadable) == BUSINESS_ADDRESS_INCOMPLETE
     assert ba.structured_status(unreadable, code, location.city) == "incomplete"
+
+
+def test_the_texts_question_comes_before_the_towns() -> None:
+    """Step 5 before step 6: an ambiguous text is asked about before a town that differs."""
+    assert answer(DALLAS, rule("1500 Broadway Hartford CT", country="US", region="TX",
+                               locality="Irving")) == ADDRESS_SUFFIX_AMBIGUOUS
 
 
 def test_the_location_is_checked_first() -> None:
