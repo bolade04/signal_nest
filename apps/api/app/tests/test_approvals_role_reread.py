@@ -11,6 +11,9 @@ PostgreSQL; review W21-REV-R4, probe P6, drafts included).
 
 * a decision whose request resolved the reviewer role (``ctx.role``) but whose membership now
   says otherwise is refused 403 and writes nothing: demoted to each other role, or removed;
+* a decider whose account was deleted after the request resolved its context, and before the
+  decision, is refused 403 (no membership is left), never a 500, and nothing is written
+  (review W21-REV-DN4A r2 O-r2-2, ruling A-R-8);
 * an unchanged reviewer still decides, and ``decided_role`` is the role read under the lock;
 * the lock order (``approvals.service`` "Lock order"; review W21-REV-DN4A r1 C-1): the decider's
   user row, then the organization, then the membership, then the subject's row lock, then the
@@ -217,6 +220,39 @@ def test_a_decider_whose_membership_changed_is_refused_and_nothing_is_written(
         else f"Role '{now.value}' is not permitted for this action."
     )
     assert (refused.value.message, refused.value.status_code) == (expected, 403)
+    assert _approvals(world.factory) == []
+    assert _approval_audits(world.factory) == 0
+
+
+@pytest.mark.parametrize("subject", SUBJECTS)
+def test_a_decider_whose_account_was_deleted_first_is_refused_and_nothing_is_written(
+    world: World, subject: str
+):
+    """Review W21-REV-DN4A r2 O-r2-2 (ruling A-R-8): the request resolved its context while the
+    decider existed; the decider's own account deletion then committed, before the decision.
+    The re-read finds no user row and no membership: 403 ``NOT_A_MEMBER``, never a 500, and
+    nothing is written ("A deleted organization or user leaves no membership: 403 too")."""
+    with world.factory() as s:
+        ctx = _ctx(s, DECIDER)  # as the request resolved it at its start
+        brief = s.get(RecommendationBrief, BRIEF)
+        draft = s.get(CreativeDraft, DRAFT)
+        s.commit()  # ends the read; expire_on_commit=False keeps ctx and the subject loaded
+        with world.factory() as deletion:
+            delete_account(deletion, user=deletion.get(User, DECIDER), current_password=PASSWORD)
+            deletion.commit()
+        with pytest.raises(PermissionDeniedError) as refused:
+            if subject == "brief":
+                svc.record_decision(s, ctx=ctx, brief=brief,
+                                    decision=ApprovalDecision.APPROVED, subject_version=1)
+            else:
+                svc.record_draft_decision(s, ctx=ctx, draft=draft,
+                                          decision=ApprovalDecision.APPROVED, subject_version=1)
+        s.rollback()
+    assert (refused.value.message, refused.value.status_code) == (svc.NOT_A_MEMBER, 403)
+    with world.factory() as s:
+        assert s.get(User, DECIDER) is None
+        assert s.scalar(select(OrganizationMember.id).where(
+            OrganizationMember.user_id == DECIDER).limit(1)) is None
     assert _approvals(world.factory) == []
     assert _approval_audits(world.factory) == 0
 
