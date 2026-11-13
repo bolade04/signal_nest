@@ -698,3 +698,116 @@ def test_p3_r10_accented_latin_in_a_name_a_street_or_a_town_is_read(location, ad
     """Mutant S2: accented letters are Latin. A business name, a street or a town written with them
     is read as before and does not ask as another script would."""
     assert _resolve(location, address).code == code
+
+
+# --------------------------------------------------------------------------- #
+# Ruling P3-R-16, register G-11: the location's city on the first reading
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("city", "state", "country", "address", "reason", "evidence"),
+    [
+        (
+            "Peru",
+            "England",
+            "United Kingdom",
+            "Peru, 1 Main St, United Kingdom",
+            ADDRESS_NAMES_ANOTHER_PLACE,
+            "also names country PE",
+        ),
+        (
+            "London",
+            "England",
+            "United Kingdom",
+            "Peru, 1 Main St, United Kingdom",
+            ADDRESS_NAMES_ANOTHER_PLACE,
+            "also names country PE",
+        ),
+        (
+            "Victoria",
+            "British Columbia",
+            "Canada",
+            "100 King St W, Victoria, BC V8W 1P6, Canada",
+            ADDRESS_NAMES_ANOTHER_PLACE,
+            "also names country AU",
+        ),
+        (
+            "Jamaica",
+            "New York",
+            "United States",
+            "123 Main St, Jamaica, NY 11432",
+            ADDRESS_NAMES_ANOTHER_PLACE,
+            "also names country JM",
+        ),
+        (
+            "Washington",
+            "District of Columbia",
+            "United States",
+            "1 Main St, Washington, DC 20001",
+            ADDRESS_PLACE_UNCLEAR,
+            "is ambiguous: a town's name or subdivision US-WA",
+        ),
+        (
+            "Ghana",
+            "Lagos",
+            "Nigeria",
+            "1 Allen Ave, Ghana, Nigeria",
+            ADDRESS_NAMES_ANOTHER_PLACE,
+            "also names country GH",
+        ),
+    ],
+)
+def test_p3_r16_a_part_equal_to_the_city_is_compared_like_any_other(
+    city, state, country, address, reason, evidence
+):
+    """GEO-P1 (#314) left a part equal to the location's city out of the comparison, so a city
+    field "Peru" let "Peru, 1 Main St, United Kingdom" resolve. The city never settles what a part
+    names now (register G-11; the operator's answer "fix it in GEO-P3"): the part is compared, and
+    a name that may be the town or another area asks, whatever the city field says."""
+    _clarified(_location(city, state, country), address, reason, evidence)
+
+
+def test_p3_r16_the_city_never_hides_an_area_and_the_remedy_resolves():
+    alabama_state = _location("Alabama State", "Alaska", "United States")
+    _refused(alabama_state, "Alabama State, 1 Main St, United States", "states subdivision US-AL")
+    for city, state, country, address, code in (
+        (
+            "Victoria",
+            "British Columbia",
+            "Canada",
+            "100 King St W, Victoria BC V8W 1P6, Canada",
+            "CA-BC",
+        ),
+        ("Jamaica", "New York", "United States", "123 Main St, Jamaica NY 11432", "US-NY"),
+        (
+            "Washington",
+            "District of Columbia",
+            "United States",
+            "1 Main St, Washington DC 20001",
+            "US-DC",
+        ),
+        ("Peru", "England", "United Kingdom", "1 Main St, United Kingdom", "GB"),
+    ):
+        assert _resolve(_location(city, state, country), address).code == code, address
+    # A name that the address settles itself still resolves.
+    assert _resolve(_location("Lagos", "Lagos", "Nigeria"), "1 Allen Ave, Lagos, Nigeria").code == (
+        "NG-LA"
+    )
+    ny = _location("New York", "New York", "United States")
+    assert _resolve(ny, "1 Main St, New York, NY 10001").code == "US-NY"
+
+
+def test_p3_r16_a_part_in_another_script_equal_to_the_city_asks():
+    """Rule 8 exempted a part in another script that was the location's town; the city settles
+    nothing now, so it asks as any such part does."""
+    moscow = _location("Москва", None, "Russia")
+    _clarified(
+        moscow,
+        "1 Tverskaya St, Москва, Russia",
+        ADDRESS_PLACE_UNCLEAR,
+        "is ambiguous: letters outside the Latin script",
+    )
+    assert _resolve(_location("Moscow", None, "Russia"), "1 Tverskaya St, Moscow, Russia").code == (
+        "RU"
+    )

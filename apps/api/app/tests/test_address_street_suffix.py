@@ -987,15 +987,17 @@ ORDINAL_OR_DIRECTION_OWN = [
     (NEW_YORK, "US-NY", "1 W 34th St"),
     (WASHINGTON, "US-DC", "123 4th St NE"),
     (WASHINGTON, "US-DC", "1 1st St SE"),
-    (WASHINGTON, "US-DC", "Suite 200, 123 4th St NE, Washington, DC 20002"),
+    (WASHINGTON, "US-DC", "Suite 200, 123 4th St NE, Washington DC 20002"),
     (WASHINGTON, "US-DC", "Suite 200, 123 4th St NE"),
-    (WASHINGTON, "US-DC", "Suite 5, 1 1st St SE, Washington, DC 20003"),
-    (WASHINGTON, "US-DC", "1 Main St, St NE, Washington, DC"),
+    (WASHINGTON, "US-DC", "Suite 5, 1 1st St SE, Washington DC 20003"),
+    (WASHINGTON, "US-DC", "1 Main St, St NE, Washington DC"),
     (OMAHA, "US-NE", "ST NE"),
     (SAO_TOME, "ST", "ST NE"),
     # The lane's R17 rows: a street name before "St NE" with no house number.
-    (WASHINGTON, "US-DC", "5th St NE, Washington, DC"),
-    (WASHINGTON, "US-DC", "5th St NE, Washington, DC 20002"),
+    # GEO-P3 (ruling P3-R-16, register G-11): "Washington, DC" asks, since the location's city no
+    # longer settles "Washington"; these rows write the town with its code, as the remedy says.
+    (WASHINGTON, "US-DC", "5th St NE, Washington DC"),
+    (WASHINGTON, "US-DC", "5th St NE, Washington DC 20002"),
     (OMAHA, "US-NE", "5th St NE"),
     (NIAMEY, "NE", "5th St NE"),
 ]
@@ -1092,9 +1094,9 @@ MAHARASHTRA_MUMBAI = _location("Mumbai", "Maharashtra", "India")
 
 DIRECTION_OR_DESIGNATOR_OWN = [
     # C-15
-    (WASHINGTON, "US-DC", "Suite 5, 5th St SE, Washington, DC 20003"),
-    (WASHINGTON, "US-DC", "Suite 5, Massachusetts Ave SE, Washington, DC"),
-    (WASHINGTON, "US-DC", "5th St SE, Washington, DC"),
+    (WASHINGTON, "US-DC", "Suite 5, 5th St SE, Washington DC 20003"),
+    (WASHINGTON, "US-DC", "Suite 5, Massachusetts Ave SE, Washington DC"),
+    (WASHINGTON, "US-DC", "5th St SE, Washington DC"),
     (STOCKHOLM, "SE", "5th St SE"),
     (STOCKHOLM, "SE", "Suite 5, 5th St SE"),
     # C-16

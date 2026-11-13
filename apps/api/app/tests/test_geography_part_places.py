@@ -349,21 +349,33 @@ def test_g4_another_area_beside_the_locations_own_asks_for_clarification(
     _clarified(location, address, reason, evidence)
 
 
-def test_g4_the_locations_own_city_is_the_town():
-    """The location's city is structured input the resolver already holds. A name equal to it is the
-    town, so the DC forms resolve for a Washington location (the I-2 test's own row) and a business
-    in a town named like a state resolves."""
-    assert _resolve(
-        WASHINGTON_DC, "Washington, US-DC, District of Columbia, United States"
-    ).code == ("US-DC")
-    assert _resolve(WASHINGTON_DC, "Washington, DC 20001").code == "US-DC"
-    assert _resolve(_location("Oklahoma", "Texas", "US"), "Oklahoma, US-TX, Texas, USA").code == (
-        "US-TX"
+def test_g11_the_locations_city_never_settles_a_name_it_asks():
+    """GEO-P3 (register G-11; ruling P3-R-16, the operator's answer "fix it in GEO-P3"): a name
+    equal to the location's city was the town here (GEO-P1). The city never settles whether a name
+    is the town or an area now: these own addresses ask, and the remedy (the state's code right
+    after the town, without a comma) resolves."""
+    us_wa = "is ambiguous: a town's name or subdivision US-WA"
+    _clarified(
+        WASHINGTON_DC,
+        "Washington, US-DC, District of Columbia, United States",
+        ADDRESS_PLACE_UNCLEAR,
+        us_wa,
     )
+    _clarified(WASHINGTON_DC, "Washington, DC 20001", ADDRESS_PLACE_UNCLEAR, us_wa)
+    assert _resolve(WASHINGTON_DC, "Washington DC 20001").code == "US-DC"
+    oklahoma = _location("Oklahoma", "Texas", "US")
+    _clarified(
+        oklahoma, "Oklahoma, US-TX, Texas, USA", ADDRESS_NAMES_ANOTHER_PLACE, "subdivision US-OK"
+    )
+    assert _resolve(oklahoma, "Oklahoma TX, US-TX, Texas, USA").code == "US-TX"
     lebanon = _location("Lebanon", "Pennsylvania", "United States")
-    assert _resolve(lebanon, "Lebanon, 1 Main St, PA 17042").code == "US-PA"
+    _clarified(lebanon, "Lebanon, 1 Main St, PA 17042", ADDRESS_NAMES_ANOTHER_PLACE, "country LB")
+    assert _resolve(lebanon, "Lebanon PA, 1 Main St, PA 17042").code == "US-PA"
     nevada = _location("Nevada", "Missouri", "United States")
-    assert _resolve(nevada, "Nevada, Vernon County, MO, USA").code == "US-MO"
+    _clarified(
+        nevada, "Nevada, Vernon County, MO, USA", ADDRESS_NAMES_ANOTHER_PLACE, "subdivision US-NV"
+    )
+    assert _resolve(nevada, "Nevada MO, Vernon County, MO, USA").code == "US-MO"
 
 
 def test_g4_a_code_is_never_the_town():
@@ -381,12 +393,13 @@ def test_a_two_letter_code_follows_the_case_it_is_written_in():
     """In an address that mixes capitals and small letters, "NG" written in capitals is a code. A
     code written otherwise ("Bo", "Tx") may be a word or a code, and so may any code in an address
     written in one case: a contradicting reading asks for clarification (W21-REV-GEO r1 C-3; the
-    qualifier rules read "1 Main St, Dallas, Tx" as Texas). "Bo" for a location in Bo is the town
-    (r3b C-4's row, through the location's city)."""
+    qualifier rules read "1 Main St, Dallas, Tx" as Texas). "Bo" for a location in Bo asks too: the
+    location's city no longer settles it (r3b C-4's row; ruling P3-R-16)."""
     _refused(DALLAS, "ACME, NG, Lagos", "states country NG")
     bo_or_borno = "a town's name or country BO or country NG"
     _clarified(FREETOWN, "Bo, Southern Province", ADDRESS_PLACE_UNCLEAR, bo_or_borno)
-    assert _resolve(_location("Bo", None, "Sierra Leone"), "Bo, Southern Province").code == "SL"
+    bo = _location("Bo", None, "Sierra Leone")
+    _clarified(bo, "Bo, Southern Province", ADDRESS_PLACE_UNCLEAR, bo_or_borno)
     _clarified(DALLAS, "ACME, NG, LAGOS", ADDRESS_PLACE_UNCLEAR, "a town's name or country NG")
     _clarified(DALLAS, "acme, ng, lagos", ADDRESS_PLACE_UNCLEAR, "a town's name or country NG")
     _clarified(FREETOWN, "BO, SOUTHERN PROVINCE", ADDRESS_PLACE_UNCLEAR, bo_or_borno)
@@ -418,7 +431,7 @@ def test_a_part_that_is_only_a_direction_is_read_as_d1_reads_st_ne():
         DALLAS, "ACME, NE, Omaha", ADDRESS_DIRECTION_AMBIGUOUS, "country NE or subdivision US-NE"
     )
     assert _resolve(OMAHA, "ACME, NE, Omaha").code == "US-NE"
-    dc_address = "1200 Pennsylvania Ave, SE, Washington, DC 20003"
+    dc_address = "1200 Pennsylvania Ave, SE, Washington DC 20003"
     assert _resolve(WASHINGTON_DC, dc_address).code == "US-DC"
     _clarified(
         WASHINGTON_DC,
@@ -638,12 +651,14 @@ def test_c2_a_bare_nigerian_code_has_its_nigerian_reading():
 
 def test_c3_a_code_that_case_does_not_settle_asks_for_clarification():
     """C-3: the qualifier rules read "1 Main St, Dallas, Tx" as Texas; before the street the same
-    text was a word. It now asks; the location in Bo keeps r3b C-4's row."""
+    text was a word. It now asks; so does r3b C-4's row for the location in Bo (ruling P3-R-16)."""
     _clarified(ANCHORAGE, "Dallas, Tx, 1 Main St", ADDRESS_PLACE_UNCLEAR, "subdivision US-TX")
     _refused(ANCHORAGE, "1 Main St, Dallas, Tx", "states subdivision US-TX")
     _clarified(PERTH, "Brisbane, Qld, 1 Main St, Level 3", ADDRESS_PLACE_UNCLEAR, "AU-QLD")
     _clarified(DALLAS, "ACME, Ke, Nairobi", ADDRESS_PLACE_UNCLEAR, "country KE or country NG")
-    assert _resolve(_location("Bo", None, "Sierra Leone"), "Bo, Southern Province").code == "SL"
+    bo = _location("Bo", None, "Sierra Leone")
+    _clarified(bo, "Bo, Southern Province", ADDRESS_PLACE_UNCLEAR, "country BO or country NG")
+    assert _resolve(bo, "Southern Province").code == "SL"
     assert _resolve(DALLAS, "Dallas, Tx, 1 Main St").code == "US-TX"
 
 
@@ -657,10 +672,17 @@ def test_c4_every_unicode_line_break_separates_parts(separator):
 
 def test_c8_the_reviewers_surviving_mutants_have_a_test_row():
     """C-8: one row each for the review's V3 (an unclear word is not the own area), V4 (the city's
-    first comma part) and V5 (a typographic dash before the town)."""
+    first comma part) and V5 (a typographic dash before the town). V4's row: the city's first comma
+    part ("Washington") is what rule 3a compares; the address asks rather than being refused
+    (ruling P3-R-15)."""
     _refused(IKEJA, "Oklahoma, 1 Main St, Lagos", "states country US")
     dc = _location("Washington, D.C.", "District of Columbia", "United States")
-    assert _resolve(dc, "Washington, 1 Main St, DC 20001").code == "US-DC"
+    _clarified(
+        dc,
+        "1 Main St, Washington, USA",
+        ADDRESS_PLACE_UNCLEAR,
+        "is ambiguous: a town's name or subdivision US-WA",
+    )
     _refused(DALLAS, "US\u2013CT Hartford, 1 Main St", "states subdivision US-CT")
 
 
@@ -673,8 +695,10 @@ def test_the_geo_p1_clarifications_are_fixed_text():
     assert CLARIFICATIONS[ADDRESS_NAMES_ANOTHER_PLACE] == (
         "The business address names a state, province or country that is not this "
         "location's, as well as the location's own. If that part of the address is the "
-        "town, enter the same town as the location's city. If it is the name of the "
-        "business or a building, leave it out of the address. Otherwise correct or remove it."
+        "town, write the state, province or region code right after it without a comma (for "
+        "example 'Victoria BC' or 'Jamaica NY'), or leave the town out. If it is the name of "
+        "the business or a building, leave it out of the address. Otherwise correct or remove "
+        "it."
     )
     assert CLARIFICATIONS[ADDRESS_PLACE_UNCLEAR] == (
         "We couldn't tell whether a word in the business address is a state, province or "
@@ -698,20 +722,23 @@ def test_the_geo_p1_clarifications_are_fixed_text():
 
 
 def test_each_remedy_resolves():
-    # address_names_another_place: the town is the location's city, or the business name leaves.
+    # address_names_another_place: the town written with its state's code, or the business name
+    # leaves (GEO-P3, ruling P3-R-16: the location's city no longer settles it).
     _clarified(DALLAS, "Jordan, 1 Main St, Dallas, TX", ADDRESS_NAMES_ANOTHER_PLACE, "country JO")
     assert _resolve(DALLAS, "1 Main St, Dallas, TX").code == "US-TX"
     oklahoma = _location("Oklahoma", "Texas", "United States")
-    assert _resolve(oklahoma, "Oklahoma, US-TX, Texas, USA").code == "US-TX"
-    # address_place_unclear: the town is the location's city; or the state written in full, which is
-    # then explicit (refused when it contradicts, accepted when it agrees).
-    assert (
-        _resolve(_location("Adamawa", "Abia", "Nigeria"), "Adamawa, NG-AB, Umuahia").code == "NG-AB"
-    )
+    assert _resolve(oklahoma, "Oklahoma TX, US-TX, Texas, USA").code == "US-TX"
+    # address_place_unclear: the town written with its state's code, or left out; or the state
+    # written in full, which is then explicit (refused when it contradicts, accepted when it
+    # agrees).
+    adamawa_town = _location("Adamawa", "Abia", "Nigeria")
+    assert _resolve(adamawa_town, "Adamawa AB, NG-AB, Umuahia").code == "NG-AB"
+    assert _resolve(adamawa_town, "NG-AB, Umuahia").code == "NG-AB"
     explicit = _resolve(UMUAHIA, "Adamawa State, NG-AB, Umuahia")
     assert (explicit.code, explicit.reason) == (UNRESOLVED, None)
     _refused(UMUAHIA, "Adamawa State, Umuahia, 1 Main St, Suite 5", "states subdivision NG-AD")
-    assert _resolve(_location("Bo", None, "Sierra Leone"), "BO, SOUTHERN PROVINCE").code == "SL"
+    # A town in a country with no listed codes ("Bo", Sierra Leone): the town left out resolves.
+    assert _resolve(_location("Bo", None, "Sierra Leone"), "SOUTHERN PROVINCE").code == "SL"
     # W21-REV-GEO r1 C-6: a business's or a building's name is left out, or the word is corrected
     # or removed; for a first part with a legal form, the country written resolves too (C-1).
     madrid = _location("Madrid", None, "Spain")
@@ -724,7 +751,7 @@ def test_each_remedy_resolves():
     assert _resolve(HARTFORD, "8 Spring Hill Ct").code == "US-CT"
     # address_direction_ambiguous: the direction in full, or the city and state after a comma.
     assert _resolve(WASHINGTON_DC, "1200 Pennsylvania Avenue Southeast").code == "US-DC"
-    assert _resolve(WASHINGTON_DC, "1200 Pennsylvania Ave, SE, Washington, DC").code == "US-DC"
+    assert _resolve(WASHINGTON_DC, "1200 Pennsylvania Ave, SE, Washington DC").code == "US-DC"
 
 
 # --------------------------------------------------------------------------- #

@@ -582,16 +582,17 @@ def parts_naming_an_area(text: str | None) -> int:
     return count
 
 
-def unread_script_part(text: str | None, towns: frozenset[str]) -> bool:
+def unread_script_part(text: str | None) -> bool:
     """GEO-P3 (register G-10, other scripts; operator ruling): does a part of a business address
-    hold letters outside the Latin script ("Техас", "テキサス州", "США") and read as no area and as
-    no town of the location's? The tables hold Latin names only, so such a part may name a state
-    or a country that the reader cannot read; accented Latin ("Nigéria", "Québec") is read."""
+    hold letters outside the Latin script ("Техас", "テキサス州", "США") and read as no area? The
+    tables hold Latin names only, so such a part may name a state or a country that the reader
+    cannot read; accented Latin ("Nigéria", "Québec") is read. Ruling P3-R-16: a part equal to the
+    location's city is not exempt, since the city never settles what a part names."""
     if not text:
         return False
     for raw in _written_parts(_address_text(text)):
         folded = _strip_postcode(fold(raw))
-        if not folded or folded in towns or _area_candidates(folded) or _homonym_areas(folded):
+        if not folded or _area_candidates(folded) or _homonym_areas(folded):
             continue
         if any(ch.isalpha() and "LATIN" not in unicodedata.name(ch, "") for ch in raw):
             return True

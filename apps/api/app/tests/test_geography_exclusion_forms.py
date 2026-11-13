@@ -1228,12 +1228,15 @@ def test_fue_another_nigerian_state_after_the_code_is_not_a_town():
 
 def test_fue_a_town_named_like_a_country_code_is_not_read_as_one():
     """W21-REV-5DW2FIX r3b C-4: only a listed subdivision code is read before the town. A town
-    whose name is also a country code ("Bo" is Bolivia's, "Ba" Bosnia's) stays the town, so these
-    own addresses resolve by country, as on the current release and D1."""
+    whose name is also a country code ("Bo" is Bolivia's, "Ba" Bosnia's) is not read as that code.
+    GEO-P3 (ruling P3-R-16): the location's city no longer settles that the name is the town, so
+    these own addresses ask; with the town left out they resolve by country."""
     bo = _location("Bo", "Southern Province", "Sierra Leone")
     ba = _location("Ba", "Western Division", "Fiji")
-    assert _resolve(bo, "Bo, Southern Province").code == "SL"
-    assert _resolve(ba, "Ba, Western Division").code == "FJ"
+    assert _resolve(bo, "Bo, Southern Province").reason == "address_place_unclear"
+    assert _resolve(ba, "Ba, Western Division").reason == "address_place_unclear"
+    assert _resolve(bo, "Southern Province").code == "SL"
+    assert _resolve(ba, "Western Division").code == "FJ"
 
 
 # --------------------------------------------------------------------------- #
@@ -1291,14 +1294,17 @@ def test_i2_only_the_business_address_reads_the_state_after_the_code():
 
 def test_i2_a_town_before_the_code_is_the_town():
     """The I-2 reading takes the code, its own state's name and the country at the end; a town
-    before them is the town, even one named like another state, as on the current release and D1
-    ("Washington, US-DC, District of Columbia, United States" for Washington, DC)."""
+    before them is a town, even one named like another state. GEO-P3 (ruling P3-R-16): the
+    location's city no longer settles that "Washington" is the town, so these ask; written with the
+    town's code ("Washington DC") they resolve."""
     dc = _location("Washington", "District of Columbia", "United States")
     for address in (
         "Washington, US-DC, District of Columbia, United States",
         "1 Main St, Washington, US-DC, District of Columbia, USA",
     ):
-        assert _resolve(dc, address).code == "US-DC", address
+        assert _resolve(dc, address).reason == "address_place_unclear", address
+        remedy = address.replace("Washington,", "Washington DC,")
+        assert _resolve(dc, remedy).code == "US-DC", remedy
 
 
 # --------------------------------------------------------------------------- #

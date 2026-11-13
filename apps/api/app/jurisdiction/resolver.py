@@ -191,8 +191,10 @@ CLARIFICATIONS: Final[Mapping[str, str]] = MappingProxyType(
         ADDRESS_NAMES_ANOTHER_PLACE: (
             "The business address names a state, province or country that is not this "
             "location's, as well as the location's own. If that part of the address is the "
-            "town, enter the same town as the location's city. If it is the name of the "
-            "business or a building, leave it out of the address. Otherwise correct or remove it."
+            "town, write the state, province or region code right after it without a comma (for "
+            "example 'Victoria BC' or 'Jamaica NY'), or leave the town out. If it is the name of "
+            "the business or a building, leave it out of the address. Otherwise correct or remove "
+            "it."
         ),
         ADDRESS_PLACE_UNCLEAR: (
             "We couldn't tell whether a word in the business address is a state, province or "
@@ -387,9 +389,11 @@ def _address_check(
       Anchorage, as on main; otherwise :data:`ADDRESS_PLACE_UNCLEAR`. It is never refused and never
       agrees.
 
-    A name or word that is the location's own city ("Washington, US-DC" for a Washington
-    location; "Lebanon, PA" for a Lebanon location) is the town and is not compared: the
-    location's city is structured input, not a city table. A code is compared whatever the city.
+    GEO-P3 (register G-11; ruling P3-R-16, the operator's answer "fix it in GEO-P3"): a part that
+    is the location's own city is compared like any other part. The location's city never settles
+    whether a name is the town or an area: "Peru, 1 Main St, United Kingdom" for a location whose
+    city is Peru asks (:data:`ADDRESS_NAMES_ANOTHER_PLACE`), as it does for London. Before this,
+    GEO-P1 (#314) left such a part out of the comparison.
 
     GEO-P3 (register G-2; rulings P3-R-8 and P3-R-15, the operator's answer "make them ask"): the
     location's city never settles a name that is a town's or an area's. When the address is refused,
@@ -422,11 +426,11 @@ def _address_check(
     Republic of Korea"). A part in another script asks
     (:func:`app.geography.markets.unread_script_part`).
     """
-    result = _reading_check(read_business_address(address), address, country, code, city)
+    result = _reading_check(read_business_address(address), address, country, code)
     if result[1] is not None and result[2] is None:
         trimmed = without_town_parts(address, _town_keys(city))
         if trimmed is not None:
-            retry = _reading_check(read_business_address(trimmed), trimmed, country, code, city)
+            retry = _reading_check(read_business_address(trimmed), trimmed, country, code)
             if retry[0] and retry[1] is None:
                 found = [
                     conflict
@@ -443,9 +447,9 @@ def _reading_check(
     address: str | None,
     country: str,
     code: str,
-    city: str | None,
 ) -> tuple[bool, str | None, str | None]:
-    """:func:`_address_check` for one reading of the address."""
+    """:func:`_address_check` for one reading of the address. The location's city takes no part in
+    it (ruling P3-R-16)."""
     # GEO-P3 (ruling P3-R-9): an unlisted form's country (``reading.forms``: "DE-BY" is Germany)
     # agrees with or contradicts the location as explicit text does, but settles no other part's
     # reading ("Munich BY, DE-BY" asks, as on GEO-P2: a bare "BY" is also Belarus).
@@ -522,12 +526,11 @@ def _reading_check(
         p.kind == PLACE_CODE and _part_conflicts(p, country, code) for p in reading.places
     ):
         return True, homonym_ask, ADDRESS_PLACE_UNCLEAR
-    towns = _town_keys(city)
     # W21-REV-GEO r1 C-1: the first part's "town code" is compared whatever the city, as a code is.
     first_parts = [p for p in reading.places if p.kind == PLACE_FIRST_PART]
-    places = [
-        p for p in reading.places if p.kind in (PLACE_CODE, PLACE_DIRECTION) or p.text not in towns
-    ]
+    # GEO-P3 (register G-11; ruling P3-R-16): every part place is compared, the location's town
+    # too. Each names an area through the tables, so the city never leaves one out.
+    places = list(reading.places)
     directions = [p for p in places if p.kind == PLACE_DIRECTION]
     places = [p for p in places if p.kind not in (PLACE_DIRECTION, PLACE_FIRST_PART)]
     contradicting = [(p, found) for p in places if (found := _part_conflicts(p, country, code))]
@@ -602,7 +605,7 @@ def _reading_check(
             f"subdivision {r.region}" if r.region else f"country {r.country}" for r in group
         )
         return True, f"is ambiguous: {either}", ADDRESS_PLACE_UNCLEAR
-    if unread_script_part(address, towns):
+    if unread_script_part(address):
         # GEO-P3 (register G-10, operator ruling): a part in another script may name a state or a
         # country that the tables, which hold Latin names, cannot read: it asks.
         return True, "is ambiguous: letters outside the Latin script", ADDRESS_PLACE_UNCLEAR
