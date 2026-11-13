@@ -66,14 +66,21 @@ account, which erases the               organization (step 2)                  t
 organization (user → organization →                                            ``decided_by`` FK
 … → subject)                                                                   at ``5f4131d8``
                                                                                is closed)
-account deletion of another member      the organization (step 2), before it   no
-(that user → organizations → its        touches the subject
+account deletion of another member who  the organization (step 2), before it   no
+still belongs to the organization       touches the subject
+(that user → organizations → its
 ``created_by`` on the subject)
+account deletion of a former member     the subject (step 4)                   no (it holds no
+(that user → ``created_by`` and its                                            row the decision
+snapshot on the subject; it locks no                                           waits for)
+organization it has left)
 role change or removal                  the organization (step 2)              no
 (organization → membership)
-invitation create, revoke, accept       the organization (step 2)              no
+invitation accept                       the organization (step 2)              no
 (organization → invitation, new
 membership)
+invitation create or revoke             none: they lock no user, organization  no
+(invitation rows only)                  or membership row
 credential flows (user ``FOR UPDATE``   the user (step 1); they lock nothing   no
 → tokens, sessions)                     else a decision holds
 creative generation (organization       the subject (step 4): a brief          no (a decision
