@@ -40,6 +40,7 @@ from app.jurisdiction.business_address import (
 from app.jurisdiction.codes import UNRESOLVED
 from app.jurisdiction.resolver import (
     ADDRESS_PLACE_UNCLEAR,
+    ADDRESS_SUFFIX_AMBIGUOUS,
     ADDRESS_TERRITORY_UNCLEAR,
     CLARIFICATIONS,
     resolve_jurisdiction,
@@ -270,11 +271,26 @@ def test_the_territory_clarification_is_fixed_text():
             assert part not in CLARIFICATIONS[ADDRESS_TERRITORY_UNCLEAR]
 
 
-def test_the_territory_ask_comes_before_another_ask():
-    # Without the territory part the address asks as G-3 does (address_place_unclear); with it, the
-    # territory's ask comes first.
-    assert _resolve(MONTGOMERY, "US-AL, Downtown, Montgomery").reason == ADDRESS_PLACE_UNCLEAR
-    _asks(MONTGOMERY, "US-AL, Downtown, Montgomery, Alabama Territory")
+WASHINGTON_DC = _location("Washington", "District of Columbia", "United States")
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "other"),
+    [
+        # D1: an ambiguous street line ("CT": Court or Connecticut).
+        (DALLAS, "1500 Broadway Hartford CT", ADDRESS_SUFFIX_AMBIGUOUS),
+        # GEO-P3 rule 3a ("Let it ask"): a part equal to the city that is also an area.
+        (WASHINGTON_DC, "1 Main St, Washington, DC 20001", ADDRESS_PLACE_UNCLEAR),
+        # GEO-P3 N-1: "LA" is Laos, Louisiana or Lagos State.
+        (IKEJA, "1 Main St, Ikeja, LA", ADDRESS_PLACE_UNCLEAR),
+    ],
+)
+def test_the_territory_ask_comes_before_another_ask(location, address, other):
+    # Review of mutant F7: without the territory part the address asks with another category; with
+    # it, the territory's ask comes first, whatever the other ask.
+    assert _resolve(location, address).reason == other
+    _asks(location, f"{address}, Lost Territory")
+    _asks(location, f"Lost Territory, {address}")
 
 
 @pytest.mark.parametrize(
