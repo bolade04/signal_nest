@@ -42,7 +42,11 @@ federations listed in :mod:`app.jurisdiction.subdivisions`, the first-level subd
 * a business address is only a route designator ("1 SR 520", "12000 FM 1960"), whose code reading
   may be a road and contradicts the location: :data:`ADDRESS_ROUTE_AMBIGUOUS` (GEO-P2). A floor
   ("Fl 3") is never read as Florida, and a street with no house number ("Main St") is an ambiguous
-  street line.
+  street line;
+* a part of a business address names a territory that the tables do not list ("Alabama Territory",
+  "Dakota Territory", "Territory of Hawaii"; GEO-P4, register RI-1), and no other part is refused:
+  :data:`ADDRESS_TERRITORY_UNCLEAR`. A historical territory did not have a present-day state's
+  borders, so its name is read as no area, for every location.
 
 A city alone never resolves, known or unknown: a bare city says nothing about which
 country it is in (``app.geography.markets`` reads a bare "London" the same way). Every
@@ -177,6 +181,11 @@ ADDRESS_DIRECTION_AMBIGUOUS: Final = "address_direction_ambiguous"
 #: "12000 FM 1960") may be a road, or a state or country code that contradicts the location. (A
 #: designator in a later part keeps D1's reason, C-16.)
 ADDRESS_ROUTE_AMBIGUOUS: Final = "address_route_ambiguous"
+#: Reason category (GEO-P4, register RI-1; operator instruction of 2026-11-13): a part of a business
+#: address names a territory that the tables do not list ("Alabama Territory", "Dakota Territory",
+#: "Territory of Hawaii"). A historical territory did not have a present-day state's borders, so the
+#: part is read as no area: it is never accepted, and never refused as that state.
+ADDRESS_TERRITORY_UNCLEAR: Final = "address_territory_unclear"
 
 #: The fixed, customer-safe clarification for each reason category. It never contains the
 #: address or other customer text, nor the resolver's evidence.
@@ -218,6 +227,13 @@ CLARIFICATIONS: Final[Mapping[str, str]] = MappingProxyType(
             "(such as 'NE' or 'SE') is the street's direction or a state or country. Write the "
             "direction in full after the street name (for example '1200 Pennsylvania Avenue "
             "Southeast'), or add the city and state or country after a comma."
+        ),
+        ADDRESS_TERRITORY_UNCLEAR: (
+            "We couldn't match a territory named in the business address to a present-day state, "
+            "province, region or country: a historical territory's borders are not a present-day "
+            "state's. Write the present-day state, province, region or country instead, by its "
+            "full name or its code (for example 'North Dakota' or 'ND', or 'Lagos State'), or "
+            "leave that part out of the address."
         ),
     }
 )
@@ -425,8 +441,18 @@ def _address_check(
     (:data:`ADDRESS_PLACE_UNCLEAR`), unless the address states one of them elsewhere ("Seoul, Korea,
     Republic of Korea"). A part in another script asks
     (:func:`app.geography.markets.unread_script_part`).
+
+    GEO-P4 (register RI-1; operator instruction of 2026-11-13: "Do not assume a historical
+    territory has the boundaries of a present-day state"): a part that names a territory the tables
+    do not list ("Alabama Territory", "Dakota Territory", "Territory of Hawaii", "Lagos Territory";
+    ``reading.territories``) is read as no area, so it neither agrees nor contradicts, whatever the
+    location and its city. The address asks (:data:`ADDRESS_TERRITORY_UNCLEAR`) unless another part
+    is refused: it is never accepted, and never refused as the state whose name it holds. Its ask
+    comes before any other ask, so its fixed message is the one the customer sees first. A name the
+    tables list ("Northern Territory", "Yukon Territory") is read as before.
     """
-    result = _reading_check(read_business_address(address), address, country, code)
+    reading = read_business_address(address)
+    result = _reading_check(reading, address, country, code)
     if result[1] is not None and result[2] is None:
         trimmed = without_town_parts(address, _town_keys(city))
         if trimmed is not None:
@@ -434,11 +460,20 @@ def _address_check(
             if retry[0] and retry[1] is None:
                 found = [
                     conflict
-                    for reading in town_part_readings(address, _town_keys(city))
-                    if (conflict := _conflict(reading, country, code)) is not None
+                    for town in town_part_readings(address, _town_keys(city))
+                    if (conflict := _conflict(town, country, code)) is not None
                 ]
                 either = " or ".join(dict.fromkeys(found)) or result[1].removeprefix("states ")
-                return True, f"is ambiguous: a town's name or {either}", ADDRESS_PLACE_UNCLEAR
+                result = True, f"is ambiguous: a town's name or {either}", ADDRESS_PLACE_UNCLEAR
+    if reading.territories and (result[1] is None or result[2] is not None):
+        # GEO-P4 (register RI-1; operator instruction of 2026-11-13): a part names a territory that
+        # the tables do not list. Its name was read as no area, so it agreed with nothing and
+        # contradicted nothing; whatever else the address states, it asks, and never resolves. A
+        # refusal of another part stands.
+        unlisted = (
+            "is ambiguous: a territory that is not a listed state, province, region or country"
+        )
+        return True, unlisted, ADDRESS_TERRITORY_UNCLEAR
     return result
 
 
@@ -759,6 +794,7 @@ __all__ = [
     "ADDRESS_NAMES_ANOTHER_PLACE",
     "ADDRESS_PLACE_UNCLEAR",
     "ADDRESS_SUFFIX_AMBIGUOUS",
+    "ADDRESS_TERRITORY_UNCLEAR",
     "CLARIFICATIONS",
     "RESOLVED_CONFIDENCE",
     "CoverageFacts",

@@ -773,6 +773,11 @@ class BusinessAddressReading:
     #: settles no other part's reading ("Munich BY, DE-BY" asks as on GEO-P2, since a bare "BY"
     #: is also Belarus).
     forms: tuple[MarketIdentity, ...] = ()
+    #: GEO-P4 (register RI-1; operator instruction of 2026-11-13): each part, as written, that names
+    #: a territory the tables do not list ("Alabama Territory", "Territory of Hawaii";
+    #: :func:`_territory_parts`). Its name is read as no area, so it neither agrees nor contradicts;
+    #: the resolver asks about it unless another part is refused.
+    territories: tuple[str, ...] = ()
 
 
 def _alternatives(text: str) -> tuple[MarketIdentity, ...]:
@@ -900,11 +905,93 @@ def _alias_readings(part: str) -> tuple[MarketIdentity, ...]:
     )
 
 
-def _address_text(text: str) -> str:
-    """The text the business-address reader reads: every line break one (W21-REV-GEO r1 C-4), the
-    other separators read as line breaks (GEO-P3, I-2) and the listed aliases written as the tables
-    read them (GEO-P3, G-10)."""
+#: GEO-P4 (register RI-1; operator instruction of 2026-11-13): the words that name a territory.
+_TERRITORY_WORDS: Final = frozenset({"territory", "territories"})
+#: GEO-P4: every name the tables list that holds a territory word, folded: the present-day
+#: subdivisions "northern territory" (AU-NT), "australian capital territory" (AU-ACT), "yukon
+#: territory" (CA-YT), "northwest territories" (CA-NT) and "federal capital territory" (NG-FC), and
+#: the country "british indian ocean territory" (IO). Read from the tables; no name is added here.
+_LISTED_TERRITORY_NAMES: Final = frozenset(
+    name
+    for name in (
+        *_REGION_INDEX,
+        *_COUNTRY_BY_NAME,
+        *(
+            fold(n)
+            for divs in SUBDIVISION_JURISDICTIONS.values()
+            for ns in divs.values()
+            for n in ns
+        ),
+    )
+    if _TERRITORY_WORDS & set(name.split())
+)
+#: GEO-P4: a territory word as written ("Territory", "TERRITORIES").
+_TERRITORY_WORD: Final = re.compile(r"(?<![A-Za-z])territor(?:y|ies)(?![A-Za-z])", re.IGNORECASE)
+
+
+def _unlisted_territory(part: str) -> bool:
+    """GEO-P4 (register RI-1; operator instruction of 2026-11-13): does ``part`` (one part as the
+    reader reads it, before any postcode) name a territory that the tables do not list: "<Name>
+    Territory" or "<Name> Territories" that no listed name ends ("Alabama Territory", "Dakota
+    Territory", "Lagos Territory", "Northwest Territory"), or "Territory of <Name>" or "Territories
+    of <Name>" ("Territory of Hawaii", "Territory of Yukon"), also after "the"? A historical
+    territory did not have a present-day state's borders, so its name is never read as one. A listed
+    name, alone or at the end of the part, is not one ("Northern Territory", "Darwin Northern
+    Territory", "State of Northwest Territories"); nor is "Territory" alone, or a part where the
+    word stands elsewhere ("Territory Rd", "Northern Territory of Australia")."""
+    words = _strip_postcode(fold(part)).split()
+    if words[:1] == ["the"]:
+        words = words[1:]
+    if len(words) > 2 and words[0] in _TERRITORY_WORDS and words[1] == "of":
+        return True
+    if len(words) < 2 or words[-1] not in _TERRITORY_WORDS:
+        return False
+    return not any(" ".join(words[i:]) in _LISTED_TERRITORY_NAMES for i in range(len(words)))
+
+
+def _without_territory_names(text: str) -> str:
+    """GEO-P4 (register RI-1): ``text`` with each part that names a territory the tables do not list
+    (:func:`_unlisted_territory`) read as its territory word alone, as written, before any postcode
+    ("Alabama Territory" as "Territory", "Territory of Hawaii 96813" as "Territory 96813"). So no
+    rule reads its name as a present-day area, in any position, and the part keeps its place as a
+    word that names nothing, as "Alabama Territory" already was ("Lagos Territory" was read as Lagos
+    State). The resolver asks about it (``BusinessAddressReading.territories``). A part that also
+    writes a code ("US-AL Territory") is kept as written: the code is read, as everywhere.
+    Separators and every other part are kept as written."""
+    pieces = re.split(f"({_PART_SEPARATORS.pattern})", text)
+    for index in range(0, len(pieces), 2):
+        piece = pieces[index]
+        word = _TERRITORY_WORD.search(piece)
+        if word is None or _CODE_TOKEN.search(piece) or not _unlisted_territory(piece):
+            continue
+        postcode = _TRAILING_POSTCODE.search(piece.rstrip())
+        lead = piece[: len(piece) - len(piece.lstrip())]
+        pieces[index] = lead + word.group(0) + (postcode.group(0) if postcode else "")
+    return "".join(pieces)
+
+
+def _aliased_text(text: str) -> str:
+    """The business address with every line break one (W21-REV-GEO r1 C-4), the other separators
+    read as line breaks (GEO-P3, I-2) and the listed aliases written as the tables read them
+    (GEO-P3, G-10)."""
     return _with_listed_aliases(_other_separators("\n".join(text.splitlines())))
+
+
+def _address_text(text: str) -> str:
+    """The text the business-address reader reads: :func:`_aliased_text`, with each part that names
+    a territory the tables do not list read as its territory word alone (GEO-P4, register RI-1:
+    :func:`_without_territory_names`)."""
+    return _without_territory_names(_aliased_text(text))
+
+
+def _territory_parts(text: str | None) -> tuple[str, ...]:
+    """GEO-P4 (register RI-1): each part of a business address, as written, that names a territory
+    the tables do not list (:func:`_unlisted_territory`), in order; ``()`` when none does."""
+    if not text:
+        return ()
+    return tuple(
+        part.strip() for part in _written_parts(_aliased_text(text)) if _unlisted_territory(part)
+    )
 
 
 def read_business_address(text: str | None) -> BusinessAddressReading:
@@ -967,11 +1054,22 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
     tables already read ("N. Y." as "N.Y."); a name of two or more areas ("Korea") is a group in
     ``alias_groups`` (:func:`_with_listed_aliases`). The period is part of the alias ("Ala" and
     "Miss" are not read), and an alias inside a part ("Montgomery Ala.") is not read.
+
+    GEO-P4 (register RI-1; operator instruction of 2026-11-13: "Do not assume a historical
+    territory has the boundaries of a present-day state"): a part that names a territory the tables
+    do not list ("Alabama Territory", "Dakota Territory", "Territory of Hawaii", "Lagos Territory")
+    is in ``territories``, and its name is read as no area (:func:`_without_territory_names`),
+    wherever it stands: it never agrees and never contradicts. A name the tables list is read as
+    before ("Northern Territory", "Yukon Territory", "Northwest Territories", "Australian Capital
+    Territory", "Federal Capital Territory"), and so is "Territory" alone.
     """
     if text is None:
         return BusinessAddressReading(None)
+    # GEO-P4 (register RI-1): the parts that name a territory the tables do not list, as written.
+    territories = _territory_parts(text)
     # W21-REV-GEO r1 C-4: every line break is one; GEO-P3 (register G-10): the other separators
-    # (review I-2) and the listed aliases (operator ruling, option (a)).
+    # (review I-2) and the listed aliases (operator ruling, option (a)); GEO-P4: each such
+    # territory part read as its territory word alone.
     text = _address_text(text)
     text = _without_floors(text)
     reading = _read_business_address(text)
@@ -987,6 +1085,7 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
         reading.homonyms,
         tuple(g for g in (_alias_readings(part) for part in _written_parts(text)) if g),
         reading.forms,
+        territories=territories,
     )
 
 
