@@ -775,7 +775,9 @@ class TestOpenApiContract:
         # reviewer-exact and history readers), none an account-mail operation.
         # 140 -> 141 (Project Phase 5D, 5D-W1): GET /workspaces/{workspace_id}/campaigns/{item_id},
         # a customer (workspace member) read, not an account-mail operation.
-        assert count == 141
+        # 141 -> 142 (W21 ADDR): PUT .../locations/{location_id}/geo-coverage/
+        # locality-confirmation, a customer (editor) write, not an account-mail operation.
+        assert count == 142
 
     def test_no_token_in_any_path_query_or_header_anywhere(self, doc: dict):
         for path, item in doc["paths"].items():

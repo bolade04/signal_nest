@@ -30,6 +30,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/toast';
 import { coverageTypeLabels } from '@/lib/labels';
+import {
+  ADDRESS_HELP,
+  CONFIRM_HELP,
+  CONFIRM_LABEL,
+  SAVE_FIRST,
+  TOWN_DIFFERS,
+  WITHDRAW_LABEL,
+  confirmedStatus,
+} from './addressCopy';
 
 interface Props {
   workspaceId: string;
@@ -63,7 +72,39 @@ const emptyCoverage: GeoCoverageBase = {
   included_markets: [],
   excluded_markets: [],
   online_global: false,
+  business_address_street: null,
+  business_address_locality: null,
+  business_address_country: null,
+  business_address_region: null,
+  business_address_postcode: null,
 };
+
+type AddressKey =
+  | 'business_address_street'
+  | 'business_address_locality'
+  | 'business_address_country'
+  | 'business_address_region'
+  | 'business_address_postcode';
+
+/**
+ * The structured business address (W21 ADDR), in the order shown. Never pre-filled: not from
+ * the location's own fields, not from the geocoder and not from the free text, because a copy
+ * of the location's jurisdiction would make the business address agree with it by
+ * construction. What the customer types is stored as typed (the API trims it).
+ */
+const ADDRESS_FIELDS: { key: AddressKey; label: string; maxLength: number }[] = [
+  { key: 'business_address_street', label: 'Business street', maxLength: 400 },
+  { key: 'business_address_locality', label: 'Business town or locality', maxLength: 160 },
+  { key: 'business_address_region', label: 'Business state or province', maxLength: 160 },
+  { key: 'business_address_postcode', label: 'Business postcode', maxLength: 40 },
+  { key: 'business_address_country', label: 'Business country', maxLength: 120 },
+];
+
+/** A form value as the API stores it: trimmed, and null when empty. */
+function stored(value: string | null | undefined): string | null {
+  const text = (value ?? '').trim();
+  return text ? text : null;
+}
 
 /**
  * The business address a stored service-area rule opens with (F-1). `null` means the
@@ -90,6 +131,11 @@ function coverageFrom(rule: GeoCoverageOut): GeoCoverageBase {
     included_markets: rule.included_markets ?? [],
     excluded_markets: rule.excluded_markets ?? [],
     online_global: rule.online_global,
+    business_address_street: rule.business_address_street ?? null,
+    business_address_locality: rule.business_address_locality ?? null,
+    business_address_country: rule.business_address_country ?? null,
+    business_address_region: rule.business_address_region ?? null,
+    business_address_postcode: rule.business_address_postcode ?? null,
   };
 }
 
@@ -229,6 +275,8 @@ export function LocationDialog({ workspaceId, open, onOpenChange, location, read
         center_longitude: coverage.center_longitude ?? form.longitude ?? null,
         // What the field shows; an empty field saves null (F-1).
         business_address: businessAddress.trim() ? businessAddress : null,
+        // W21 ADDR: exactly what was typed, an empty field null; nothing is filled in.
+        ...Object.fromEntries(ADDRESS_FIELDS.map(({ key }) => [key, stored(coverage[key])])),
       });
       return saved;
     },
@@ -243,6 +291,30 @@ export function LocationDialog({ workspaceId, open, onOpenChange, location, read
 
   const update = <K extends keyof LocationBase>(key: K, value: LocationBase[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
+
+  // W21 ADDR: the confirmation acts on what is SAVED (the API binds the stored town, the
+  // location's city and the jurisdiction), so it is offered only for the stored rule and only
+  // while nothing it depends on has unsaved edits.
+  const storedRule = coverageQuery.data;
+  const unsavedAddress =
+    Boolean(storedRule) &&
+    (stored(coverage.business_address_locality) !== stored(storedRule?.business_address_locality) ||
+      stored(coverage.business_address_region) !== stored(storedRule?.business_address_region) ||
+      stored(coverage.business_address_country) !== stored(storedRule?.business_address_country) ||
+      stored(form.city) !== stored(location?.city) ||
+      stored(form.state_province) !== stored(location?.state_province) ||
+      stored(form.country) !== stored(location?.country));
+  const confirmation = useMutation({
+    mutationFn: (confirmed: boolean) =>
+      api.setLocalityConfirmation(workspaceId, location!.id, { confirmed }),
+    onSuccess: (rule) => {
+      setError(null);
+      queryClient.setQueryData(queryKeys.geoCoverage(workspaceId, location!.id), rule);
+    },
+    // The API's refusals are fixed messages that never repeat what was entered.
+    onError: (err) =>
+      setError(err instanceof ApiError ? err.message : 'Could not update the confirmation.'),
+  });
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -366,6 +438,70 @@ export function LocationDialog({ workspaceId, open, onOpenChange, location, read
                 )
               }
             </Field>
+
+            <fieldset className="space-y-3 rounded-md border border-border p-3">
+              <legend className="px-1 text-sm font-medium">Address for jurisdiction</legend>
+              {readOnly ? null : <p className="text-xs text-muted-foreground">{ADDRESS_HELP}</p>}
+              <div className="grid gap-3 sm:grid-cols-2">
+                {ADDRESS_FIELDS.map(({ key, label, maxLength }) => (
+                  <Field
+                    key={key}
+                    label={label}
+                    className={key === 'business_address_street' ? 'sm:col-span-2' : undefined}
+                  >
+                    {({ id }) =>
+                      readOnly ? (
+                        <p id={id} className="text-sm">
+                          {coverage[key] || 'Not set.'}
+                        </p>
+                      ) : (
+                        <Input
+                          id={id}
+                          value={coverage[key] ?? ''}
+                          onChange={(e) => setCoverage((c) => ({ ...c, [key]: e.target.value }))}
+                          maxLength={maxLength}
+                        />
+                      )
+                    }
+                  </Field>
+                ))}
+              </div>
+              {storedRule && storedRule.locality_matches_city === false ? (
+                <div className="space-y-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-sm">
+                  <p>{TOWN_DIFFERS}</p>
+                  {storedRule.locality_confirmation_applies ? (
+                    <p>{confirmedStatus(storedRule.locality_confirmed_at)}</p>
+                  ) : null}
+                  {readOnly ? null : storedRule.locality_confirmation_applies ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => confirmation.mutate(false)}
+                      disabled={confirmation.isPending}
+                    >
+                      {WITHDRAW_LABEL}
+                    </Button>
+                  ) : (
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">{CONFIRM_HELP}</p>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => confirmation.mutate(true)}
+                        disabled={confirmation.isPending || unsavedAddress}
+                      >
+                        {CONFIRM_LABEL}
+                      </Button>
+                      {unsavedAddress ? (
+                        <p className="text-xs text-muted-foreground">{SAVE_FIRST}</p>
+                      ) : null}
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </fieldset>
 
             <Field label="Coverage type" description="How far this location serves customers.">
               {({ id }) => (

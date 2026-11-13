@@ -63,7 +63,7 @@ applies to the table's rows (durations undecided; see below).
 
 | Table | Personal / identifying columns | On account deletion | On organization deletion | Retention class |
 |---|---|---|---|---|
-| `audit_logs` | `actor_user_id`; `entity_id` (a user id for member and registration audits); `reason` (free text); `previous_state` / `new_state` (invitation audits carry the invitee `email`, `accepted_by_user_id`); `context` | anonymise every row that names the account: `actor_user_id`/`entity_id` equal to its id → NULL; `reason` containing its id or email → NULL; any JSON string value equal to its id or containing its email → `"[erased]"` | anonymise and **retain** (`actor_user_id`, `entity_id`, `reason`, `previous_state`, `new_state` → NULL, `context` → `{}`; `organization_id`, `workspace_id`, `action`, `entity_type` and timestamps kept) — follows the Phase-5 resolution `O-6` (`REC_compliance_records_survive_FKless_scope_columns`, rider: survival is subject to `O-5` and must not mean indefinite retention by default) | `audit_logs` (by `created_at`) |
+| `audit_logs` | `actor_user_id`; `entity_id` (a user id for member and registration audits); `reason` (free text); `previous_state` / `new_state` (invitation audits carry the invitee `email`, `accepted_by_user_id`; the claims-library audits carry the entry's previous and new `text` and `kind` — free-form tenant text that **may contain personal data** — and `jurisdiction_codes` (codes only), see [Claims-library audit text](#claims-library-audit-text-d-n4-item-40)); `context` | anonymise every row that names the account: `actor_user_id`/`entity_id` equal to its id → NULL; `reason` containing its id or email → NULL; any JSON string value equal to its id or containing its email → `"[erased]"` (a claim text naming it included) | anonymise and **retain** (`actor_user_id`, `entity_id`, `reason`, `previous_state`, `new_state` → NULL, `context` → `{}`; `organization_id`, `workspace_id`, `action`, `entity_type` and timestamps kept) — follows the Phase-5 resolution `O-6` (`REC_compliance_records_survive_FKless_scope_columns`, rider: survival is subject to `O-5` and must not mean indefinite retention by default) | `audit_logs` (by `created_at`) |
 | `source_takedown_cases` | **restricted operator case record** of each live-source takedown request (`P6-PRIV-4`, operator decision `D-9e`, 2026-10-27): the operator's free-text `reason` and own `external_reference` (private; either may name a person or legal matter), the acting operator `actor_user_id`, `source_key`, the opaque case id (the only reference customer-visible audit entries carry) and `created_at` | `actor_user_id`: set null (the case is kept) | not tenant-keyed (platform-wide); not touched | **none — retention duration pending operator decision (D-9e access/retention policy)**; no time-based class and no job deletes these rows. Operator free text (reason, external_reference) is not reached by account erasure: if it names a person who is later erased, the text remains and the E10 content verifier reports findings on this table; this is pending the operator's access/retention/redaction decision (D-9e). Not exported (`exported=False`); read only through the operator-only `GET /api/v1/internal/system/data-sources/{source_key}/cases`; never in a tenant API, export, log or metric |
 | `opportunity_feedback` | `submitted_by_user_id` | set null | delete | follows `opportunities` / `signal_evidence` (dependent rows) |
 | `approvals` | Project Phase 5B (W21 CF-1; no rows until the 5B service writes them): `decided_by`; `decided_by_snapshot` (the decider's id, name and email at decision time); `note` (free text); `decided_role` | anonymise every row that names the account: `decided_by_snapshot` of a row it decided, or naming its id or email → `"[erased]"`; `note` naming it → NULL; `decided_by`: set null (row kept) | anonymise and **retain** (`decided_by`, `note` → NULL, `decided_by_snapshot` → `"[erased]"`, `brief_id` / `draft_id` (CF-2) → NULL when the brief or draft is deleted; `organization_id`, `workspace_id`, the subject, decision, sequence, reason code, decided role and `created_at` kept) — operator decision `O-6`, as for `audit_logs` (FK-less scope columns) | `audit_logs` (by `created_at`) — shares the compliance-record class, so it is not indefinite by default (O-6 rider); duration undecided (O-5) |
@@ -71,11 +71,54 @@ applies to the table's rows (durations undecided; see below).
 | `content_reviews` | Project Phase 5C (W21 CF-2; no rows until the 5C service writes them): the output-side claim-safety review of one draft version — `risk_level`, `findings` (each quotes an `excerpt` of the generated draft), `warnings`, `blocked_claim_ids`, `required_disclaimers`, `passed`; no actor and no account data; explicit `organization_id` / `workspace_id`; W21 CF-3 adds `jurisdiction_code` (the jurisdiction it was evaluated under) and `deleted_at` | not touched (no account data) | deleted with its draft, and so with the organization's workspaces (it cascades with its draft: never kept beyond the draft it judges) | none of its own — follows its `creative_drafts` row; not indefinite by default (O-6 rider); durations undecided (O-5) |
 | `workspace_capability_overrides` | `set_by_user_id`, `reason` (operator note) | set null (`set_by_user_id`) | delete | none |
 
+#### Claims-library audit text (D-N4 item 40)
+
+Operator ruling D-N4 item 40 (2026-11-12): "record the previous and new claim text and kind
+under the applicable access, retention and erasure controls. Free-form claim text must not
+automatically be classified as containing no personal data." It supersedes the packet's
+"(no personal data)".
+
+- **What is recorded.** Every `claims_library_entry.created` / `.updated` / `.retired` audit
+  row carries the entry's `text`, `kind` and `jurisdiction_codes`
+  (`app.claims.library.claim_audit_values`): a create (through `/claims` or the first onboarding)
+  as `new_state`; an update as `previous_state` and `new_state`, on every update; a retirement
+  as `previous_state`. `context` keeps the changed field names. No other field's value is
+  recorded. The `jurisdiction_codes` are a coordinator addition beyond the ruling's minimum
+  (DN4-A ruling A-R-3): since Project Phase 5D they decide where an entry applies, so the trail
+  can rebuild an entry's applicability after an edit. They are jurisdiction codes (an empty list
+  or NULL means every jurisdiction), not personal data, and are recorded under the same
+  controls.
+- **Classification.** The claim text is free-form text a steward writes. It may name a person
+  (an endorser, a practitioner, a sole trader) or carry contact details, so it is classified as
+  data that **may contain personal data**, in the `audit_logs` row of the table above, and is
+  never treated as containing none. The claim's `kind` is recorded under the same controls.
+- **Access.** The audit read API (`GET /api/v1/workspaces/{id}/audit-logs`) returns these
+  rows, with their `previous_state` / `new_state`, only to the exact roles OWNER, ADMIN and
+  COMPLIANCE_REVIEWER of the organization. A marketer, reviewer or viewer can read the live
+  library but not its audit history. The account export lists the audit events an account
+  performed by id, organization, workspace, action, entity and time only, so a claim's text is
+  never in a steward's account export.
+- **Export.** The organization export includes `audit_logs` with every column, these values
+  included (exact role OWNER).
+- **Erasure.** Account deletion replaces a claim text that names the account, by its id or
+  (when the account's address is verified) by its address, with `"[erased]"`: the whole text
+  value, as for every JSON string of an audit row. Invitee-email erasure does the same for a
+  claim text naming the erased address. Organization deletion clears both states (SQL NULL)
+  and keeps the row (O-6). **Limit:** the shared matcher finds ids and addresses only, as for
+  every free-text value, so a person a claim names only by name is not found by account or
+  invitee-email erasure. A steward can edit or retire the entry itself, but its audit rows keep
+  the earlier text (append-only): such a name stays in them until the `audit_logs` retention
+  purge removes the rows or the organization is deleted. No other erasure path reaches it.
+- **Retention.** The `audit_logs` class (by `created_at`; duration undecided, O-5; production
+  refuses to start while it is unset). Retiring or editing the entry does not shorten it.
+- **Verification.** The E10 verifier reads every text and JSON column, these states included,
+  so a remaining `WHOLE` mention of an erased account in a claim's audit text is a finding.
+
 ### Tenant business content (customer-provided; may contain personal data of sole traders)
 
-All of these are deleted on organization deletion and untouched by account deletion. None
-has a time-based purge: they live as long as the workspace (they are the customer's
-configuration).
+All of these are deleted on organization deletion and untouched by account deletion (the one
+exception: `geo_coverage_rules.locality_confirmed_by_user_id` is set null, below). None has a
+time-based purge: they live as long as the workspace (they are the customer's configuration).
 
 | Table | Columns that can hold personal or confidential data |
 |---|---|
@@ -84,7 +127,7 @@ configuration).
 | `brands` | `name`, `industry`, `business_type` |
 | `business_profiles` | `company_name`, `website`, `alternative_presence`, `social_links`, `google_business_profile`, `marketplace_links`, `description`, `target_audience`, `ideal_customer_profile`, `compliance_notes`, `sensitive_topics`, `pricing_model`, `buying_process`, … (every free-text column) |
 | `business_locations` | `address`, `city`, `state_province`, `postal_code`, `latitude`, `longitude`, `local_phone`, `local_website_page`, `local_social_links`, `google_business_profile`, `local_competitors`, `local_notes`, `overrides` (and, Project Phase 5D W21 CF-3, `jurisdiction_code`: a normalised country/subdivision code, not personal) |
-| `geo_coverage_rules` | `business_address`, `center_latitude`, `center_longitude`, markets (and `jurisdiction_code`, CF-3) |
+| `geo_coverage_rules` | `business_address`, `center_latitude`, `center_longitude`, markets (and `jurisdiction_code`, CF-3); W21 ADDR: the structured business address `business_address_street`, `_locality`, `_region`, `_postcode`, `_country` (provided by the customer), and the locality confirmation (confirmed by the customer): the town and the location's city as confirmed (`locality_confirmed_locality`, `locality_confirmed_city`), the jurisdiction code, the instant (`locality_confirmed_at`) and the confirming account (`locality_confirmed_by_user_id`, set null when that account is deleted; the confirmation is kept). The confirmations an account made are listed in its account export (rule, location and instant; never the address) |
 | `product_profiles`, `audience_profiles`, `competitor_profiles`, `brand_voice_profiles`, `offer_calendar`, `claims_library`, `source_preferences`, `channel_preferences`, `campaigns` | free-text and JSON business context (competitor names and websites are third-party business data; `offer_calendar.promo_code`, `brand_voice_profiles.example_copy`). Project Phase 5D (W21 CF-3): `campaigns.mode` / `status` are closed vocabularies; `claims_library.jurisdiction_codes` lists the jurisdiction codes an entry applies in (codes only) |
 | `campaign_locations` | **none** (Project Phase 5D, W21 CF-3, operator decision `O-8`): one campaign/location id pair of one workspace, back-filled from `campaigns.location_ids`; ids only; deleted with its campaign, location, workspace or organization |
 | `scout_requests` | `name`, `keywords`, `notes`, `resolved_market`, `stats` |
@@ -266,7 +309,8 @@ An operator can reproduce the same export with `curl` loops (`privacy-operations
 sessions, tokens' metadata, the invitations, feedback, overrides and audit events that account
 produced, the recommendation briefs it authored, the creative drafts it generated, the
 approval decisions it made and — Project Phase 5E, W21 CF-3 — the exports it made, its own
-in-app notifications and its notification preferences), which one account's activity bounds;
+in-app notifications and its notification preferences, and — W21 ADDR — the business-town
+confirmations it made, without the address), which one account's activity bounds;
 it does not carry tenant tables (a brief's model-derived content and a draft's generated text
 are in the organization export, not the author's), and no `llm_usage_events` row.
 

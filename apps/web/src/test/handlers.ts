@@ -16,6 +16,21 @@ import type { ContextKind, ContextPatchByKind } from '@/api/endpoints';
 
 const P = (path: string) => `*${API_PREFIX}${path}`;
 
+/** W21 ADDR: a coverage rule with no structured business address, as the API answers it. */
+const TOWN_UNCOMPARED = {
+  locality_matches_city: null,
+  locality_confirmed_at: null,
+  locality_confirmation_applies: false,
+};
+const NO_STRUCTURED_ADDRESS = {
+  business_address_street: null,
+  business_address_locality: null,
+  business_address_country: null,
+  business_address_region: null,
+  business_address_postcode: null,
+  ...TOWN_UNCOMPARED,
+};
+
 export const demoUser = {
   id: 'user-1',
   email: 'demo@signalnest.dev',
@@ -2083,11 +2098,31 @@ export const handlers = [
     return HttpResponse.json({ ...locations[0], ...body, id: params.id });
   }),
   http.get(P('/workspaces/:ws/locations/:id/geo-coverage'), ({ params }) =>
-    HttpResponse.json({ coverage_type: 'radius', radius_miles: 25, included_markets: [], excluded_markets: [], online_global: false, id: 'geo-1', location_id: params.id }),
+    HttpResponse.json({ coverage_type: 'radius', radius_miles: 25, included_markets: [], excluded_markets: [], online_global: false, ...NO_STRUCTURED_ADDRESS, id: 'geo-1', location_id: params.id }),
   ),
   http.put(P('/workspaces/:ws/locations/:id/geo-coverage'), async ({ request, params }) => {
     const body = (await request.json()) as Record<string, unknown>;
-    return HttpResponse.json({ ...body, id: 'geo-1', location_id: params.id });
+    return HttpResponse.json({ ...NO_STRUCTURED_ADDRESS, ...body, ...TOWN_UNCOMPARED, id: 'geo-1', location_id: params.id });
+  }),
+  // W21 ADDR: the locality confirmation (apps/api/app/locations/routes.py). The fixture rule has
+  // no town, so the API would answer the "nothing to confirm" refusal to a confirmation; a
+  // withdrawal is always accepted.
+  http.put(P('/workspaces/:ws/locations/:id/geo-coverage/locality-confirmation'), async ({ request, params }) => {
+    const body = (await request.json()) as { confirmed?: boolean };
+    if (body.confirmed) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'locality_confirmation_refused',
+            message:
+              'There is nothing to confirm. A confirmation is needed only when the saved business town or locality and the location\'s city are both filled in and differ.',
+            request_id: 'req-test',
+          },
+        },
+        { status: 422 },
+      );
+    }
+    return HttpResponse.json({ coverage_type: 'radius', radius_miles: 25, included_markets: [], excluded_markets: [], online_global: false, ...NO_STRUCTURED_ADDRESS, id: 'geo-1', location_id: params.id });
   }),
   // Shape of GeocodeResponse (apps/api/app/locations/schemas.py), as the fixture geocoder answers "Dallas".
   // The route resolves its tenant through get_tenant_context (apps/api/app/locations/routes.py,

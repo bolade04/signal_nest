@@ -73,8 +73,13 @@ from app.tests._auth2_support import (
 
 API_DIR = Path(__file__).resolve().parents[2]
 REPAIR = "d5f616c0ec97"
-#: The code head above the repair (D-N4 item 36: the closed claim kinds, data only).
-CLAIM_KINDS_HEAD = "1574637e56d3"
+#: W21 ADDR (the structured business address), which follows the repair.
+ADDR = "6f8a80cf1785"
+#: D-N4 item 37: the PostgreSQL append-only backstop, which follows ADDR.
+BACKSTOP = "d0a8bce8de6a"
+#: The code head (D-N4 item 36: the closed claim kinds, data only), which follows the backstop.
+#: The repair cases upgrade to the repair itself, so they see exactly what it does.
+HEAD = "1574637e56d3"
 CF3 = "c3f8e1a6d2b9"
 CF2 = "a7d2e9f4c1b8"
 MIGRATION = next((API_DIR / "alembic" / "versions").glob(f"*-{REPAIR}_*.py"))
@@ -518,8 +523,13 @@ def test_the_repair_follows_cf3_below_the_single_head_and_is_data_only() -> None
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
-    assert [r.revision for r in script.get_revisions("heads")] == [CLAIM_KINDS_HEAD]
-    assert script.get_revision(CLAIM_KINDS_HEAD).down_revision == REPAIR
+    # The single head is D-N4 item 36's closed claim kinds, which follows D-N4 item 37's
+    # append-only backstop, which follows W21 ADDR's structured business address, which follows
+    # the repair.
+    assert [r.revision for r in script.get_revisions("heads")] == [HEAD]
+    assert script.get_revision(HEAD).down_revision == BACKSTOP
+    assert script.get_revision(BACKSTOP).down_revision == ADDR
+    assert script.get_revision(ADDR).down_revision == REPAIR
     assert script.get_revision(REPAIR).down_revision == CF3
     source = MIGRATION.read_text()
     for ddl in (
@@ -1078,6 +1088,6 @@ def test_upgrade_noop_downgrade_upgrade_changes_nothing(repaired: Repaired) -> N
 
 def test_an_empty_database_goes_from_base_to_head_with_no_report(db: Db) -> None:
     out = db.ok("upgrade", "head")
-    assert db.version() == [CLAIM_KINDS_HEAD]  # through the repair to the code head
+    assert db.version() == [HEAD]  # through the repair, W21 ADDR and the backstop to the head
     assert PREFIX not in out, out
     assert db.ok("check")

@@ -108,6 +108,12 @@ TABLES: dict[str, TableEntry] = {
             exported=False,
             retention_class=RetentionClass.ACCOUNT_TOKENS,
         ),
+        # Audit records. Their states can carry free-form tenant text: since operator ruling
+        # D-N4 item 40 (2026-11-12) the claims-library audits record the entry's previous and
+        # new ``text`` and ``kind``, which may contain personal data and are never classified
+        # as containing none. They are exported with the organization (every column), erased
+        # with the account or organization (``app.privacy.erasure``) and purged with this
+        # class; ``docs/operations/data-inventory.md`` states the controls and their limit.
         TableEntry("audit_logs", Category.COMPLIANCE, retention_class=RetentionClass.AUDIT_LOGS),
         # Project Phase 5B approvals (W21 CF-1; dark until the 5B service writes them):
         # append-only decisions with FK-less organization/workspace columns, so a decision

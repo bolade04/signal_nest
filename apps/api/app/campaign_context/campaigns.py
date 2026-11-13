@@ -46,12 +46,14 @@ from sqlalchemy.orm import Session
 
 from app.auth.dependencies import TenantContext, get_tenant_context, require_role
 from app.brands.service import get_primary_brand
+from app.briefs.models import RecommendationBrief
 from app.campaign_context.location_refs import validate_location_ids
 from app.campaign_context.models import Campaign, CampaignLocation
 from app.campaign_context.schemas import CampaignIn, CampaignOut, CampaignPatch
 from app.core.enums import Role
-from app.core.errors import NotFoundError, ValidationDomainError
+from app.core.errors import ConflictError, NotFoundError, ValidationDomainError
 from app.core.pagination import MAX_PAGE_SIZE, PAGINATION_RESPONSES, paginate
+from app.creative.models import CreativeDraft
 from app.db.request_tx import WriteDb
 from app.db.session import get_db
 
@@ -66,6 +68,13 @@ _TAGS = ["campaigns"]
 #: The factory's cursor scope for this collection, kept so a cursor stays valid.
 _CURSOR_SCOPE = "context:campaigns"
 _NOT_FOUND = "Item not found in this workspace."
+#: The refusal of a campaign deletion that would change an append-only record (D-N4 item 37,
+#: coordinator ruling 37-R-1): fixed code and message, no customer text.
+CAMPAIGN_IN_USE_CODE = "campaign_referenced_by_brief_or_draft"
+CAMPAIGN_IN_USE = (
+    "This campaign cannot be deleted because a recommendation brief or creative draft refers "
+    "to it. Briefs and drafts are kept as they were written."
+)
 
 
 def _scoped(db: Session, workspace_id: str, item_id: str) -> Campaign:
@@ -133,6 +142,32 @@ def reconcile_memberships(
     db.add(campaign)
     db.flush()
     return members
+
+
+def _refuse_if_referenced(db: Session, campaign: Campaign) -> None:
+    """Refuse (409, :data:`CAMPAIGN_IN_USE`) to delete a campaign that a recommendation brief or
+    a creative draft names (D-N4 item 37, coordinator ruling 37-R-1).
+
+    Both are append-only records, and their ``campaign_id`` is ``ON DELETE SET NULL``: deleting
+    the campaign would change them, which the PostgreSQL backstop refuses (an unhandled error)
+    and which SQLite would let through. The campaign row is first locked ``FOR UPDATE``, which
+    the ``KEY SHARE`` check of a concurrent brief or draft insert naming it waits on, so no such
+    row can appear between this check and the delete; a campaign deleted meanwhile is not
+    found. This holds under READ COMMITTED, the application's isolation level (none is set in
+    ``app/``): after the lock is granted, the check's own statement sees a brief or draft that
+    committed while it waited (pinned by a PostgreSQL race test in
+    ``test_append_only_backstop_postgres``)."""
+    locked = db.scalar(
+        select(Campaign.id)
+        .where(Campaign.id == campaign.id, Campaign.workspace_id == campaign.workspace_id)
+        .with_for_update()
+    )
+    if locked is None:
+        raise NotFoundError(_NOT_FOUND)
+    for model in (RecommendationBrief, CreativeDraft):
+        named = db.scalar(select(model.id).where(model.campaign_id == campaign.id).limit(1))
+        if named is not None:
+            raise ConflictError(CAMPAIGN_IN_USE, code=CAMPAIGN_IN_USE_CODE)
 
 
 def _lock(db: Session, campaign: Campaign) -> None:
@@ -274,7 +309,12 @@ def delete_campaign(
     db: Session = WriteDb,
     ctx: TenantContext = Depends(EDITORS),
 ) -> None:
-    """Delete a campaign and its location memberships."""
+    """Delete a campaign and its location memberships.
+
+    Refused with 409 ``campaign_referenced_by_brief_or_draft`` while a recommendation brief or
+    a creative draft names the campaign: those records are append-only, and deleting the
+    campaign would clear their ``campaign_id``. Nothing is changed."""
     campaign = _scoped(db, workspace_id, item_id)
+    _refuse_if_referenced(db, campaign)
     db.execute(delete(CampaignLocation).where(CampaignLocation.campaign_id == campaign.id))
     db.delete(campaign)
