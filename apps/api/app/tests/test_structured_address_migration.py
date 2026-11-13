@@ -13,7 +13,8 @@ target-bound downgrade guard included), on a disposable SQLite file and, when
   ``jurisdiction_code``, is identical after the upgrade, and the new columns read NULL; one
   guarded step down removes exactly the ten columns and every row of every table is again
   identical to what it was before the upgrade;
-* **M-4** a single head, on 5D-W1's repair;
+* **M-4** it follows 5D-W1's repair, below the single head (D-N4 item 37's append-only backstop
+  ``d0a8bce8de6a``, which follows it), so the cases below upgrade to THIS revision explicitly;
 * **M-5** the CHECKs refuse a partial confirmation binding and a malformed code on both engines,
   and their frozen literals equal their Python authorities;
 * **M-6** deleting the confirming account sets only its reference NULL and keeps the binding;
@@ -43,10 +44,13 @@ from sqlalchemy.orm import Session
 from app.tests._auth2_support import pg_database, require_postgres, sqlite_file_engine
 
 API_DIR = Path(__file__).resolve().parents[2]
-HEAD = "6f8a80cf1785"
+#: This module's revision (W21 ADDR). D-N4 item 37's append-only backstop follows it as the
+#: single head, so the cases below upgrade to REVISION explicitly, not to "head".
+REVISION = "6f8a80cf1785"
+CODE_HEAD = "d0a8bce8de6a"
 D1_REPAIR = "d5f616c0ec97"
 CF3 = "c3f8e1a6d2b9"
-MIGRATION = next((API_DIR / "alembic" / "versions").glob(f"*-{HEAD}_*.py"))
+MIGRATION = next((API_DIR / "alembic" / "versions").glob(f"*-{REVISION}_*.py"))
 TABLE = "geo_coverage_rules"
 ADDRESS = {
     "business_address_street",
@@ -258,13 +262,14 @@ def _at_repair_seeded(db: Db) -> dict[str, list[tuple]]:
 # --------------------------------------------------------------------------- #
 # M-4 / M-7: the chain and the revision's scope
 # --------------------------------------------------------------------------- #
-def test_the_revision_is_the_single_head_on_the_repair() -> None:
+def test_the_revision_follows_the_repair_below_the_single_head() -> None:
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
-    assert [r.revision for r in script.get_revisions("heads")] == [HEAD]
-    assert script.get_revision(HEAD).down_revision == D1_REPAIR
+    assert [r.revision for r in script.get_revisions("heads")] == [CODE_HEAD]
+    assert script.get_revision(CODE_HEAD).down_revision == REVISION
+    assert script.get_revision(REVISION).down_revision == D1_REPAIR
     assert script.get_revision(D1_REPAIR).down_revision == CF3
 
 
@@ -319,8 +324,8 @@ def test_upgrade_adds_exactly_the_ten_nullable_columns_and_rewrites_nothing(db: 
     before = _at_repair_seeded(db)
     columns_before = db.columns(TABLE)
 
-    db.alembic("upgrade", "head")
-    assert db.version() == [HEAD]
+    db.alembic("upgrade", REVISION)
+    assert db.version() == [REVISION]
     columns_after = db.columns(TABLE)
     assert set(columns_after) - set(columns_before) == NEW
     assert set(columns_before) <= set(columns_after)
@@ -357,13 +362,15 @@ def test_upgrade_adds_exactly_the_ten_nullable_columns_and_rewrites_nothing(db: 
                         (TABLE, "US-AK")):
         assert [dict(r)["jurisdiction_code"] for r in after[table]] == [code], table
     assert [dict(r)["business_address"] for r in after[TABLE]] == [RULE["business_address"]]
+    # ``alembic check`` compares at the head; D-N4 item 37's backstop adds no table or column.
+    db.alembic("upgrade", "head")
     assert "No new upgrade operations detected." in db.alembic("check")
 
 
 def test_one_guarded_step_down_removes_exactly_them_and_every_row_is_as_before(db: Db) -> None:
     before = _at_repair_seeded(db)
     columns_before = db.columns(TABLE)
-    db.alembic("upgrade", "head")
+    db.alembic("upgrade", REVISION)
     db.execute(sa.text(
         "UPDATE geo_coverage_rules SET business_address_street = '1 Main St',"
         " business_address_locality = 'Ikeja', business_address_region = 'Lagos',"
@@ -378,7 +385,7 @@ def test_one_guarded_step_down_removes_exactly_them_and_every_row_is_as_before(d
     assert db.columns(TABLE).keys() == columns_before.keys()
     assert db.dump() == before
 
-    db.alembic("upgrade", "head")  # what was entered into the dropped columns is gone
+    db.alembic("upgrade", REVISION)  # what was entered into the dropped columns is gone
     assert {k: v for k, v in db.dump()[TABLE][0] if k in NEW} == dict.fromkeys(NEW)
 
 
@@ -411,7 +418,7 @@ _FULL = {"loc": "Ikeja", "city": "Lagos", "code": "NG-LA", "at": _AT, "by": "u-c
 )
 def test_the_checks_refuse_a_partial_binding_and_a_malformed_code(db: Db, values) -> None:
     _at_repair_seeded(db)
-    db.alembic("upgrade", "head")
+    db.alembic("upgrade", REVISION)
     # Refused by the database: the CHECK (IntegrityError), or, on PostgreSQL, the column's own
     # length for the 10-character sentinel (DataError) before the CHECK is evaluated.
     with pytest.raises((IntegrityError, DataError)):
@@ -422,7 +429,7 @@ def test_the_checks_refuse_a_partial_binding_and_a_malformed_code(db: Db, values
 
 def test_deleting_the_confirming_account_clears_only_its_reference(db: Db) -> None:
     _at_repair_seeded(db)
-    db.alembic("upgrade", "head")
+    db.alembic("upgrade", REVISION)
     db.execute(sa.text(_SET), _FULL)
     db.execute(sa.text("DELETE FROM users WHERE id = 'u-confirmer'"))
     row = dict(db.dump()[TABLE][0])

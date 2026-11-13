@@ -115,9 +115,8 @@ sanctioned:
 **These lists are what the reviews found, not a proof of completeness.** "What is refused"
 and "What is not refused" record the paths the reviews of this guard tried (W21-REV-CF2-DATA
 r1–r3, W21-REV-CF1-DESC r1–r3, and the lanes' own probes); they do not prove that no other
-ORM path reaches a guarded row. Database-level immutability (a restricted runtime role, or
-triggers) would be a separate infrastructure change; it is not built, and whether to build it
-is an open operator decision (O-10, below).
+ORM path reaches a guarded row. On PostgreSQL a database-level backstop now stands behind this
+guard (D-N4 item 37, below); a restricted runtime role is not built.
 
 ``test_cf1_append_only_bulk_paths.py`` is a static **backstop**, not the enforcement layer
 (the runtime guard above is). It checks that no other production module builds an UPDATE or
@@ -146,11 +145,34 @@ name, names the table as a PostgreSQL Unicode-escape identifier (``U&"…"``), o
 COLUMN``); SQL given as a ``bytes`` literal; a conflict clause declared in DDL
 (``sqlite_on_conflict…``); and SQL assembled at run time.
 
-**Enforcement level (operator decision O-10,
-``REC_app_layer_append_only_document_db_level_as_separate_infra``).** This is an
-application-layer control only. It is not database-level immutability: the runtime role owns
-the database, so a restricted role or a trigger is a separate infrastructure change, not
-built here.
+**Enforcement level.** Operator decision O-10
+(``REC_app_layer_append_only_document_db_level_as_separate_infra``) made this module an
+application-layer control only. The operator's ruling on D-N4 item 37 (2026-11-12) supersedes
+O-10 for PostgreSQL: "add the PostgreSQL backstop, retaining the application guard. Cover
+applicable destructive SQL paths, including TRUNCATE. Keep the sanctioned privacy-writer
+exception transaction-scoped and test that it cannot leak through pooled connections. Document
+that this does not protect against a deliberate table owner."
+
+* **This guard stays the first line**, unchanged: it refuses the ORM paths above before any
+  statement is sent, with :class:`AppendOnlyViolation`.
+* **The PostgreSQL backstop** (Alembic ``d0a8bce8de6a``) puts two triggers on every guarded
+  table: ``BEFORE UPDATE OR DELETE … FOR EACH ROW`` and ``BEFORE TRUNCATE … FOR EACH
+  STATEMENT``. They refuse, with SQLSTATE ``SNA01``, every UPDATE, DELETE and TRUNCATE of these
+  tables, whatever issued it: the Core statements and raw SQL listed under "What is not
+  refused" above, an ORM statement on a bare ``Connection``, a data-modifying CTE, ``MERGE``,
+  an upsert, ``TRUNCATE`` (also through ``TRUNCATE <parent> CASCADE``) and the database's own
+  ``ON DELETE CASCADE`` / ``SET NULL`` actions when a parent row is deleted. The one exception
+  is a sanctioned privacy-writer transaction: the erasure, anonymisation and retention-purge
+  writers in :mod:`app.privacy` mark their transaction (:mod:`app.privacy.writer`), and the
+  mark lasts only until that transaction ends. The seed's development reset (item 3 above) runs
+  on SQLite only.
+* **SQLite (local mode)** has no trigger: this guard is its only control.
+* **What the backstop does not stop.** The runtime role owns these tables, so a deliberate
+  table owner can switch it off (``ALTER TABLE … DISABLE TRIGGER``, ``DROP TRIGGER``, replacing
+  the function, or ``session_replication_role = replica`` where that may be set), and any
+  session can set the mark for its own transaction. It stops accidental code paths, not a
+  deliberate owner. That would need a separate restricted database role, an infrastructure
+  change that is not built. DDL (``DROP TABLE``, ``ALTER TABLE``) is not covered either.
 """
 
 from __future__ import annotations

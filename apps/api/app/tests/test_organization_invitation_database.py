@@ -95,7 +95,10 @@ CF3 = "c3f8e1a6d2b9"
 D1_REPAIR = "d5f616c0ec97"
 # W21 ADDR (the operator's limited CF-3 migration-freeze exception, 2026-11-12): the structured
 # business address on geo_coverage_rules. It follows the D-1 repair.
-CODE_HEAD = "6f8a80cf1785"
+ADDR = "6f8a80cf1785"
+# D-N4 item 37 (W21): the PostgreSQL append-only backstop (triggers; nothing on SQLite). It
+# follows ADDR.
+CODE_HEAD = "d0a8bce8de6a"
 TABLE = "organization_invitations"
 PENDING_INDEX = "uq_organization_invitations_pending"
 ORG_INDEX = "ix_organization_invitations_organization_id"
@@ -298,7 +301,8 @@ def test_revision_chain() -> None:
     assert script.get_revision(EXPLANATION).down_revision == SESSIONS
     assert script.get_revision(USAGE).down_revision == EXPLANATION
     assert script.get_revision(TAKEDOWNS).down_revision == USAGE
-    assert script.get_revision(CODE_HEAD).down_revision == D1_REPAIR
+    assert script.get_revision(CODE_HEAD).down_revision == ADDR
+    assert script.get_revision(ADDR).down_revision == D1_REPAIR
     assert script.get_revision(D1_REPAIR).down_revision == CF3
     assert script.get_revision(CF3).down_revision == CF2
     assert script.get_revision(CF2).down_revision == CF1

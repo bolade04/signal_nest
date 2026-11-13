@@ -37,6 +37,15 @@ accepted** are bound to it by id (``accepted_by_user_id``; acceptance required t
 address), so they are its own whether or not the address is verified: they are deleted with
 it, and the address is cleared from the audit records about exactly those invitations.
 
+**The PostgreSQL append-only backstop** (D-N4 item 37, Alembic ``d0a8bce8de6a``). The tables
+the application guard covers (:mod:`app.db.append_only`) carry a trigger that refuses UPDATE,
+DELETE and TRUNCATE outside a sanctioned privacy-writer transaction. :func:`erase_organization`,
+:func:`delete_account` and :func:`erase_invitee_email` mark their transaction
+(:func:`app.privacy.writer.mark_privacy_writer`) after their own checks and before their first
+write, as :func:`app.privacy.retention.purge_batch` does. The helpers (:func:`delete_rows`, the
+``anonymise_*`` functions) do not mark: on a migrated PostgreSQL database they reach a guarded
+row only inside a marked transaction.
+
 Locks: account deletion locks the user row, then each of its organizations in id order
 (``SELECT … FOR UPDATE``; no-ops on SQLite, whose single writer serializes instead);
 organization deletion locks the organization and re-reads the actor's role under the
@@ -83,6 +92,7 @@ from app.privacy.matching import (
     prefilter,
     same_address,
 )
+from app.privacy.writer import mark_privacy_writer
 
 #: Ids per statement. Well under SQLite's bound-parameter limit.
 CHUNK = 500
@@ -482,6 +492,7 @@ def erase_organization(db: Session, *, organization_id: str) -> OrganizationEras
     is being deleted.
     """
     _require_no_active_jobs(db, organization_id)
+    mark_privacy_writer(db)  # the PostgreSQL append-only backstop's exception (D-N4 item 37)
     workspace_ids = tuple(
         db.execute(
             select(Workspace.id)
@@ -696,6 +707,7 @@ def delete_account(
             code="account_deletion_sole_owner",
         )
 
+    mark_privacy_writer(db)  # the PostgreSQL append-only backstop's exception (D-N4 item 37)
     counts = ErasureCounts()
     deleted: list[OrganizationErasure] = []
     for impact in impacts:
@@ -741,6 +753,7 @@ def erase_invitee_email(db: Session, *, email: str) -> ErasureCounts:
             "An account with this verified email address exists; delete the account instead.",
             code="erasure_account_exists",
         )
+    mark_privacy_writer(db)  # the PostgreSQL append-only backstop's exception (D-N4 item 37)
     counts = erase_invitations_addressed_to(db, email=email)
     counts.anonymised["audit_logs"] += anonymise_audit_for_subject(db, user_id=None, email=email)
     counts.anonymised.update(anonymise_phase5_records_for_subject(db, user_id=None, email=email))

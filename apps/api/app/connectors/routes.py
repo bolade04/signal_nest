@@ -255,6 +255,10 @@ def take_down_data_source(
     affected workspace's audit log gets a fixed generic explanation, the acting operator
     and the case's opaque ``case_id`` — never the reason. The suppression record itself
     holds only the source key, the time and counts.
+
+    Refused with 409 ``takedown_blocked_by_append_only_records``, changing nothing, when the
+    purge would delete an opportunity or intelligence record that an append-only
+    recommendation brief or creative draft refers to.
     """
     result = takedown_source(
         db,
