@@ -31,7 +31,8 @@ This module pins:
   - running it again changes nothing;
   - the downgrade is a no-op.
 * **The revision's frozen canonical form** equals the engine's ``canonical_kind`` on a corpus of
-  spellings.
+  spellings. The corpus includes Default_Ignorable code points that are not in category Cf, so the
+  revision's Default_Ignorable pass is pinned on its own, not only through its Cf pass.
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ import itertools
 import os
 import subprocess
 import sys
+import unicodedata
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -97,7 +99,28 @@ def test_the_closed_set_is_one_set_everywhere() -> None:
         assert schemas[name]["properties"]["kind"]["$ref"] == "#/components/schemas/ClaimKind"
 
 
+#: Default_Ignorable code points that are NOT in category Cf. The revision's canonical form
+#: drops every Cf code point in a second pass, so a corpus whose invisible characters are all Cf
+#: (U+200B, U+00AD, U+2060 below) cannot tell whether its Default_Ignorable pass runs at all.
+#: These can, and each one is named here so the pin cannot fall back to Cf characters unnoticed.
+NON_CF_IGNORABLES = {
+    "️": "VARIATION SELECTOR-16",
+    "͏": "COMBINING GRAPHEME JOINER",
+    "ㅤ": "HANGUL FILLER",
+    "᠋": "MONGOLIAN FREE VARIATION SELECTOR ONE",
+    "︀": "VARIATION SELECTOR-1",
+}
+#: Spellings carrying them, with the kind the engine's canonical_kind reads.
+NON_CF_SPELLINGS = {
+    "prohibited️": "prohibited",
+    "pro͏hibited": "prohibited",
+    "ㅤprohibited": "prohibited",
+    "prohibited᠋": "prohibited",
+    "blocked︀": "blocked",
+}
+
 SPELLINGS = [
+    *NON_CF_SPELLINGS,
     "prohibited",
     "Prohibited",
     " PROHIBITED ",
@@ -124,6 +147,24 @@ SPELLINGS = [
 @pytest.mark.parametrize("kind", SPELLINGS)
 def test_the_revisions_frozen_canonical_form_is_the_engines(kind) -> None:
     assert _revision().canonical(kind) == canonical_kind(kind)
+
+
+@pytest.mark.parametrize("spelling", NON_CF_SPELLINGS)
+def test_a_non_cf_default_ignorable_is_removed_like_the_engine_removes_it(spelling) -> None:
+    """Each added code point is a named non-Cf Default_Ignorable, and both the engine and the
+    revision read the spelling as its kind (so the revision's Default_Ignorable pass is needed)."""
+    added = [ch for ch in spelling if not ch.isascii()]
+    assert len(added) == 1 and added[0] in NON_CF_IGNORABLES, ascii(spelling)
+    assert unicodedata.category(added[0]) != "Cf", ascii(spelling)
+    assert unicodedata.name(added[0]) == NON_CF_IGNORABLES[added[0]]
+    assert canonical_kind(spelling) == NON_CF_SPELLINGS[spelling]
+    assert _revision().canonical(spelling) == NON_CF_SPELLINGS[spelling]
+
+
+def test_every_non_cf_ignorable_is_carried_by_a_spelling() -> None:
+    carried = {ch for spelling in NON_CF_SPELLINGS for ch in spelling if not ch.isascii()}
+    assert carried == set(NON_CF_IGNORABLES)
+    assert {"️", "͏", "ㅤ"} <= carried  # ruling DN4M-36-R-2's minimum
 
 
 # --------------------------------------------------------------------------- #
