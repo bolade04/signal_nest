@@ -83,6 +83,7 @@ from app.jurisdiction.resolver import (
     ADDRESS_PLACE_UNCLEAR,
     ADDRESS_ROUTE_AMBIGUOUS,
     ADDRESS_SUFFIX_AMBIGUOUS,
+    ADDRESS_TERRITORY_UNCLEAR,
     CLARIFICATIONS,
     jurisdiction_permits,
     resolve_jurisdiction,
@@ -552,13 +553,15 @@ def test_only_an_ambiguous_suffix_carries_a_reason():
     """Clear lines, explicit contradictions and unresolvable fields carry no reason; D1's reason
     category has exactly one fixed message. GEO-P1 adds three categories for parts read wherever
     they stand (their messages are pinned in ``test_geography_part_places.py``), and GEO-P2 one for
-    a route designator written as the whole address (``test_geography_units_designators.py``)."""
+    a route designator written as the whole address (``test_geography_units_designators.py``), and
+    GEO-P4 one for a territory the tables do not list (``test_geography_territory.py``)."""
     assert set(CLARIFICATIONS) == {
         ADDRESS_SUFFIX_AMBIGUOUS,
         ADDRESS_NAMES_ANOTHER_PLACE,
         ADDRESS_PLACE_UNCLEAR,
         ADDRESS_DIRECTION_AMBIGUOUS,
         ADDRESS_ROUTE_AMBIGUOUS,
+        ADDRESS_TERRITORY_UNCLEAR,
     }
     assert CLARIFICATIONS[ADDRESS_SUFFIX_AMBIGUOUS] == (
         "We couldn't tell whether the end of the business address is a street type or a "
