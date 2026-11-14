@@ -1166,6 +1166,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/analytics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Status analytics for this workspace, or one of its locations
+         * @description Counts by state for opportunities, briefs, approvals, drafts, reviews and exports;
+         *     approval latency; generation and review outcomes; and a per-location comparison.
+         *
+         *     Exact roles OWNER, ADMIN, MARKETER and REVIEWER (403 otherwise); 503 while the
+         *     notifications-and-analytics capability is off for the workspace; 404 for a location that
+         *     is not this workspace's. A figure without a basis is null, never 0. No attribution or
+         *     advertising-performance figure.
+         */
+        get: operations["read_workspace_analytics_api_v1_workspaces__workspace_id__analytics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/approval-queue": {
         parameters: {
             query?: never;
@@ -2570,6 +2596,32 @@ export interface components {
             subject: components["schemas"]["ExportSubjectOut"];
         };
         /**
+         * AnalyticsOut
+         * @description Status analytics for one workspace, or one of its locations.
+         */
+        AnalyticsOut: {
+            approval_latency: components["schemas"]["ApprovalLatencyOut"];
+            approvals: components["schemas"]["ApprovalStateCounts"];
+            briefs: components["schemas"]["SubjectStateCounts"];
+            drafts: components["schemas"]["SubjectStateCounts"];
+            exports: components["schemas"]["ExportStateCounts"];
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Location Id */
+            location_id: string | null;
+            /** Locations */
+            locations: components["schemas"]["LocationComparisonOut"][];
+            opportunities: components["schemas"]["OpportunityStateCounts"];
+            outcomes: components["schemas"]["OutcomesOut"];
+            reviews: components["schemas"]["ReviewStateCounts"];
+            unassigned: components["schemas"]["LocationTotalsOut"] | null;
+            /** Workspace Id */
+            workspace_id: string;
+        };
+        /**
          * ApprovalDecision
          * @description The closed decision vocabulary of an append-only approval row (Phase 5B).
          *
@@ -2605,6 +2657,14 @@ export interface components {
             offset: number;
             /** Total */
             total: number;
+        };
+        /**
+         * ApprovalLatencyOut
+         * @description Approval latency, for briefs and for drafts separately.
+         */
+        ApprovalLatencyOut: {
+            briefs: components["schemas"]["LatencyOut"];
+            drafts: components["schemas"]["LatencyOut"];
         };
         /**
          * ApprovalOut
@@ -2649,6 +2709,27 @@ export interface components {
          * @enum {string}
          */
         ApprovalReason: "evidence_sufficient" | "aligned_with_strategy" | "approved_other" | "insufficient_evidence" | "off_strategy" | "brand_or_compliance_risk" | "inaccurate" | "rejected_other" | "superseded" | "circumstances_changed" | "approved_in_error" | "revoked_other";
+        /**
+         * ApprovalStateCounts
+         * @description Approval decision rows in scope (append-only; a change of mind is a new row).
+         *
+         *     By decision (``approved`` + ``rejected`` + ``revoked`` = ``total``) and by subject
+         *     (``on_briefs`` + ``on_drafts`` = ``total``).
+         */
+        ApprovalStateCounts: {
+            /** Approved */
+            approved: number;
+            /** On Briefs */
+            on_briefs: number;
+            /** On Drafts */
+            on_drafts: number;
+            /** Rejected */
+            rejected: number;
+            /** Revoked */
+            revoked: number;
+            /** Total */
+            total: number;
+        };
         /**
          * ApprovalSubjectType
          * @description What an approval decides on (Phase 5B).
@@ -3623,6 +3704,23 @@ export interface components {
             /** Tables Checked */
             tables_checked: number;
         };
+        /**
+         * ExportStateCounts
+         * @description Manual exports in scope by render format (``ExportFormat``); a partition.
+         *
+         *     ``plain_text`` = ``text/plain``, ``markdown`` = ``text/markdown``, ``json_document`` =
+         *     ``json`` (a field named ``json`` would shadow ``BaseModel.json``).
+         */
+        ExportStateCounts: {
+            /** Json Document */
+            json_document: number;
+            /** Markdown */
+            markdown: number;
+            /** Plain Text */
+            plain_text: number;
+            /** Total */
+            total: number;
+        };
         /** ExportSubjectOut */
         ExportSubjectOut: {
             /** Organization Id */
@@ -4466,6 +4564,21 @@ export interface components {
             total: number;
         };
         /**
+         * LatencyOut
+         * @description Time from a subject version's creation to its first decision, over decided versions.
+         *
+         *     ``decided`` counts the versions in scope with at least one decision. ``mean_seconds`` and
+         *     ``median_seconds`` are ``None`` while ``decided`` is 0: there is nothing to measure.
+         */
+        LatencyOut: {
+            /** Decided */
+            decided: number;
+            /** Mean Seconds */
+            mean_seconds: number | null;
+            /** Median Seconds */
+            median_seconds: number | null;
+        };
+        /**
          * LocalityConfirmationIn
          * @description Confirm (``true``) that the saved business town or locality lies within this location's
          *     area, or withdraw that confirmation (``false``). The confirmation is the customer's own
@@ -4518,6 +4631,28 @@ export interface components {
             /** Timezone */
             timezone?: string | null;
         };
+        /**
+         * LocationComparisonOut
+         * @description One location of the workspace in the per-location comparison.
+         */
+        LocationComparisonOut: {
+            /** Approvals */
+            approvals: number;
+            /** Briefs */
+            briefs: number;
+            /** Drafts */
+            drafts: number;
+            /** Exports */
+            exports: number;
+            /** Is Active */
+            is_active: boolean;
+            /** Location Id */
+            location_id: string;
+            /** Name */
+            name: string;
+            /** Opportunities */
+            opportunities: number;
+        };
         /** LocationOut */
         LocationOut: {
             /** Address */
@@ -4568,6 +4703,22 @@ export interface components {
             timezone?: string | null;
             /** Workspace Id */
             workspace_id: string;
+        };
+        /**
+         * LocationTotalsOut
+         * @description Per-family totals for one comparison row (the same scope rules as the families).
+         */
+        LocationTotalsOut: {
+            /** Approvals */
+            approvals: number;
+            /** Briefs */
+            briefs: number;
+            /** Drafts */
+            drafts: number;
+            /** Exports */
+            exports: number;
+            /** Opportunities */
+            opportunities: number;
         };
         /** LoginRequest */
         LoginRequest: {
@@ -4897,6 +5048,26 @@ export interface components {
             /** Opportunity Id */
             opportunity_id: string;
         };
+        /**
+         * OpportunityStateCounts
+         * @description Opportunities in scope by their workflow ``status`` (``OpportunityStatus``).
+         *
+         *     ``total`` counts every row in scope; each named state counts the rows carrying it.
+         */
+        OpportunityStateCounts: {
+            /** Actioned */
+            actioned: number;
+            /** Ignored */
+            ignored: number;
+            /** Monitoring */
+            monitoring: number;
+            /** New */
+            new: number;
+            /** Saved */
+            saved: number;
+            /** Total */
+            total: number;
+        };
         /** OpportunityStatusUpdate */
         OpportunityStatusUpdate: {
             /** Status */
@@ -5001,6 +5172,26 @@ export interface components {
             name: string;
             /** Slug */
             slug: string;
+        };
+        /**
+         * OutcomesOut
+         * @description Generation and review outcomes.
+         *
+         *     Generation: ``drafts_generated`` versions in scope, of which ``revisions`` revise an
+         *     earlier version and ``simulated`` came from the simulated generator. Review: the share of
+         *     content reviews that passed / blocked; each rate is ``None`` while no review is in scope.
+         */
+        OutcomesOut: {
+            /** Drafts Generated */
+            drafts_generated: number;
+            /** Review Block Rate */
+            review_block_rate: number | null;
+            /** Review Pass Rate */
+            review_pass_rate: number | null;
+            /** Revisions */
+            revisions: number;
+            /** Simulated */
+            simulated: number;
         };
         /**
          * PartialFetchReason
@@ -5246,6 +5437,24 @@ export interface components {
             organization_name: string;
             /** Password */
             password: string;
+        };
+        /**
+         * ReviewStateCounts
+         * @description Content reviews in scope (one per draft version) by outcome; a partition.
+         *
+         *     ``passed``: nothing blocks and every required disclaimer is carried. ``blocked``: the
+         *     claim-safety result is blocked. ``not_passed``: neither (in practice a required
+         *     disclaimer is missing).
+         */
+        ReviewStateCounts: {
+            /** Blocked */
+            blocked: number;
+            /** Not Passed */
+            not_passed: number;
+            /** Passed */
+            passed: number;
+            /** Total */
+            total: number;
         };
         /**
          * Role
@@ -5881,6 +6090,33 @@ export interface components {
             stale_after_seconds: number;
             /** Stuck Count */
             stuck_count: number;
+        };
+        /**
+         * SubjectStateCounts
+         * @description Brief or draft versions in scope by their derived state (no status column exists).
+         *
+         *     A partition, evaluated in this order (the approval queue's reading,
+         *     ``app.approvals.service._awaiting_decision_select``):
+         *
+         *     * ``superseded`` — a newer version of the same chain exists (a brief: the same
+         *       opportunity; a draft: the same brief); it is decided through its successor.
+         *     * ``approved`` / ``rejected`` — the controlling decision (the highest ``decision_seq``
+         *       on that exact version) is that decision.
+         *     * ``awaiting_decision`` — no decision yet, or the controlling decision is ``revoked``.
+         *
+         *     ``total`` = the sum of the four. Soft-deleted versions (``deleted_at`` set) are excluded.
+         */
+        SubjectStateCounts: {
+            /** Approved */
+            approved: number;
+            /** Awaiting Decision */
+            awaiting_decision: number;
+            /** Rejected */
+            rejected: number;
+            /** Superseded */
+            superseded: number;
+            /** Total */
+            total: number;
         };
         /**
          * TakedownCaseOut
@@ -7885,6 +8121,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkspaceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_workspace_analytics_api_v1_workspaces__workspace_id__analytics_get: {
+        parameters: {
+            query?: {
+                location_id?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyticsOut"];
                 };
             };
             /** @description Validation Error */

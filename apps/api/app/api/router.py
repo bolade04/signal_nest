@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from app.analytics.routes import router as analytics_router
 from app.approvals.routes import router as approvals_router
 from app.audit.routes import router as audit_router
 from app.auth.routes import router as auth_router
@@ -51,6 +52,7 @@ for _r in (
     briefs_router,
     approvals_router,
     creative_router,
+    analytics_router,
     jobs_router,
     audit_router,
     privacy_router,

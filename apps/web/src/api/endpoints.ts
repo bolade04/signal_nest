@@ -10,6 +10,7 @@ import type {
   CreativeDraftListOut,
   CreativeDraftOut,
   CreativeGenerationQueuedOut,
+  WorkspaceAnalytics,
   AccountDeletionOut,
   AccountDeletionPreviewOut,
   AccountDeletionRequest,
@@ -790,3 +791,18 @@ export const recordDraftDecision = (
 ) =>
   apiRequest<ApprovalOut>(draftDecisionsPath(workspaceId, draftId), { method: 'POST', body });
 // ---- I-5C integration (W21 INT5AB): decisions on one draft version — end ------------
+
+// ---- Project Phase 5E: status analytics (W21 lane 5E-W2; I-5E share) — begin -----------
+// Exact roles owner, admin, marketer and reviewer (403 otherwise); 503 capability_unavailable
+// while the notifications-and-analytics capability (O-12(B)) is off for the workspace; 404 for
+// a location that is not this workspace's. Omit `location_id` for the whole workspace.
+export const getWorkspaceAnalytics = (
+  workspaceId: string,
+  params: { location_id?: string | null } = {},
+  signal?: AbortSignal,
+) =>
+  apiRequest<WorkspaceAnalytics>(`/workspaces/${workspaceId}/analytics`, {
+    query: { location_id: params.location_id ?? undefined },
+    signal,
+  });
+// ---- Project Phase 5E: status analytics (W21 lane 5E-W2; I-5E share) — end -------------
