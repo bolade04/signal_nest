@@ -1,7 +1,8 @@
 """Canonical enums shared across domain modules.
 
-These mirror the values exported to the frontend in ``packages/shared`` so the UI and
-backend agree on status vocabularies without duplicating business logic.
+These values reach the frontend through the OpenAPI document (``apps/api/openapi.json``) and
+the types generated from it (``apps/web/src/api/schema.d.ts``, ``npm run gen:types``), so the
+UI and backend agree on status vocabularies without duplicating business logic.
 """
 
 from __future__ import annotations
