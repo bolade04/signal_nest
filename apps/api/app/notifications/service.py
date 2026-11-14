@@ -26,6 +26,18 @@ Steps 1-3 are the caller's contract. A breach raises :class:`NotificationContrac
 whatever the capability says, so a hook passing the wrong ids fails in the dark state too,
 where a test can see it. A breach is a programming error, never a customer answer. In-app
 only: nothing here sends mail, SMS, push or any other message.
+
+**The reads and writes behind the routes** (:mod:`app.notifications.routes`). Each takes the
+session user's id from the route (the tenant context), never from the client:
+
+* :func:`list_feed` returns one user's notifications in one workspace, newest first, without
+  soft-deleted rows (P2), with the total and unread counts of that same set.
+* :func:`mark_read` matches on the id, the workspace **and** the session user, so a miss,
+  including another user's notification, is the uniform 404 (the cross-user IDOR class, 5E
+  exit criterion 5). It is idempotent: a conditional ``UPDATE … WHERE read_at IS NULL`` keeps
+  the first ``read_at``, even when two requests race.
+* :func:`get_preferences` answers every event code (no row: delivered);
+  :func:`update_preferences` upserts the given codes and leaves the others as they are.
 """
 
 from __future__ import annotations
@@ -35,7 +47,8 @@ from collections.abc import Iterable, Mapping
 from types import MappingProxyType
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.approvals.models import Approval
@@ -44,8 +57,10 @@ from app.capabilities.registry import Capability
 from app.capabilities.resolver import CapabilityResolution, resolve_capability
 from app.core.config import Settings, get_settings
 from app.core.enums import NOTIFICATION_SUBJECT_TABLES, NotificationEventCode
+from app.core.errors import NotFoundError
 from app.core.logging import get_logger, log_event
 from app.creative.models import ContentReview, CreativeDraft
+from app.db.base import utcnow
 from app.exports.models import Export
 from app.notifications.interface import NotificationEmitter
 from app.notifications.models import Notification, NotificationPreference
@@ -263,9 +278,162 @@ def emit_notifications(
 emitter: NotificationEmitter = emit_notifications
 
 
+# --------------------------------------------------------------------------- #
+# Feed, mark-read and preferences (the session user's own rows only)
+# --------------------------------------------------------------------------- #
+DEFAULT_LIMIT = 20
+MAX_LIMIT = 100
+
+#: The one message for every notification miss: unknown, foreign, another user's or deleted.
+NOTIFICATION_NOT_FOUND = "Notification not found."
+
+
+def _own_live_rows(workspace_id: str, user_id: str) -> tuple[Any, ...]:
+    """The predicate of every feed read: this user's live rows in this workspace."""
+    return (
+        Notification.workspace_id == workspace_id,
+        Notification.user_id == user_id,
+        Notification.deleted_at.is_(None),
+    )
+
+
+def list_feed(
+    db: Session, *, workspace_id: str, user_id: str, limit: int, offset: int
+) -> tuple[list[Notification], int, int]:
+    """One page of the user's feed, newest first, with the total and unread counts."""
+    own = _own_live_rows(workspace_id, user_id)
+    rows = list(
+        db.scalars(
+            select(Notification)
+            .where(*own)
+            .order_by(Notification.created_at.desc(), Notification.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+    )
+    total = db.scalar(select(func.count()).select_from(Notification).where(*own)) or 0
+    unread = (
+        db.scalar(
+            select(func.count())
+            .select_from(Notification)
+            .where(*own, Notification.read_at.is_(None))
+        )
+        or 0
+    )
+    return rows, total, unread
+
+
+def mark_read(
+    db: Session, *, workspace_id: str, user_id: str, notification_id: str
+) -> Notification:
+    """Mark one of the user's notifications read; idempotent; the first ``read_at`` is kept.
+
+    Raises :class:`~app.core.errors.NotFoundError` (404, one message) unless ``notification_id``
+    is a live row of this user in this workspace.
+    """
+    mine = (Notification.id == notification_id, *_own_live_rows(workspace_id, user_id))
+    row = db.scalar(select(Notification).where(*mine))
+    if row is None:
+        raise NotFoundError(NOTIFICATION_NOT_FOUND)
+    if row.read_at is None:
+        db.execute(
+            update(Notification)
+            .where(*mine, Notification.read_at.is_(None))
+            .values(read_at=utcnow())
+            .execution_options(synchronize_session=False)
+        )
+        # Whichever request set it first, this reads the stored value back.
+        db.refresh(row)
+    return row
+
+
+def get_preferences(
+    db: Session, *, workspace_id: str, user_id: str
+) -> list[tuple[NotificationEventCode, bool]]:
+    """Every event code with whether it is delivered to this user in this workspace."""
+    stored = {
+        row.event_code: row.enabled
+        for row in db.scalars(
+            select(NotificationPreference).where(
+                NotificationPreference.workspace_id == workspace_id,
+                NotificationPreference.user_id == user_id,
+            )
+        )
+    }
+    return [(code, stored.get(code.value, True)) for code in NotificationEventCode]
+
+
+def _set_preference(
+    db: Session,
+    *,
+    organization_id: str,
+    workspace_id: str,
+    user_id: str,
+    event_code: NotificationEventCode,
+    enabled: bool,
+) -> None:
+    stmt = select(NotificationPreference).where(
+        NotificationPreference.workspace_id == workspace_id,
+        NotificationPreference.user_id == user_id,
+        NotificationPreference.event_code == event_code.value,
+    )
+    row = db.scalar(stmt)
+    if row is None:
+        try:
+            with db.begin_nested():
+                db.add(
+                    NotificationPreference(
+                        organization_id=organization_id,
+                        workspace_id=workspace_id,
+                        user_id=user_id,
+                        event_code=event_code.value,
+                        enabled=enabled,
+                    )
+                )
+                db.flush()
+            return
+        except IntegrityError:
+            # A concurrent request inserted the same (workspace, user, event) first. The
+            # savepoint is rolled back; update the row it wrote (the capabilities upsert's
+            # backstop).
+            row = db.scalar(stmt)
+            if row is None:  # pragma: no cover - the constraint fired but the row is absent
+                raise
+    row.enabled = enabled
+
+
+def update_preferences(
+    db: Session,
+    *,
+    organization_id: str,
+    workspace_id: str,
+    user_id: str,
+    changes: Mapping[NotificationEventCode, bool],
+) -> list[tuple[NotificationEventCode, bool]]:
+    """Set the given event codes for this user in this workspace; answer every code."""
+    for event_code, enabled in changes.items():
+        _set_preference(
+            db,
+            organization_id=organization_id,
+            workspace_id=workspace_id,
+            user_id=user_id,
+            event_code=NotificationEventCode(event_code),
+            enabled=enabled,
+        )
+    db.flush()
+    return get_preferences(db, workspace_id=workspace_id, user_id=user_id)
+
+
 __all__ = [
+    "DEFAULT_LIMIT",
+    "MAX_LIMIT",
+    "NOTIFICATION_NOT_FOUND",
     "NotificationContractError",
     "emit_notifications",
     "emitter",
+    "get_preferences",
+    "list_feed",
+    "mark_read",
     "notifications_analytics_capability",
+    "update_preferences",
 ]
