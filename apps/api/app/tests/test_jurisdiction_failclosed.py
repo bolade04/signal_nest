@@ -1973,6 +1973,47 @@ def test_t2_the_tenant_refusal_keeps_its_generic_answer_and_names_no_category(
     assert checked == [] and model.requests == [] and budget_checks == []
 
 
+#: (case, fields of a coverage rule row that another tenant holds for this tenant's location):
+#: each would refuse or ask if the capture read it.
+FOREIGN_RULES = [
+    ("a text naming another state", {"business_address": "Tulsa, OK"}),
+    ("a text that asks", {"business_address": "1 FM 1960"}),
+    (
+        "a structured address of another state",
+        complete_address_of({"city": "Tulsa", "state_province": "OK", "country": "US"}),
+    ),
+]
+
+
+@pytest.mark.parametrize(("case", "fields"), FOREIGN_RULES, ids=[c for c, _ in FOREIGN_RULES])
+@pytest.mark.parametrize("where", ["ws2", "ws_b"])
+def test_t2_a_rule_row_of_another_tenant_never_decides_the_capture(
+    capture_world, phase5_on, model, case, fields, where
+) -> None:
+    """R-5D-B r1 F-1 (beside T-2): the capture reads the location's coverage rules of the
+    opportunity's workspace only. ``geo_coverage_rules`` does not tie a rule's workspace to its
+    location's, so a row of another workspace (``ws2``) or organization (``ws_b``) can name this
+    tenant's location; it never decides, or is named in, this tenant's answer."""
+    world = capture_world
+    ws = world.workspace(f"t2 rules {where} {case[:12]}")
+    opp, record, location_id = evidence(
+        world, ws, location=DALLAS_FIELDS, addresses=("Dallas, TX",)
+    )
+    home = getattr(world, where)
+    with world.session() as s:
+        s.add(
+            GeoCoverageRule(
+                location_id=location_id,
+                organization_id=world.org_of(home),
+                workspace_id=home,
+                **fields,
+            )
+        )
+    r = capture(world, ws, opp, record)
+    assert r.status_code == 201, (case, where, r.text)
+    assert world.row(RecommendationBrief, r.json()["id"])["jurisdiction_code"] == "US-TX"
+
+
 def _scout_rule_of(world: CreativeWorld, ws: str, location_id: str):
     """The coverage rule a Scout search of ``location_id`` is run with (``jobs.pipeline``)."""
     with world.session() as s:
@@ -2304,6 +2345,29 @@ def test_only_the_capture_refusal_carries_error_details() -> None:
             if isinstance(node, ast.Call) and any(k.arg == "details" for k in node.keywords):
                 passing.add(path.relative_to(APP_DIR).as_posix())
     assert passing == {"briefs/service.py"}
+    # Nor does any product statement store it afterwards (``err.details = ...`` or
+    # ``setattr(err, "details", ...)``): only SignalNestError.__init__ does
+    # (review W21-R5D-A r1, F-2).
+    # The same check is review W21-R5D-B r1's F-3: a 404 given another workspace's id by
+    # attribute. A Store context covers plain, augmented and annotated assignments alike.
+    stored = set()
+    for path in APP_DIR.rglob("*.py"):
+        if "tests" in path.parts:
+            continue
+        for node in ast.walk(ast.parse(path.read_text())):
+            if (
+                isinstance(node, ast.Attribute)
+                and node.attr == "details"
+                and isinstance(node.ctx, ast.Store)
+            ) or (
+                isinstance(node, ast.Call)
+                and getattr(node.func, "id", None) == "setattr"
+                and len(node.args) >= 2
+                and isinstance(node.args[1], ast.Constant)
+                and node.args[1].value == "details"
+            ):
+                stored.add(path.relative_to(APP_DIR).as_posix())
+    assert stored == {"core/errors.py"}
     assert SignalNestError("x").details is None
     assert SignalNestError("x", details={"reason": "r"}).details == {"reason": "r"}
 

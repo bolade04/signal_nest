@@ -199,6 +199,10 @@ const shown = (screen: Screen) => screen.container.textContent ?? '';
 function expectNothingInternalShown(screen: Screen) {
   const text = shown(screen) + (document.body.textContent ?? '');
   for (const value of NEVER_RENDERED) expect(text, value).not.toContain(value);
+  // R-5D-B r1 INFO-2: no tenant value in any attribute either (a campaign's own id is in its
+  // link's href by design, so ids are not checked here).
+  const html = document.body.innerHTML;
+  for (const value of Object.values(ECHOED).flat()) expect(html, value).not.toContain(value);
 }
 
 async function openDetail(screen: Screen, name: string) {

@@ -661,6 +661,25 @@ def product_importers(name: str) -> set[str]:
     return importers
 
 
+def product_references(name: str) -> set[str]:
+    """The product modules (outside tests) that name ``name`` at all: a call, a binding
+    (``check = business_address.resolve_for_action``), an argument, or an import under any alias.
+    A reference that is not a call would hide a caller from :func:`product_callers` and
+    :func:`product_importers` (review W21-R5D-A r1, F-1)."""
+    references = set()
+    for path in APP.rglob("*.py"):
+        if "tests" in path.parts:
+            continue
+        for node in ast.walk(ast.parse(path.read_text())):
+            if (
+                (isinstance(node, ast.Name) and node.id == name)
+                or (isinstance(node, ast.Attribute) and node.attr == name)
+                or (isinstance(node, ast.ImportFrom) and any(a.name == name for a in node.names))
+            ):
+                references.add(path.relative_to(APP).as_posix())
+    return references
+
+
 def test_only_the_brief_capture_calls_the_action_check_and_only_it_calls_the_resolver() -> None:
     """Register gate G0 attaches to ``resolve_jurisdiction``'s first caller outside tests: #313's
     brief capture (W21 ADDR item 9, review r1 BC-4; COORDINATOR-RULINGS-ADDR-r1: the guard names
@@ -671,3 +690,5 @@ def test_only_the_brief_capture_calls_the_action_check_and_only_it_calls_the_res
     assert product_callers("resolve_jurisdiction") == {"jurisdiction/business_address.py"}
     assert product_importers("resolve_for_action") == {"briefs/service.py"}
     assert product_importers("resolve_jurisdiction") == {"jurisdiction/business_address.py"}
+    assert product_references("resolve_for_action") == {"briefs/service.py"}
+    assert product_references("resolve_jurisdiction") == {"jurisdiction/business_address.py"}
