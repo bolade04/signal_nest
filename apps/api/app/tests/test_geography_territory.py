@@ -179,6 +179,8 @@ def test_review_r1_c1_rows_ask(location, address):
         (ANCHORAGE, "Alabama Territory United States, 1 Main St, United States"),
         (ANCHORAGE, "1 Main St, Montgomery, Alabama Territory USA 36104"),
         (ANCHORAGE, "1 Main St, Montgomery, Alabama Territory 36104 USA"),
+        # Review r2's mutant N5: after "Territories" too.
+        (ANCHORAGE, "1 Main St, Montgomery, Alabama Territories USA"),
         (MONTGOMERY, "1 Main St, Montgomery, Alabama Territory USA"),
         (IKEJA, "1 Allen Ave, Ikeja, Lagos Territory Nigeria"),
         (DALLAS, "Lost Territory US, 1 Main St, Dallas, TX"),
@@ -187,6 +189,26 @@ def test_review_r1_c1_rows_ask(location, address):
 def test_ri1a_a_country_after_the_word_is_dropped_before_the_test(location, address):
     # Accepted on current main and at 78f0c30a, while "Alabama State USA" is refused for Anchorage.
     _asks(location, address)
+
+
+@pytest.mark.parametrize(
+    ("location", "address"),
+    [
+        (DALLAS, "Lost Territory Co, 1 Main St, Dallas, TX"),
+        (MONTGOMERY, "Lost Territory AL, 1 Main St, Montgomery"),
+    ],
+)
+def test_ri1a_a_two_letter_word_that_is_a_country_code_is_dropped_too(location, address):
+    # Review r2 C-1; the operator's answer of 2026-11-14, "Accept as built (Recommended)": a
+    # two-letter word after the word that is also a country's code is dropped, whatever it means in
+    # the address (a legal form, a state code), so these business names ask; leaving the part out
+    # resolves them.
+    _asks(location, address)
+    _resolves(
+        location,
+        address.replace("Lost Territory Co, ", "").replace("Lost Territory AL, ", ""),
+        location_code(location),
+    )
 
 
 def test_ri1a_the_country_stays_in_the_part_and_is_read():
