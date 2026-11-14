@@ -26,6 +26,12 @@ class RetentionClass(StrEnum):
     """The data classes with a time-based purge. Each has one duration setting.
 
     The setting is ``retention_<value>_days`` on :class:`~app.core.config.Settings`.
+
+    ``NOTIFICATIONS`` (Project Phase 5E in-app notifications) is operator ruling D-N4 item 30
+    (2026-11-12): "accept the retention-class structure. Implement notifications retention
+    with its duration unset and fail closed. O-5 durations remain unruled; do not invent
+    them." Its setting has no default like every other; while it is unset the sweep reports
+    ``policy_unset`` and deletes nothing.
     """
 
     AUTH_SESSIONS = "auth_sessions"
@@ -35,6 +41,7 @@ class RetentionClass(StrEnum):
     OPPORTUNITIES = "opportunities"
     JOB_HISTORY = "job_history"
     AUDIT_LOGS = "audit_logs"
+    NOTIFICATIONS = "notifications"
 
     @property
     def setting_name(self) -> str:
@@ -43,12 +50,16 @@ class RetentionClass(StrEnum):
 
 #: Classes whose rows belong to a workspace: purged by the per-workspace
 #: ``retention.purge`` durable job, inside that job's tenant scope.
+#: ``NOTIFICATIONS`` is deliberately NOT one, although its rows carry a workspace (5E
+#: interface sheet B, settlement P1): ``enqueue_purge`` refuses it, ``run_purge_job`` refuses
+#: it, and no ``JobType`` exists that could dispatch it (5E exit criterion 6).
 WORKSPACE_CLASSES: frozenset[RetentionClass] = frozenset(
     {RetentionClass.SIGNAL_EVIDENCE, RetentionClass.OPPORTUNITIES, RetentionClass.JOB_HISTORY}
 )
-#: Classes with no workspace (account credentials, organization invitations, audit
-#: records): purged by the sweep itself in bounded, separately committed batches,
-#: because a durable job row requires an organization and a workspace.
+#: Every other class (account credentials, organization invitations, audit records, and
+#: in-app notifications): purged by the sweep itself in bounded, separately committed
+#: batches, and only once its duration is set. A durable job row requires an organization
+#: and a workspace; notifications are kept out of the job path by ruling (above).
 PLATFORM_CLASSES: frozenset[RetentionClass] = frozenset(RetentionClass) - WORKSPACE_CLASSES
 
 
@@ -143,10 +154,17 @@ TABLES: dict[str, TableEntry] = {
         # and soft-delete instants - no text) and its per-event opt-outs in a workspace. The
         # account's own data: listed in its account export, never in the organization export
         # (another member's feed is not the organization's to take). Deleted with the account,
-        # the workspace or the organization (every key CASCADE). No time-based retention
-        # class: whether the feed is purged after a duration is undecided (O-5); the
-        # ``notifications.deleted_at`` marker is the 5E mechanism's, and no duration is set.
-        TableEntry("notifications", Category.ACCOUNT, exported=False),
+        # the workspace or the organization (every key CASCADE). Notifications are also purged
+        # by age with their own class (operator ruling D-N4 item 30): its duration is unset
+        # and undecided (O-5), so the sweep deletes none (``policy_unset``), and the class is
+        # never a workspace class (no durable job, no ``JobType``). Preferences have no class:
+        # they are settings, kept while their account, workspace and organization are.
+        TableEntry(
+            "notifications",
+            Category.ACCOUNT,
+            exported=False,
+            retention_class=RetentionClass.NOTIFICATIONS,
+        ),
         TableEntry("notification_preferences", Category.ACCOUNT, exported=False),
         TableEntry("workspaces", _TENANT),
         TableEntry("workspace_capability_overrides", _TENANT),
