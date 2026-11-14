@@ -2222,7 +2222,8 @@ def test_t9_with_several_rules_the_first_failing_step_then_the_first_failing_rul
 ) -> None:
     """T-9 (ADDR design v3 §4.1; review d1 C-2): each step runs over every rule, in the
     capture's (created_at, id) order, before the next: a later rule's earlier step decides over
-    an earlier rule's later step, and within one step the earlier rule decides."""
+    an earlier rule's later step (2 over 5 and 6, 3 over 4, 4 over 5, 5 over 6), and within one
+    step the earlier rule decides."""
     world = capture_world
     ws = world.workspace("t9 several rules")
     town = {**DALLAS_COMPLETE, "business_address_locality": "Irving"}
@@ -2239,6 +2240,14 @@ def test_t9_with_several_rules_the_first_failing_step_then_the_first_failing_rul
         # step 5 (rule 0) against step 4 (rule 1): completeness decides
         ([{**DALLAS_COMPLETE, "business_address": "1 FM 1960"}, {}],
          BUSINESS_ADDRESS_INCOMPLETE),
+        # step 4 (rule 0: empty fields) against step 3 (rule 1: a text naming another state):
+        # the text refusal decides (review r2 INFO-1)
+        ([{}, {**DALLAS_COMPLETE, "business_address": "Tulsa, OK"}],
+         BUSINESS_ADDRESS_TEXT_CONFLICT),
+        # step 6 (rule 0: an unconfirmed town) against step 5 (rule 1: an ambiguous text): the
+        # text's question decides, so a town is never asked about before the text (INFO-1)
+        ([town, {**DALLAS_COMPLETE, "business_address": "1 FM 1960"}],
+         ADDRESS_ROUTE_AMBIGUOUS),
     ):  # fmt: skip
         opp, record, location_id = evidence(
             world, ws, location=DALLAS_FIELDS, structured=False

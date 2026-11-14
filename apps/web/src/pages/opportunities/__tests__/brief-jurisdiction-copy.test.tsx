@@ -299,6 +299,8 @@ describe('#313: a capture refused with a category shows that category’s static
       const { screen, alert } = await refusalShown();
       expect(alert.textContent).toBe(`No brief was generated. ${ACTION_CLARIFICATIONS[reason]}`);
       expect(document.body.textContent ?? '').not.toContain(SERVER_MARKER);
+      // Nor in any attribute (a title or an aria-label): review r2 INFO-2.
+      expect(document.body.innerHTML).not.toContain(SERVER_MARKER);
       expect(alert.textContent ?? '').not.toMatch(CODE);
       await new Promise((r) => setTimeout(r, 50));
       expect(screen.queryByText('No brief was saved')).toBeNull(); // inline only: no toast
@@ -317,6 +319,8 @@ describe('#313: a capture refused with a category shows that category’s static
       const { alert } = await refusalShown();
       expect(alert).toHaveTextContent(GENERIC);
       expect(document.body.textContent ?? '').not.toContain(SERVER_MARKER);
+      // Nor in any attribute (a title or an aria-label): review r2 INFO-2.
+      expect(document.body.innerHTML).not.toContain(SERVER_MARKER);
       for (const copy of Object.values(ACTION_CLARIFICATIONS)) {
         expect(alert.textContent ?? '').not.toContain(copy);
       }

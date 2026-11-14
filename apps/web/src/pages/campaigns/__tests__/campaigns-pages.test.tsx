@@ -662,6 +662,7 @@ describe('deleting a campaign that a brief or draft refers to (D-N4 item 37)', (
     expect(text).toMatch(KEPT_AS_WRITTEN);
     expect(text).not.toMatch(/changed at the same time|try again/i);
     expect(document.body.textContent ?? '').not.toContain(SERVER);
+    expect(document.body.innerHTML).not.toContain(SERVER); // nor in an attribute (r2 INFO-2)
     // Still on the campaign, which is still listed.
     expect(screen.getByRole('heading', { name: 'Spring opening' })).toBeInTheDocument();
     expect(rows.map((r) => r.id)).toContain(CAMPAIGN_A);
