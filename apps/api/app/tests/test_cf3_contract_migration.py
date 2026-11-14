@@ -80,6 +80,11 @@ HEAD = "1574637e56d3"
 CF2 = "a7d2e9f4c1b8"
 OVERRIDES = "workspace_capability_overrides"
 NEW_TABLES = {"campaign_locations", "exports", "notifications", "notification_preferences"}
+#: Capabilities registered after CF-3, which CF-3's own capability CHECK therefore lacks: 5E-CF's
+#: ``notifications_analytics`` (operator ruling O-12(B)), admitted by a later CHECK-widening
+#: revision. The code head's CHECK is compared with the whole registry by
+#: ``test_cf1_contract_migration`` and ``test_cf2_contract_migration``.
+AFTER_CF3_CAPABILITIES = {"notifications_analytics"}
 MIGRATION = next((API_DIR / "alembic" / "versions").glob(f"*-{CF3}_*.py"))
 
 #: The jurisdiction CHECK of every table that carries a jurisdiction column.
@@ -201,7 +206,7 @@ def test_vocabulary_checks_equal_their_authorities(migrated: Path) -> None:
         ("notification_preferences", "ck_notification_preference_event_code", "event_code",
          {e.value for e in NotificationEventCode}),
         (OVERRIDES, "ck_workspace_capability_override_capability", "capability",
-         set(persisted_values())),
+         set(persisted_values()) - AFTER_CF3_CAPABILITIES),
     ):
         in_db = _in_list(_checks(migrated, table)[name], column)
         assert (in_db - authority, authority - in_db) == (set(), set()), name

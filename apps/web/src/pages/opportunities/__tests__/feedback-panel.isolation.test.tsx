@@ -53,6 +53,7 @@ function enableCapability(enabled = true, globalFlag = false) {
           recommendation_briefs_enabled: false,
           creative_generation_enabled: false,
           content_export_enabled: false,
+          notifications_analytics_enabled: false,
         },
       }),
     ),

@@ -229,30 +229,63 @@ decision O-11, resolved 2026-09-01).
 ## 4. Exit criteria (all TRUE with artifacts)
 
 1. Migrations round-trip; single head.
-2. **Honest live-surface ledger (corrected — 'every 5E endpoint dark' was false).**
-   Only **export** is capability-gated (`content_export_enabled` /
-   `Capability.CONTENT_EXPORT`); with that flag off every export endpoint 503s.
-   **Notifications and analytics have no flag and no capability** — O-4 fixes the
-   Phase 5 flag set at exactly three, so a fourth cannot be introduced inside this
-   plan. Their true state at merge is therefore **live, not dark**:
-   (a) the notification **list** is live and returns empty until upstream emitters
-   fire (those emitters are gated by their parent milestones' flags);
-   (b) the notification **mark-read** route is a **live, ungated write** carrying
-   the round's only new cross-user IDOR class — it is the highest-risk surface in
-   5E and must be treated as such in R-5E. **R-5E carries a second binding
-   instruction for the same reason:** `apps/web/src/api/queryKeys.ts` gains a
-   **per-user** scope dimension in the CF-3 payload (D15 PM), where every existing
-   key is at most workspace-scoped. The key factory is the frontend cache-isolation
-   boundary, so this is a **design change to an isolation control, not a
-   transcription**, and R-5E must review it as such rather than as a routine key
-   addition. It is freeze-owned (master plan §6.3) and covered by the
-   contract-equality checker, but neither control substitutes for the review;
-   (c) **analytics aggregates over existing `opportunities` rows and therefore
-   returns real, non-empty tenant data at merge** — it is live and NOT inert.
-   Whether notifications/analytics should be flagged is an **operator decision**
-   (a fourth flag would amend O-4) and is recorded here as an open question, not
-   resolved by this plan. Notifications for 5A/5B events
-   fire only when their parent features are enabled.
+2. **Honest live-surface ledger — amended by operator ruling O-12(B) (2026-11-12).** The
+   ruling, verbatim: "Choose O-12(B): one additional flag for the notifications and
+   analytics surfaces, off by default. Explicitly amend O-4’s three-flag limit. Gate the
+   backend routes, customer UI and applicable notification emission consistently." The
+   ledger the 5E merge must make true is therefore:
+   (a) **export** is capability-gated (`content_export_enabled` /
+   `Capability.CONTENT_EXPORT`); with that flag off every export endpoint answers 503;
+   (b) **notifications and analytics** are capability-gated by the fourth Phase 5 flag,
+   `notifications_analytics_enabled` / `Capability.NOTIFICATIONS_ANALYTICS` (global
+   default `False`, enableable per workspace as O-3 set for the Phase 5 flags,
+   `future_activation_phase="5E"`), decided only through the deny-biased capability
+   resolver, never a raw flag read. While it does not resolve enabled for a workspace,
+   the notification feed, mark-read and preference routes and the analytics route answer
+   the dark 503, the notification emitter writes no row for that workspace, and the
+   customer UI makes no feed or analytics request (the shell bell keeps its placeholder;
+   the analytics page and the Overview summary are not shown);
+   (c) **live while dark, disclosed here:** the workspace-effective reflection routes
+   `GET /workspaces/{ws}/export-capability` and
+   `GET /workspaces/{ws}/notifications-analytics-capability` answer 200 with the
+   resolver's answer, and `GET /system/capabilities` reflects the raw global flags (all
+   `False`) per O-4 (`ALT_expose_all`);
+   (d) the notification **mark-read** route still carries the round's only new
+   cross-user IDOR class and stays the highest-risk surface in 5E for R-5E, and R-5E
+   keeps the binding instruction on the **per-user** dimension in
+   `apps/web/src/api/queryKeys.ts` (an isolation-control change, not a transcription), as
+   the superseded text below states;
+   (e) once the flag is enabled for a workspace, analytics aggregates existing tenant
+   rows and returns real, non-empty data. Enabling it is an activation, which needs its
+   own operator authorization (master plan §10).
+   Notifications for 5A/5B events fire only when their parent features are enabled.
+
+   *Superseded wording (before O-12(B); kept as written):*
+   > **Honest live-surface ledger (corrected — 'every 5E endpoint dark' was false).**
+   > Only **export** is capability-gated (`content_export_enabled` /
+   > `Capability.CONTENT_EXPORT`); with that flag off every export endpoint 503s.
+   > **Notifications and analytics have no flag and no capability** — O-4 fixes the
+   > Phase 5 flag set at exactly three, so a fourth cannot be introduced inside this
+   > plan. Their true state at merge is therefore **live, not dark**:
+   > (a) the notification **list** is live and returns empty until upstream emitters
+   > fire (those emitters are gated by their parent milestones' flags);
+   > (b) the notification **mark-read** route is a **live, ungated write** carrying
+   > the round's only new cross-user IDOR class — it is the highest-risk surface in
+   > 5E and must be treated as such in R-5E. **R-5E carries a second binding
+   > instruction for the same reason:** `apps/web/src/api/queryKeys.ts` gains a
+   > **per-user** scope dimension in the CF-3 payload (D15 PM), where every existing
+   > key is at most workspace-scoped. The key factory is the frontend cache-isolation
+   > boundary, so this is a **design change to an isolation control, not a
+   > transcription**, and R-5E must review it as such rather than as a routine key
+   > addition. It is freeze-owned (master plan §6.3) and covered by the
+   > contract-equality checker, but neither control substitutes for the review;
+   > (c) **analytics aggregates over existing `opportunities` rows and therefore
+   > returns real, non-empty tenant data at merge** — it is live and NOT inert.
+   > Whether notifications/analytics should be flagged is an **operator decision**
+   > (a fourth flag would amend O-4) and is recorded here as an open question, not
+   > resolved by this plan. Notifications for 5A/5B events
+   > fire only when their parent features are enabled.
+
 3. Export preconditions each have a failing negative test: unapproved draft,
    blocked review, **approve-then-reject (latest decision not approved)**,
    revoked approval, wrong version, wrong role, cross-workspace subject — all

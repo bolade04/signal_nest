@@ -557,9 +557,23 @@ class Settings(BaseSettings):
     #: decision (the deny-biased ``_require_feedback_feature`` pattern), never this raw
     #: flag. CF-3 adds the flag, the capability and the contracts only: nothing consumes it
     #: yet. Activation additionally needs O-5 and the verified NULL-jurisdiction refusal
-    #: (Project Phase 5 plan §10). Notifications and analytics have no flag (open O-12).
+    #: (Project Phase 5 plan §10). Notifications and analytics have their own flag below
+    #: (operator ruling O-12(B), 2026-11-12).
     content_export_enabled: bool = False
     # --- Project Phase 5E: audited manual export (W21 CF-3) — END --------------
+
+    # --- Project Phase 5E: notifications and analytics (W21 5E-CF) — BEGIN -----
+    #: Master switch for the in-app notifications and status-analytics surfaces (dark by
+    #: default). Operator ruling O-12(B) (2026-11-12): "one additional flag for the
+    #: notifications and analytics surfaces, off by default. Explicitly amend O-4’s
+    #: three-flag limit. Gate the backend routes, customer UI and applicable notification
+    #: emission consistently." Bound to ``Capability.NOTIFICATIONS_ANALYTICS``, which is
+    #: ``workspace_enableable`` (O-3's pattern), so availability is the capability
+    #: resolver's per-workspace decision (``effective_enabled`` only), never this raw flag.
+    #: 5E-CF adds the flag and the capability only: the notification and analytics routes,
+    #: the emitter and the customer UI gate on it when they land (5E lanes).
+    notifications_analytics_enabled: bool = False
+    # --- Project Phase 5E: notifications and analytics (W21 5E-CF) — END -------
 
     # --- LLM -----------------------------------------------------------------
     llm_provider: LLMProvider = "mock"
@@ -634,6 +648,13 @@ class Settings(BaseSettings):
     retention_opportunities_days: int | None = None
     retention_job_history_days: int | None = None
     retention_audit_logs_days: int | None = None
+    #: Project Phase 5E in-app notifications (W21 5E-CF). Operator ruling on D-N4 item 30
+    #: (2026-11-12): "accept the retention-class structure. Implement notifications
+    #: retention with its duration unset and fail closed. O-5 durations remain unruled; do
+    #: not invent them." Unset like its siblings and bounded the same way. It is purged, and
+    #: becomes required in production, through ``RetentionClass.NOTIFICATIONS`` (5E-W1),
+    #: whose sweep refuses the class (``policy_unset``) while this is unset.
+    retention_notifications_days: int | None = None
     #: Root rows one purge batch deletes (with their dependents). 1..10000.
     retention_purge_batch_size: int = 500
     #: Batches per class per sweep, and links per workspace job chain. >= 1.
@@ -1263,11 +1284,20 @@ class Settings(BaseSettings):
         from app.privacy.inventory import RetentionClass
 
         errors: list[str] = []
-        for data_class in RetentionClass:
-            name = data_class.setting_name
+        # Every class the purge knows (``RetentionClass``) needs its duration in production.
+        # Every ``retention_<class>_days`` setting is bounded, also one declared before its
+        # class is registered (W21 5E-CF's ``retention_notifications_days``, whose class
+        # ``RetentionClass.NOTIFICATIONS`` 5E-W1 adds; from then on it is required too).
+        required = [data_class.setting_name for data_class in RetentionClass]
+        durations = required + [
+            name
+            for name in type(self).model_fields
+            if name.startswith("retention_") and name.endswith("_days") and name not in required
+        ]
+        for name in durations:
             value = getattr(self, name)
             if value is None:
-                if self.is_production and not self.migration_mode:
+                if name in required and self.is_production and not self.migration_mode:
                     errors.append(
                         f"{name} must be set explicitly in production (retention durations "
                         "are an operator/legal decision, O-5 / P6-D05; there is no default)"
