@@ -11,6 +11,8 @@ import { InvitePage } from '@/pages/invite/InvitePage';
 import { OverviewPage } from '@/pages/Overview';
 import { OnboardingPage } from '@/pages/Onboarding';
 import { CampaignContextPage } from '@/pages/CampaignContext';
+import { CampaignsPage } from '@/pages/campaigns/CampaignsPage';
+import { CampaignDetailPage } from '@/pages/campaigns/CampaignDetailPage';
 import { LocationsPage } from '@/pages/Locations';
 import { ScoutRequestsPage } from '@/pages/ScoutRequests';
 import { ScoutRequestDetailPage } from '@/pages/ScoutRequestDetail';
@@ -41,6 +43,10 @@ export function App() {
           <Route index element={<OverviewPage />} />
           <Route path="onboarding" element={<OnboardingPage />} />
           <Route path="context" element={<CampaignContextPage />} />
+          {/* Phase 5D campaigns (I-5D): 5D-W1's dedicated campaigns router, which is live; 5D
+              adds no flag, so neither do these routes (campaignVocabulary.ts CAMPAIGNS_PATH). */}
+          <Route path="campaigns" element={<CampaignsPage />} />
+          <Route path="campaigns/:campaignId" element={<CampaignDetailPage />} />
           <Route path="locations" element={<LocationsPage />} />
           <Route path="scout-requests" element={<ScoutRequestsPage />} />
           <Route path="scout-requests/:requestId" element={<ScoutRequestDetailPage />} />

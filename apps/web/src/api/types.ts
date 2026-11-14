@@ -124,6 +124,13 @@ export type BrandVoiceIn = S['BrandVoiceIn'];
 export type OfferIn = S['OfferIn'];
 export type ClaimIn = S['ClaimIn'];
 export type CampaignIn = S['CampaignIn'];
+// ---- Project Phase 5D campaigns: the dedicated router (5D-W1; I-5D share) ----
+// Generated contract types only. `CampaignOut` is projected: no tenant columns.
+export type CampaignMode = S['CampaignMode'];
+export type CampaignStatus = S['CampaignStatus'];
+export type CampaignOut = S['CampaignOut'];
+export type CampaignPatch = S['CampaignPatch'];
+// ---- end Phase 5D campaigns ----
 export type SourcePrefIn = S['SourcePrefIn'];
 export type ChannelPrefIn = S['ChannelPrefIn'];
 

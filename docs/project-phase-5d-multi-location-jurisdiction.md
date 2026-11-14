@@ -86,6 +86,20 @@ test matrix, **not** a launch-market assertion.
   would collapse them. The `UNRESOLVED` sentinel stays where this section already puts
   it: in the `JurisdictionResolution` **return value**, not in the column.
 
+  **Which rows are `NULL` (added at 5D-W3's integration; operator rulings of 2026-11-08 on
+  item 31 and on Q-4).** Exactly two cases, and `NULL` keeps the meaning above in both:
+  (i) a brief or draft written before 5D-W3 captured a jurisdiction, whether before CF-3 (the
+  residual pre-CF-3 cohort below) or between CF-3 and 5D-W3; and (ii) a brief whose
+  opportunity has **no location** at capture
+  (`location_id IS NULL`, for example an opportunity from a workspace-wide scout, or one
+  whose location was deleted), which ruling Q-4 allows: no resolution is attempted, so none
+  is captured. An existing location that does not resolve is **refused** at capture, before
+  any model call, and is never stored as `NULL`; so is a location reference outside the
+  opportunity's workspace and organization. Item 31 (ruled 31-A) refuses generation from
+  every `NULL` brief, so no draft is written with `NULL` after 5D-W3; the 5E export
+  service, not built yet, must refuse every `NULL` row (export precondition 5). Nothing is
+  inferred, defaulted or back-filled.
+
   **An earlier draft proposed `NOT NULL` + an `UNRESOLVED` sentinel on these populated
   tables. That is REFUTED and must not be reinstated.** 5E §2 states export precondition
   5 as literally `jurisdiction_code IS NOT NULL` — *"an explicit refusal, not an
@@ -118,6 +132,10 @@ test matrix, **not** a launch-market assertion.
   drop-and-report discipline specified for `campaign_locations` (unresolvable
   rows reported, never silently defaulted), **or** a recorded operator decision
   to block generation and export for any row whose `jurisdiction_code` is NULL.
+  *(2026-11-08: the operator recorded the second branch, item 31 = 31-A: generation and
+  export are refused for any brief or draft whose `jurisdiction_code` is NULL; nothing is
+  inferred or defaulted, and existing records receive no back-fill. 5D-W3 enforces the
+  generation half; the export half is 5E-W1's precondition 5.)*
   The 5E export service enforces the NULL refusal independently as
   defence-in-depth (5E §2), and master plan §10 makes this a precondition of 5A
   activation. Jurisdiction-conditioned claim rules

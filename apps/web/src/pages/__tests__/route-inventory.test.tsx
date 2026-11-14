@@ -2,9 +2,10 @@ import { within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { useLocation } from 'react-router-dom';
 import { useAuth } from '@/auth/AuthContext';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { App } from '@/App';
 import { API_PREFIX } from '@/api/config';
+import { contextModel } from '@/test/handlers';
 import { server } from '@/test/server';
 import { renderApp, renderProductionApp } from '@/test/utils';
 
@@ -13,6 +14,10 @@ import { renderApp, renderProductionApp } from '@/test/utils';
  * catch-all — as the router resolves them (P6-CI-7, react-router 6 → 7). Written and
  * passing on react-router 6.30.6 before the version change, and kept unchanged across it,
  * so a router upgrade that resolves, guards or redirects any route differently fails here.
+ * Since I-5D the inventory has 18: the Phase 5D campaign pages at `/campaigns` and
+ * `/campaigns/:campaignId`, which no flag gates. The flag-gated routes mounted at I-5B
+ * (`/approvals`) and I-5C (`/creative`, `/creative/:briefId`) are not in this inventory;
+ * their integration suites cover them.
  */
 
 /** The router's current URL, as the app sees it. */
@@ -69,6 +74,8 @@ const PROTECTED_ROUTES: ReadonlyArray<readonly [path: string, heading: string, a
   ['/scout-requests/scout-loc-dallas', 'Dallas demand scan', 'Scout Requests'],
   ['/opportunities', 'Opportunities', 'Opportunities'],
   ['/opportunities/opp-loc-dallas-0', 'Dallas customers want faster delivery 1', 'Opportunities'],
+  ['/campaigns', 'Campaigns', 'Campaigns'],
+  ['/campaigns/cmp-inventory-1', 'Inventory spring launch', 'Campaigns'],
   ['/settings', 'Settings', 'Settings'],
   ['/operations', 'Operations', 'Operations'],
 ];
@@ -82,9 +89,16 @@ function activeNavLabels(screen: Screen): string[] {
 }
 
 describe('route inventory (plan §5A.3)', () => {
+  beforeEach(() => {
+    // The campaign the detail route opens, stored in the mock of 5D-W1's campaigns router.
+    contextModel.reset();
+    contextModel.seed('campaigns', 'cmp-inventory-1', { name: 'Inventory spring launch' });
+  });
+
   it('declares exactly the inventoried paths', () => {
-    // 6 public + 10 protected = 16 declared routes; the catch-all is covered below.
-    expect(PUBLIC_ROUTES.length + PROTECTED_ROUTES.length).toBe(16);
+    // 6 public + 12 protected = 18 declared routes (16 before I-5D added the two campaign
+    // routes); the catch-all is covered below.
+    expect(PUBLIC_ROUTES.length + PROTECTED_ROUTES.length).toBe(18);
   });
 
   it.each(PUBLIC_ROUTES)('%s renders its public page signed out', async (path, heading) => {

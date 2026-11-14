@@ -31,9 +31,10 @@ what the entry does, so the review can only become stricter (fail closed):
   draft's jurisdiction is a code known to lie outside every one of the entry's codes (the
   gate's ``excluded`` limb: a code that may overlap one of them, or an entry value that is
   not a code, cannot be ruled out);
-* a draft with **no jurisdiction** (``None``: none was captured, the state of every draft until
-  lane 5D-W3 captures one) or an ``UNRESOLVED`` or malformed one therefore gets every
-  restricted entry that restricts and none that permits.
+* a draft with **no jurisdiction** (``None``: none was captured, which since 5D-W3 is only a
+  legacy draft, generation being refused from a brief without one) or an ``UNRESOLVED`` or
+  malformed one therefore gets every restricted entry that restricts and none that permits
+  (ruling B-2).
 
 An entry with ``NULL`` or an empty list applies everywhere, as before.
 

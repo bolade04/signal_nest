@@ -48,8 +48,10 @@ from app.llm.models import LLMUsageEvent
 from app.llm.prompts import get_prompt
 from app.llm.providers_real import AnthropicProvider
 from app.llm.service import LLMService, compute_input_hash, get_llm_service
+from app.locations.models import BusinessLocation
 from app.main import app
 from app.opportunities.models import Opportunity, ValidationEvidence
+from app.tests._address_support import complete_rule
 from app.tests._auth2_support import live_bearer
 from app.tests._llm_offline import offline_llm, offline_settings
 
@@ -72,6 +74,11 @@ EXPLAINED = {
     "recommended_action": "Publish a brand-safe post about faster service.",
     "risk_note": "Use only approved claims.",
     "suggested_angles": ["Speed you can count on", "Morning rush, handled"],
+}
+#: Each market's location fields: both resolve (5D-W3 captures US-TX and GB).
+_LOCATION_FIELDS = {
+    "dallas": {"state_province": "TX", "country": "US"},
+    "london": {"state_province": None, "country": "GB"},
 }
 
 
@@ -116,6 +123,15 @@ def _seed_market(s, key: str) -> Market:
                                  role=role.value))
     s.add(Brand(id=f"br-{key}", organization_id=org_id, workspace_id=ws_id, name=f"Brand {key}"))
     s.flush()
+    # The market's location, which resolves to a jurisdiction (5D-W3 capture: US-TX, GB), with
+    # the complete structured business address the capture's check requires since #313.
+    place = BusinessLocation(id=f"loc-{key}", organization_id=org_id, workspace_id=ws_id,
+                             brand_id=f"br-{key}", name=key.title(), city=key.title(),
+                             **_LOCATION_FIELDS[key])
+    s.add(place)
+    s.flush()
+    s.add(complete_rule(place))
+    s.flush()
     s.add(ScoutRequest(id=f"sr-{key}", organization_id=org_id, workspace_id=ws_id,
                        brand_id=f"br-{key}", name=f"scout {key}"))
     s.add(Campaign(id=f"camp-{key}", organization_id=org_id, workspace_id=ws_id,
@@ -142,7 +158,7 @@ def _seed_market(s, key: str) -> Market:
             scout_request_id=f"sr-{key}", normalized_signal_id=f"ns-{key}{suffix}",
             opportunity_id=f"opp-{key}{suffix}", analysis_version="3c", scoring_version="3c.1",
             fingerprint=f"fp-{key}{suffix}", enricher="deterministic", accepted=True,
-            classification="emerging"))
+            classification="emerging", location_id=f"loc-{key}"))
         s.flush()
     evidence = []
     for n in range(2):
