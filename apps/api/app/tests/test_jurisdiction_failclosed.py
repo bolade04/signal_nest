@@ -77,6 +77,7 @@ from app.jurisdiction.resolver import (
     ADDRESS_PLACE_UNCLEAR,
     ADDRESS_ROUTE_AMBIGUOUS,
     ADDRESS_SUFFIX_AMBIGUOUS,
+    ADDRESS_TERRITORY_UNCLEAR,
     CLARIFICATIONS,
     JurisdictionResolution,
     code_within,
@@ -1795,16 +1796,18 @@ DALLAS_FIELDS = MATRIX_LOCATIONS["dallas"][0]
 DALLAS_COMPLETE = complete_address_of(DALLAS_FIELDS)
 
 #: One free text per category of the free-text reader (``resolver.CLARIFICATIONS``), each asked
-#: for the Dallas, TX location with its complete structured address (the check's step 5).
-#: RI-1 SLOT (lane GEO-P4): a category GEO-P4 adds to ``resolver.CLARIFICATIONS`` needs one
-#: text here, GEO-P4's own; ``test_the_reader_samples_cover_the_readers_vocabulary`` fails until
-#: it is given. None is invented before GEO-P4's final list.
+#: for the Dallas, TX location with its complete structured address (the check's step 5). A
+#: category added to ``resolver.CLARIFICATIONS`` needs one text here, the adding lane's own;
+#: ``test_the_reader_samples_cover_the_readers_vocabulary`` fails until it is given. RI-1's
+#: (GEO-P4, #321) is GEO-P4's own row for its Dallas location, from the region-slot test of
+#: ``test_geography_territory``.
 READER_SAMPLES = {
     ADDRESS_SUFFIX_AMBIGUOUS: "1500 Broadway Hartford CT",
     ADDRESS_NAMES_ANOTHER_PLACE: "Victoria, 1 Main St, Dallas, TX",
     ADDRESS_PLACE_UNCLEAR: "Washington, 1 Main St, Dallas",
     ADDRESS_DIRECTION_AMBIGUOUS: "1200 Main St, SE",
     ADDRESS_ROUTE_AMBIGUOUS: "1 FM 1960",
+    ADDRESS_TERRITORY_UNCLEAR: "1 Main St, Dallas, Texas Territory, USA",
 }
 
 #: (category, location fields, coverage addresses, structured fields for ``evidence``): every

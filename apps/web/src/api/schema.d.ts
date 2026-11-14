@@ -1963,7 +1963,8 @@ export interface paths {
          *     ``location_unresolved``, ``business_address_incomplete``, ``business_address_conflict``,
          *     ``business_address_text_conflict``, ``business_address_locality_unconfirmed``, or one of
          *     the business-address text's ``address_suffix_ambiguous``, ``address_names_another_place``,
-         *     ``address_place_unclear``, ``address_direction_ambiguous`` and ``address_route_ambiguous``.
+         *     ``address_place_unclear``, ``address_direction_ambiguous``, ``address_route_ambiguous`` and
+         *     ``address_territory_unclear``.
          *     It answers 429 ``llm_budget_exhausted`` when the workspace's AI budget is spent, 503
          *     ``brief_generation_unavailable`` when the model call fails, 422 ``brief_withheld`` when the
          *     output fails the safety screen, and 409 when a concurrent capture took the version; none

@@ -48,9 +48,9 @@ describe('the structured business-address clarifications (W21 ADDR)', () => {
 /**
  * #313 (the brief capture's clarification contract): the free-text reader's categories, RI-1's
  * among them, and the composed vocabulary the brief panel shows by `error.details.reason`. The
- * API checks every line word for word (`test_business_address_action`); here the keys and the
- * composition are pinned. RI-1's wording is provisional until lane GEO-P4 merges, so it is not
- * pinned here; it lives only in `jurisdictionClarifications.ts`.
+ * API checks every line word for word (`test_business_address_action`), RI-1's (GEO-P4, #321)
+ * among them; here the keys and the composition are pinned, and the wording lives only in
+ * `jurisdictionClarifications.ts`.
  */
 describe('the reader categories and the composed vocabulary (#313)', () => {
   it('names exactly the reader’s six categories, RI-1’s territory category among them', () => {

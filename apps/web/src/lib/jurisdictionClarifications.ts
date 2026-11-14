@@ -29,10 +29,7 @@ export const READER_CLARIFICATIONS: Readonly<Record<string, string>> = {
   address_place_unclear: "We couldn't tell whether a word in the business address is a state, province or country, or the name of a town. If it is the town, write the state, province or region code right after it without a comma (for example 'Washington DC' or 'Victoria BC'), or leave the town out. If it is a state, province or country, write its full name (for example 'Lagos State' or 'Nigeria') after the town, separated by a comma. If it is the name of the business or a building, leave it out of the address. Otherwise correct or remove it.",
   address_route_ambiguous: "We couldn't tell whether a route or unit number in the business address (such as 'SR 520', 'FM 1960' or 'Unit 5 NY 10001') is part of the street or a state or country. After it, write the town and the state or province in full, separated by commas (for example '1 SR 520, Redmond, Washington'), or write the road's name in full (for example '1 State Route 520').",
   address_direction_ambiguous: "We couldn't tell whether a part of the business address that is only a direction (such as 'NE' or 'SE') is the street's direction or a state or country. Write the direction in full after the street name (for example '1200 Pennsylvania Avenue Southeast'), or add the city and state or country after a comma.",
-  // RI-1 SLOT (lane GEO-P4): the category the coordinator named on 2026-11-13. Its wording is
-  // GEO-P4's provisional message, not final until GEO-P4's review: after GEO-P4 merges, replace
-  // the text on the next line with the reader's final message (the API's test then checks it
-  // word for word; until then it checks only that the key is here).
+  // RI-1 (GEO-P4, #321): the reader's final message, which the API's test checks word for word.
   address_territory_unclear: "We couldn't match a territory named in the business address to a present-day state, province, region or country: a historical territory's borders are not a present-day state's. Write the present-day state, province, region or country instead, by its full name or its code (for example 'North Dakota' or 'ND', or 'Lagos State'), or leave that part out of the address.",
 };
 
