@@ -2,6 +2,7 @@ import { http, HttpResponse } from 'msw';
 import { API_PREFIX } from '@/api/config';
 import type {
   CapabilityEffective,
+  CapabilityRegistryItem,
   LocationOut,
   OpportunityDetail,
   OpportunitySort,
@@ -437,7 +438,19 @@ const capabilityRegistryItems = [
     workspace_disableable: true,
     future_activation_phase: '5E',
   },
-] as const;
+  {
+    // Project Phase 5E (W21 5E-CF, operator ruling O-12(B)): one switch for the
+    // notifications and analytics surfaces; enableable per workspace, dark by default.
+    capability: 'notifications_analytics',
+    label: 'Notifications and Analytics',
+    global_flag_attr: 'notifications_analytics_enabled',
+    workspace_enableable: true,
+    workspace_disableable: true,
+    future_activation_phase: '5E',
+  },
+  // Typed against the API's registry item, so a capability value the API does not define
+  // fails type-check (the operations page test reads labels only).
+] as const satisfies readonly CapabilityRegistryItem[];
 
 interface OverrideRow {
   id: string;
@@ -1611,7 +1624,7 @@ export const handlers = [
       is_local_mode: true,
       all_configured: true,
       // Every registered capability ships dark by default, mirroring the server
-      // flags (`config.py`: all six default False). Tests that need a
+      // flags (`config.py`: all seven default False). Tests that need a
       // capability ON install a per-test `server.use(...)` override rather than
       // changing this shared default — so the dark path is what renders unless a
       // test explicitly opts out of it.
@@ -1622,6 +1635,7 @@ export const handlers = [
         recommendation_briefs_enabled: false,
         creative_generation_enabled: false,
         content_export_enabled: false,
+        notifications_analytics_enabled: false,
       },
     }),
   ),
