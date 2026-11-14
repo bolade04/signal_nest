@@ -167,6 +167,51 @@ def test_review_r1_c1_rows_ask(location, address):
     _asks(location, address)
 
 
+# --------------------------------------------------------------------------- #
+# Review r1 RI-1a (ruling P4-r1-R-2): a country's name or code after the word in the same part
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    ("location", "address"),
+    [
+        (ANCHORAGE, "1 Main St, Alabama Territory US, United States"),
+        (ANCHORAGE, "1 Main St, Montgomery, Alabama Territory USA"),
+        (ANCHORAGE, "Alabama Territory United States, 1 Main St, United States"),
+        (ANCHORAGE, "1 Main St, Montgomery, Alabama Territory USA 36104"),
+        (ANCHORAGE, "1 Main St, Montgomery, Alabama Territory 36104 USA"),
+        (MONTGOMERY, "1 Main St, Montgomery, Alabama Territory USA"),
+        (IKEJA, "1 Allen Ave, Ikeja, Lagos Territory Nigeria"),
+        (DALLAS, "Lost Territory US, 1 Main St, Dallas, TX"),
+    ],
+)
+def test_ri1a_a_country_after_the_word_is_dropped_before_the_test(location, address):
+    # Accepted on current main and at 78f0c30a, while "Alabama State USA" is refused for Anchorage.
+    _asks(location, address)
+
+
+def test_ri1a_the_country_stays_in_the_part_and_is_read():
+    reading = read_business_address("1 Main St, Montgomery, Alabama Territory USA")
+    assert reading.territories == ("Alabama Territory USA",)
+    # The country written after the word still contradicts another country's location.
+    _refused(NAIROBI, "1 Main St, Alabama Territory US, Kenya", "states country US")
+
+
+@pytest.mark.parametrize(
+    ("location", "address", "code"),
+    [
+        (DARWIN, "1 Main St, Darwin, Northern Territory AU", "AU-NT"),
+        (DARWIN, "1 Main St, Darwin, Northern Territory Australia", "AU-NT"),
+        (WHITEHORSE, "1 Main St, Whitehorse, Yukon Territory Canada", "CA-YT"),
+        (ABUJA, "1 Main St, Abuja, Federal Capital Territory Nigeria", "NG-FC"),
+    ],
+)
+def test_ri1a_a_listed_name_with_a_country_after_it_reads_as_before(location, address, code):
+    _resolves(location, address, code)
+
+
+def test_ri1a_the_state_twin_is_unchanged():
+    _refused(ANCHORAGE, "1 Main St, Montgomery, Alabama State USA", "states subdivision US-AL")
+
+
 @pytest.mark.parametrize(
     ("location", "address"),
     [

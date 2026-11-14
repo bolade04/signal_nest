@@ -931,30 +931,58 @@ _LISTED_TERRITORY_NAMES: Final = frozenset(
 _TERRITORY_WORD: Final = re.compile(r"(?<![A-Za-z])territor(?:y|ies)(?![A-Za-z])", re.IGNORECASE)
 
 
-def _unlisted_territory(part: str) -> bool:
-    """GEO-P4 (register RI-1; operator instruction of 2026-11-13): does ``part`` (one part as the
-    reader reads it, before any postcode) name a territory that the tables do not list: "<Name>
-    Territory" or "<Name> Territories" that no listed name ends ("Alabama Territory", "Dakota
-    Territory", "Lagos Territory", "Northwest Territory"), or "Territory of <Name>" or "Territories
-    of <Name>" ("Territory of Hawaii", "Territory of Yukon"), also after "the"? A historical
-    territory did not have a present-day state's borders, so its name is never read as one. A listed
-    name, alone or at the end of the part, is not one ("Northern Territory", "Darwin Northern
-    Territory", "State of Northwest Territories"); nor is "Territory" alone, or a part where the
-    word stands elsewhere ("Territory Rd", "Northern Territory of Australia")."""
+def _without_trailing_country(words: list[str]) -> list[str]:
+    """GEO-P4 (review W21-REV-GEO-P4 r1, register RI-1a; ruling P4-r1-R-2): ``words`` (one part,
+    folded, before any postcode) without a country's name or code written after a territory word,
+    and any postcode before it, as the postcode is dropped ("alabama territory us", "alabama
+    territory united states", "alabama territory usa 36104": "alabama territory"); ``words``
+    unchanged otherwise. The longest such country is dropped, and two words always remain."""
+    for k in range(len(words) - 2, 0, -1):
+        if _country_code(" ".join(words[-k:])) is None:
+            continue
+        rest = words[:-k]
+        while len(rest) > 1 and _HAS_DIGIT.search(rest[-1]):
+            rest = rest[:-1]
+        if rest[-1] in _TERRITORY_WORDS:
+            return rest
+    return words
+
+
+def _territory_form(part: str) -> str | None:
+    """GEO-P4 (register RI-1; operator instruction of 2026-11-13): ``"of"`` when ``part`` (one part
+    as the reader reads it) is "Territory of <Name>" or "Territories of <Name>" ("Territory of
+    Hawaii", "Territory of Yukon"), ``"suffix"`` when it is "<Name> Territory" or "<Name>
+    Territories" that no listed name ends ("Alabama Territory", "Dakota Territory", "Lagos
+    Territory", "Northwest Territory"), each also after "the", before any postcode and, for
+    "<Name> Territory", before a country's name or code after the word ("Alabama Territory USA";
+    review r1 RI-1a, ruling P4-r1-R-2); ``None`` otherwise. A historical territory did not have a
+    present-day state's borders, so its name is never read as one. A listed name, alone or at the
+    end of the part, is not one ("Northern Territory", "Darwin Northern Territory", "State of
+    Northwest Territories", "Northern Territory Australia"); nor is "Territory" alone, or a part
+    where the word stands elsewhere ("Territory Rd", "Northern Territory of Australia")."""
     words = _strip_postcode(fold(part)).split()
     if words[:1] == ["the"]:
         words = words[1:]
     if len(words) > 2 and words[0] in _TERRITORY_WORDS and words[1] == "of":
-        return True
+        return "of"
+    words = _without_trailing_country(words)
     if len(words) < 2 or words[-1] not in _TERRITORY_WORDS:
-        return False
-    return not any(" ".join(words[i:]) in _LISTED_TERRITORY_NAMES for i in range(len(words)))
+        return None
+    if any(" ".join(words[i:]) in _LISTED_TERRITORY_NAMES for i in range(len(words))):
+        return None
+    return "suffix"
+
+
+def _unlisted_territory(part: str) -> bool:
+    """GEO-P4: does ``part`` name a territory the tables do not list (:func:`_territory_form`)?"""
+    return _territory_form(part) is not None
 
 
 def _without_territory_names(text: str) -> str:
     """GEO-P4 (register RI-1): ``text`` with each part that names a territory the tables do not list
     (:func:`_unlisted_territory`) read as its territory word alone, as written, before any postcode
-    ("Alabama Territory" as "Territory", "Territory of Hawaii 96813" as "Territory 96813"). So no
+    and any country after it ("Alabama Territory" as "Territory", "Territory of Hawaii 96813" as
+    "Territory 96813", "Alabama Territory USA" as "Territory USA"; review r1 RI-1a). So no
     rule reads its name as a present-day area, in any position, and the part keeps its place as a
     word that names nothing, as "Alabama Territory" already was ("Lagos Territory" was read as Lagos
     State). The resolver asks about it (``BusinessAddressReading.territories``). A part that also
@@ -963,12 +991,18 @@ def _without_territory_names(text: str) -> str:
     pieces = re.split(f"({_PART_SEPARATORS.pattern})", text)
     for index in range(0, len(pieces), 2):
         piece = pieces[index]
-        word = _TERRITORY_WORD.search(piece)
-        if word is None or _CODE_TOKEN.search(piece) or not _unlisted_territory(piece):
+        words = list(_TERRITORY_WORD.finditer(piece))
+        form = _territory_form(piece)
+        if not words or form is None or _CODE_TOKEN.search(piece):
             continue
-        postcode = _TRAILING_POSTCODE.search(piece.rstrip())
         lead = piece[: len(piece) - len(piece.lstrip())]
-        pieces[index] = lead + word.group(0) + (postcode.group(0) if postcode else "")
+        if form == "of":
+            postcode = _TRAILING_POSTCODE.search(piece.rstrip())
+            pieces[index] = lead + words[0].group(0) + (postcode.group(0) if postcode else "")
+        else:
+            # Review r1 RI-1a (ruling P4-r1-R-2): what follows the word, a postcode or a country's
+            # name or code, stays as written ("Alabama Territory USA" as "Territory USA").
+            pieces[index] = lead + words[-1].group(0) + piece[words[-1].end() :]
     return "".join(pieces)
 
 
