@@ -14,13 +14,16 @@ review and the re-check read.
   (the draft carries the attacked form, the library the plain one) and on the entry side (the
   library holds the attacked form, the draft the plain one), in the stored review and in the
   re-check alike.
-* **Stated semantics, pinned.** A library entry matches as a case-insensitive *substring* of
-  the folded text (:func:`app.claims.engine.contains_phrase`): a blocked claim inside a longer
+* **Stated semantics, pinned.** A blocked claim matches as a case-insensitive *substring* of
+  the folded text (:func:`app.claims.engine.contains_claim`): a blocked claim inside a longer
   word blocks ("cure" blocks "secure"), the three text fields are matched as one text joined by
-  a line break, punctuation is significant, an entry that folds to nothing matches nothing,
-  and — the disclaimer side of the same rule — a required disclaimer is resolved by any text
-  that contains it, even inside a longer word. Cross-script confusables (Cyrillic "е" for
-  Latin "e") and non-whitespace blanks (U+2800) are outside the canonical form.
+  a line break, punctuation is significant, and an entry that folds to nothing matches nothing.
+  Since D-N4 item 39 a required disclaimer is resolved only as whole words
+  (:func:`app.claims.engine.carries_phrase`: "Avoid where prohibited." does not carry "Void
+  where prohibited."), and the review detects a blocked claim through the UTS #39 confusable
+  skeleton too (Cyrillic "е" for Latin "e"), and reads a Braille blank (U+2800) as a space;
+  the canonical form itself (:func:`app.claims.engine.fold`) is unchanged. The item-39 tests
+  are ``test_dn4_39_*``.
 * **Retired claims** never block or require; retiring and re-adding a text blocks again.
 * **Claims and disclaimers changed after a review** (the O-4 re-read) through the stewards'
   ``PATCH /claims`` route: a later blocking kind or wording refuses approval through the 5B
@@ -393,16 +396,18 @@ def test_nfkc_foldable_look_alikes_are_the_same_claim(look_alike):
         ("free⠀parking forever", "braille pattern blank: renders as a space, is not one"),
     ],
 )
-def test_cross_script_confusables_are_outside_the_canonical_form_stated(outside, why):
-    """STATED LIMIT, pinned so a change is deliberate: the matching form is NFKC + invisibles
-    removed + the three stops + whitespace collapse + casefold (``app.claims.engine.fold``).
-    NFKC does not map one script's letters to another's, and U+2800 is not whitespace, so
-    these forms of a blocked claim are not matched. (The output screen treats look-alike
-    *domains* specially — ``_has_bare_domain`` — but claims have no confusable skeleton; a
-    UTS #39 skeleton is an R4 / operator question, recorded in the 5CW4 hand-off.)"""
+def test_cross_script_confusables_are_detected_though_the_canonical_form_keeps_them(outside, why):
+    """Changed by D-N4 item 39 (it pinned the limit before): the canonical form
+    (``app.claims.engine.fold``: NFKC + invisibles removed + the three stops + whitespace
+    collapse + casefold) still keeps these forms apart — NFKC does not map one script's letters
+    to another's, and U+2800 is not whitespace — but the review now detects the blocked claim
+    through the UTS #39 skeleton and reads U+2800 as a space (``contains_claim``). The rule the
+    approval re-check still uses for entries added after the review, ``contains_phrase``, does
+    not (``test_dn4_39_creative_flow``, recorded limitation)."""
     entry = LibraryEntry("b1", "free parking forever", "blocked")
     review = review_against_library(f"Try {outside} today.", None, [entry])
-    assert review.blocked_claim_ids == [], why
+    assert review.blocked_claim_ids == ["b1"] and review.is_blocked, why
+    assert fold(outside) != fold("free parking forever"), why
     assert not contains_phrase(fold(outside), fold("free parking forever")), why
 
 
@@ -427,16 +432,16 @@ def test_a_blocked_claim_inside_a_longer_word_blocks(world):
     assert _refusal(world, draft["id"]) == "blocked_claim"
 
 
-def test_a_required_disclaimer_inside_a_longer_word_resolves_stated(world):
-    """STATED, the disclaimer side of the same substring rule: "Void where prohibited." is
-    resolved by a draft that says "Avoid where prohibited." — the required text occurs in it
-    as a substring. Fail-open at a word edge; recorded as an observation in the 5CW4 hand-off
-    (a word-boundary rule for disclaimers is an R4 / operator question)."""
+def test_a_required_disclaimer_inside_a_longer_word_does_not_resolve(world):
+    """Changed by D-N4 item 39 (it pinned the fail-open edge before): "Void where prohibited."
+    is no longer resolved by a draft that says "Avoid where prohibited." — a disclaimer is
+    carried only as whole words (``app.claims.engine.carries_phrase``), so the review does not
+    pass and approval is refused."""
     ws = world.workspace("substring disclaimer")
     world.claim("Void where prohibited.", kind="required_disclaimer", ws=ws)
     draft, review = _generate(world, ws, body="Spaces are limited. Avoid where prohibited.")
-    assert (review["disclaimers_resolved"], review["passed"]) == (True, True)
-    assert _refusal(world, draft["id"]) is None
+    assert (review["disclaimers_resolved"], review["passed"]) == (False, False)
+    assert _refusal(world, draft["id"]) == "review_not_passed"
 
 
 @pytest.mark.parametrize(

@@ -64,7 +64,29 @@ defanged-echo rule cannot see because no input carried it. Ordinary marketing co
 opens a line that way; "Assistant managers", "Systems:" and a mid-line "our assistant:" are
 not role labels, and ``you are now`` and ``act as`` stay exempt. Explanation text and audience
 labels do not get this rule, so #244's accepted "Assistant: managers want clearer rosters"
-explanation is kept as before. The claim check is *not* a withholding rule there: a generated
+explanation is kept as before.
+
+Drafts also get two Unicode rules (operator ruling D-N4 item 39, 2026-11-12: "implement
+word-boundary checks, the blank-character protection and reviewed confusable detection before
+real-provider activation. Cover mixed-script and whole-script substitutions of protected
+claims. …"), judged on the screening copy after every rule above, from
+:mod:`app.claims.unicode_guard`:
+
+* ``blank_character``: a character that renders as a blank but is not whitespace and that
+  neither the persisted form nor the screening copy removes, so it would reach the stored
+  draft (:data:`~app.claims.unicode_guard.WITHHELD_BLANKS`: U+2800 BRAILLE PATTERN BLANK, the
+  Egyptian hieroglyph blanks, the musical null notehead, the Khitan filler). "free" +
+  U+2800 + "parking" reads as "free parking" without being that text. The Hangul fillers and
+  the zero-width characters are not withheld: both forms already remove them, which is what a
+  reader of the stored draft sees;
+* ``mixed_script``: a word that is not Highly Restrictive under UTS #39 (it mixes Latin with
+  Cyrillic, Greek or another script, other than Latin with Han, Hiragana, Katakana, Bopomofo
+  or Hangul), e.g. "parking" spelt with a Cyrillic "a" (U+0430)
+  (:func:`~app.claims.unicode_guard.mixed_script_word`). A word is a run of letters, marks,
+  digits and ``_``.
+
+Explanation text and audience labels do not get these rules (they hold no protected claim).
+For drafts the claim check is *not* a withholding rule: a generated
 draft's claim risk, blocked claims and required disclaimers are the persisted content review
 (:func:`app.claims.engine.review_against_library`), which runs on the returned screening copy
 of exactly the persisted text, and a blocked draft is stored but cannot be approved.
@@ -84,6 +106,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from app.claims.engine import check_claim_safety
+from app.claims.unicode_guard import mixed_script_word, withheld_blank
 from app.core.enums import ClaimRisk, PainPointDNA, SignalType
 from app.llm.untrusted import normalise
 
@@ -395,8 +418,9 @@ def screen_creative(output: dict, limits: Mapping[str, int]) -> ScreenedCreative
     """Screen a ``generate_creative`` output; ``limits`` maps each text field to its cap.
 
     Withheld (``output`` None) on a link, contact detail, markup or instruction echo in any
-    field, including a line that opens as a chat role label (:data:`_ROLE_LINE`, drafts only),
-    or when the body is empty once in persisted form.
+    field, including a line that opens as a chat role label (:data:`_ROLE_LINE`, drafts only);
+    on a blank character or a mixed-script word (D-N4 item 39, drafts only); or when the body
+    is empty once in persisted form. The persisted forms are not otherwise changed.
     """
     prepared = {
         name: _prepared(value, limit) if isinstance(value := output.get(name), str) else ("", "")
@@ -406,6 +430,10 @@ def screen_creative(output: dict, limits: Mapping[str, int]) -> ScreenedCreative
     reason = _pattern_reason(everything)
     if reason is None and _ROLE_LINE.search(everything):
         reason = "instruction_echo"
+    if reason is None and withheld_blank(everything) is not None:
+        reason = "blank_character"
+    if reason is None and mixed_script_word(everything) is not None:
+        reason = "mixed_script"
     if reason:
         return ScreenedCreative(None, everything, reason)
     persisted = {name: text for name, (text, _) in prepared.items()}
