@@ -31,6 +31,7 @@ import { classificationLabels, label } from '@/lib/labels';
 import { formatCount, formatStat, sumStat } from '@/lib/scout-stats';
 import { formatRelative } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
+import { OverviewAnalyticsSummary } from './analytics/AnalyticsSummary';
 
 function StatCard({
   icon: Icon,
@@ -323,6 +324,11 @@ function OverviewInner({ workspaceId }: { workspaceId: string }) {
           </Card>
         </div>
       )}
+
+      {/* Project Phase 5E (interface sheet P11): status analytics, only for an analytics reader
+          while notifications and analytics are on for the workspace; otherwise nothing is
+          rendered and no analytics request is made. */}
+      <OverviewAnalyticsSummary workspaceId={workspaceId} locationId={locationId} />
 
       <SetupStatus workspaceId={workspaceId} locationsCount={locations.length} opportunitiesCount={opps.length} scoutsCount={scouts.length} />
     </div>
