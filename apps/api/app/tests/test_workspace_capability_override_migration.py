@@ -197,6 +197,7 @@ def test_all_capability_flags_remain_dark() -> None:
     assert settings.recommendation_briefs_enabled is False  # Project Phase 5 CF-1
     assert settings.creative_generation_enabled is False  # Project Phase 5 CF-2
     assert settings.content_export_enabled is False  # Project Phase 5 CF-3
+    assert settings.notifications_analytics_enabled is False  # 5E-CF, operator ruling O-12(B)
     # And every registry-bound flag is dark.
     for capability in iter_capabilities():
         assert getattr(settings, get_policy(capability).global_flag_attr) is False

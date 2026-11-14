@@ -1407,7 +1407,11 @@ per-capability authorization, and is additionally gated on:
 - **Before Phase 5C and Phase 5D activation:** fail-closed jurisdiction
   resolution (unknown market/jurisdiction denies) replacing the current
   fail-open substring semantics.
-- **5E ships two surfaces LIVE and UNGATED — named here because §2's
+- *Superseded by operator ruling O-12(B) (2026-11-12; §12, O-4 and O-12 rows): the
+  notifications and status-analytics surfaces are gated by the fourth Phase 5 flag,
+  `notifications_analytics_enabled`, and the 5E sub-plan's exit criterion 2 states the
+  amended live-surface ledger. The bullet is kept as written:*
+  **5E ships two surfaces LIVE and UNGATED — named here because §2's
   "all new capabilities ship dark" is true of *capabilities* and could otherwise be
   read as covering these.** O-4 fixes the Phase 5 flag set at exactly three, so
   notifications and status analytics have no flag and no capability: the notification
@@ -1450,7 +1454,9 @@ checked and none proved unsafe:
    `FeatureFlagsOut`, each at the CF-* freeze that creates it, with the
    exact-equality reflection test
    (`apps/api/app/tests/test_api_isolation.py:140`) updated in the same CF
-   payload. The originally carried recommendation — expose only UI-required
+   payload. *Amended 2026-11-12 by operator ruling O-12(B) (§12): a fourth Phase 5 flag,
+   `notifications_analytics_enabled`, joins `FeatureFlagsOut` under the same rule.* The
+   originally carried recommendation — expose only UI-required
    read-only flag state — was **not** selected and is superseded; it survives
    only in the historical register at the end of §12.
 5. **Retention/deletion policy is a mandatory pre-activation decision** — never
@@ -1461,9 +1467,12 @@ checked and none proved unsafe:
 7. **Fail-closed jurisdiction resolution before 5C and 5D activation.**
 8. **Capsule `phase_5=false` interpreted as capsule-plane authority only** (§2).
 
-## 12. Operator decision register — O-1…O-11 RESOLVED 2026-09-01; **O-12 OPEN**
+## 12. Operator decision register — O-1…O-11 RESOLVED 2026-09-01; O-12 RESOLVED 2026-11-12 (O-12(B))
 
-**Every decision O-1…O-11 is now RESOLVED; O-12 is OPEN and is recorded above.** The
+**Every decision O-1…O-11 is now RESOLVED; O-12 was resolved on 2026-11-12 as O-12(B), which
+amends O-4 (both rows below).** *(Until that ruling this heading ended "**O-12 OPEN**" and
+this sentence read "Every decision O-1…O-11 is now RESOLVED; O-12 is OPEN and is recorded
+above.". The classification that follows covers O-1…O-11 only.)* The
 eleven resolved decisions' binding responses are recorded in
 the immutable operator decision record `DECISIONS.PP5-O1-O11.md` (SHA-256
 `170547271258fa00199f20139c81bef1e5b8a9e4c5b2b039cf7a8ba00de7f103`, operator
@@ -1471,8 +1480,8 @@ round directory) and restated in the Resolutions block below, which governs.
 The table is retained as the decision material as it was put to the operator;
 where a resolution differs from the table's recommendation (O-4, O-11), **the
 resolution governs**. Deadlines in the table are historical, and all eleven
-decisions O-1…O-11 fall into exactly three categories (O-12 is open and outside this
-classification): (a) **resolved ahead of their
+decisions O-1…O-11 fall into exactly three categories (O-12 is outside this
+classification; it was open when this was written and was resolved on 2026-11-12): (a) **resolved ahead of their
 deadlines** — O-1, O-2, O-3, O-4, O-6, O-8, O-10, O-11; (b) **deliberately
 reserved, blocking activation only** — O-5 and O-7; (c) **resolved, deadline
 not yet reached, operator action outstanding** — O-9, whose deadline (before
@@ -1487,6 +1496,7 @@ promotion remains an operator action not performed in any docs-only round.
 | O-2 | `REC_Role_REVIEWER_plus_org_scoped_assignment` |
 | O-3 | `REC_all_three_workspace_enableable_default_false` |
 | O-4 | `ALT_expose_all` — **all three Phase 5 flags are added to `FeatureFlagsOut`**, each at the CF-* freeze that creates it, with the exact-equality reflection test (`apps/api/app/tests/test_api_isolation.py:140`) updated in the same CF payload |
+| O-4 (amended 2026-11-12) | **The three-flag limit is amended to four** by the operator's ruling on O-12 (the token and the row above are kept as recorded): "Choose O-12(B): one additional flag for the notifications and analytics surfaces, off by default. Explicitly amend O-4’s three-flag limit. Gate the backend routes, customer UI and applicable notification emission consistently." The fourth flag, `notifications_analytics_enabled` (global default `False`, bound to `Capability.NOTIFICATIONS_ANALYTICS`, enableable per workspace as O-3 set for the Phase 5 flags), is added to `FeatureFlagsOut` under the same `ALT_expose_all` rule, with the exact-equality reflection test (`apps/api/app/tests/test_api_isolation.py`) updated in the same commit as the flag (Project Phase 5E, 5E-CF). *Superseded wording:* "all three Phase 5 flags" (the row above) and "O-4 fixes the Phase 5 flag set at exactly three" (§10, and the 5E sub-plan's exit criterion 2 before its amendment). |
 | O-5 | `UNDECIDED_RESERVED_TO_OPERATOR_LEGAL` — build proceeds with the disabled enforcement mechanism; **no 5C or 5E activation until an explicit retention/deletion policy is separately adopted** |
 | O-6 | `REC_compliance_records_survive_FKless_scope_columns` — rider: survival is subject to the future O-5 policy and must not mean indefinite retention by default |
 | O-7 | `UNDECIDED_RESERVED_TO_OPERATOR` — deterministic mock-first build; no real provider, credential, network call, **or provider-specific activation** authorized; **no 5C activation until O-7 and the required threat-model gates are separately resolved** |
@@ -1494,7 +1504,7 @@ promotion remains an operator action not performed in any docs-only round.
 | O-9 | `REC_promote_container_build_AND_revision_reader_before_first_PP5_PR` — decision recorded only; the GitHub-side promotion is a future operator action before the first Project Phase 5 PR merges; no ruleset was changed in the docs-only rounds |
 | O-10 | `REC_app_layer_append_only_document_db_level_as_separate_infra` |
 | O-10 (amended 2026-11-12) | **Superseded for PostgreSQL** by the operator's ruling on D-N4 item 37 (the token above is kept as recorded): "add the PostgreSQL backstop, retaining the application guard. Cover applicable destructive SQL paths, including TRUNCATE. Keep the sanctioned privacy-writer exception transaction-scoped and test that it cannot leak through pooled connections. Document that this does not protect against a deliberate table owner." Built as Alembic `d0a8bce8de6a`: triggers on every table the application guard covers refuse UPDATE, DELETE and TRUNCATE outside a sanctioned privacy-writer transaction (`app/privacy/writer.py`); the application guard stays the first line; SQLite keeps the application guard only. It does not protect against a deliberate table owner: that needs a restricted database role, an infrastructure change that is not built (`docs/operations/privacy-operations.md` §7). |
-| **O-12** | **OPEN — NOT RESOLVED. Should the 5E notifications and status-analytics surfaces carry a feature flag?** They are the round's only new surfaces that ship **live and ungated**: notifications' mark-read is a live, un-flagged write carrying the round's only new cross-user IDOR class, and analytics aggregates over existing `opportunities` rows and therefore returns real, non-empty tenant data at merge. O-4 fixes the Phase 5 flag set at exactly three, so **a fourth flag would amend O-4**. This question is raised in `docs/project-phase-5e-notifications-analytics-export.md` §4 exit criterion 2 and is registered here because a sub-plan must never be the sole carrier of a live operator decision — a reader of §9, §10 and §12 alone would otherwise conclude the round ships nothing live and has no unresolved questions. **No implementation or activation depends on resolving it**; it changes only whether these two surfaces gain a flag before any future activation authorization. |
+| **O-12** | **RESOLVED 2026-11-12 — O-12(B)**, operator ruling (verbatim): "Choose O-12(B): one additional flag for the notifications and analytics surfaces, off by default. Explicitly amend O-4’s three-flag limit. Gate the backend routes, customer UI and applicable notification emission consistently." The notifications and status-analytics surfaces therefore carry the fourth Phase 5 flag, `notifications_analytics_enabled` / `Capability.NOTIFICATIONS_ANALYTICS` (global default `False`); the notification and analytics routes, the customer UI and the notification emitter are gated on it through the deny-biased capability resolver, and the 5E sub-plan's exit criterion 2 states the resulting live-surface ledger. O-4 is amended accordingly (row above). Enabling the flag is an activation and needs its own operator authorization (§10). *Superseded wording (the open question as registered, kept as written):* **OPEN — NOT RESOLVED. Should the 5E notifications and status-analytics surfaces carry a feature flag?** They are the round's only new surfaces that ship **live and ungated**: notifications' mark-read is a live, un-flagged write carrying the round's only new cross-user IDOR class, and analytics aggregates over existing `opportunities` rows and therefore returns real, non-empty tenant data at merge. O-4 fixes the Phase 5 flag set at exactly three, so **a fourth flag would amend O-4**. This question is raised in `docs/project-phase-5e-notifications-analytics-export.md` §4 exit criterion 2 and is registered here because a sub-plan must never be the sole carrier of a live operator decision — a reader of §9, §10 and §12 alone would otherwise conclude the round ships nothing live and has no unresolved questions. **No implementation or activation depends on resolving it**; it changes only whether these two surfaces gain a flag before any future activation authorization. |
 | O-11 | `REJECT_SPLIT__ADOPT_SINGLE_CONTINUOUS_17_TO_18_WORKING_DAY_ROUND` (**operator token, verbatim and unaltered; the "17–18" in the token name is historical. The ceiling has been raised three times by the operator since the token was issued, and no raise alters the token: first to 21 working days, after the integration-owner merge cycles were charged to the calendar — recorded verbatim at `AUTHORIZATION.PP5-R21.verbatim.md:3` ("I select 21.0 working days as the ceiling for the single continuous Project Phase 5A–5E implementation round"), reaffirmed at `AUTHORIZATION.PP5-RB.verbatim.md:3`, `:27`, `:139`; then to 23 working days, in the contract-surface ownership authorization that made the shared frontend contract surface freeze-owned and required its work to be calendar-charged; and finally, on 2026-09-02, to the operative **26 working days**, after three independent derivations returned pessimistic totals of 25.29, 25.85 and 25.10 days and the operator set the ceiling above all three. All raises are cited here because a reviewer previously judged the 21-day attribution fabricated after checking only the O-11 decision record — which predates every one of these authorizations and records a D1–D18 ceiling. **That reviewer's finding was itself the error: the attribution is genuine, was verified line by line against the retained authorizations, and is settled. It must never be conflated with the separate — and genuine — fabricated "+0.20 float precedent" corrected in §5, which is a different claim with the opposite outcome.** The operative ceiling is 26 — see §5**) — one continuous round delivers all of Phase 5A–5E **under the identical lane, freeze, review, and exact-stop machinery**, accepting that this misses the 10–15-working-day target; the §5 continuous round is operative and the split is a labeled rejected alternative; Phase 5 closeout is exactly the end-of-round closeout (every 5A–5E exit criterion TRUE with cited artifact + R-final verdict recorded); no earlier record, including the D8 checkpoint, counts as Phase 5 closeout; **and nothing built activates under this selection** |
 
 ### Register as put to the operator (historical decision material)

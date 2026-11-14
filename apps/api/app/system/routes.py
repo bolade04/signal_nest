@@ -92,6 +92,13 @@ class FeatureFlagsOut(BaseModel):
     #: the 5E export gate will decide through the capability resolver.
     content_export_enabled: bool
 
+    #: The RAW global notifications-and-analytics flag (Project Phase 5E, 5E-CF), the
+    #: fourth Phase 5 flag (operator ruling O-12(B), which amends O-4's three-flag limit),
+    #: reflected per O-4 (``ALT_expose_all``). It does not decide availability for a
+    #: workspace: the notification and analytics gates decide through the capability
+    #: resolver, and the customer UI reads the workspace-effective reflection.
+    notifications_analytics_enabled: bool
+
 
 class RuntimeSummaryOut(BaseModel):
     app_mode: str
@@ -150,6 +157,7 @@ def system_capabilities(_user: User = Depends(get_current_user)) -> RuntimeSumma
             recommendation_briefs_enabled=settings.recommendation_briefs_enabled,
             creative_generation_enabled=settings.creative_generation_enabled,
             content_export_enabled=settings.content_export_enabled,
+            notifications_analytics_enabled=settings.notifications_analytics_enabled,
         ),
     )
 
