@@ -39,6 +39,9 @@ def test_capability_value_set_is_closed_and_exact() -> None:
         "creative_generation",
         # Project Phase 5E, added at W21 CF-3 (O-3).
         "content_export",
+        # Project Phase 5E notifications and analytics, added at W21 5E-CF (operator
+        # ruling O-12(B), 2026-11-12, which amends O-4's three-flag limit; O-3's pattern).
+        "notifications_analytics",
     }
 
 
@@ -55,6 +58,7 @@ def test_iter_capabilities_is_deterministic_declaration_order() -> None:
         Capability.RECOMMENDATION_BRIEFS,
         Capability.CREATIVE_GENERATION,
         Capability.CONTENT_EXPORT,
+        Capability.NOTIFICATIONS_ANALYTICS,
     )
     # Stable across repeated calls.
     assert iter_capabilities() == iter_capabilities()
@@ -86,6 +90,29 @@ def test_global_flag_bindings_are_exact() -> None:
         "creative_generation_enabled"
     )
     assert get_policy(Capability.CONTENT_EXPORT).global_flag_attr == "content_export_enabled"
+    assert get_policy(Capability.NOTIFICATIONS_ANALYTICS).global_flag_attr == (
+        "notifications_analytics_enabled"
+    )
+
+
+def test_the_notifications_analytics_policy_is_exact() -> None:
+    # Operator ruling O-12(B) (2026-11-12), names fixed by the 5E interface sheet §A: one
+    # dark switch for both 5E surfaces, governable per workspace like the other Phase 5
+    # capabilities, ceiling-subject, and planned for activation in 5E.
+    policy = get_policy(Capability.NOTIFICATIONS_ANALYTICS)
+    assert Capability.NOTIFICATIONS_ANALYTICS.value == "notifications_analytics"
+    assert policy.label == "Notifications and Analytics"
+    assert policy.global_flag_attr == "notifications_analytics_enabled"
+    assert policy.workspace_enableable is True
+    assert policy.workspace_disableable is True
+    assert policy.subject_to_safety_ceiling is True
+    assert policy.requires_workspace_context is True
+    assert policy.future_activation_phase == "5E"
+    # Declared directly after CONTENT_EXPORT (the last CF-3 member).
+    order = iter_capabilities()
+    assert order.index(Capability.NOTIFICATIONS_ANALYTICS) == (
+        order.index(Capability.CONTENT_EXPORT) + 1
+    )
 
 
 def test_policies_are_frozen_and_immutable() -> None:
@@ -128,6 +155,8 @@ def test_route_guarded_capabilities_are_workspace_enableable() -> None:
         Capability.RECOMMENDATION_BRIEFS,
         Capability.CREATIVE_GENERATION,
         Capability.CONTENT_EXPORT,
+        # Operator ruling O-12(B) (W21 5E-CF): O-3's pattern for the Phase 5 flags.
+        Capability.NOTIFICATIONS_ANALYTICS,
     ):
         policy = get_policy(capability)
         assert policy.workspace_enableable is True
@@ -144,6 +173,7 @@ _ACTIVATION_PHASE = {
     Capability.RECOMMENDATION_BRIEFS: "5A",
     Capability.CREATIVE_GENERATION: "5C",
     Capability.CONTENT_EXPORT: "5E",
+    Capability.NOTIFICATIONS_ANALYTICS: "5E",
 }
 
 
@@ -180,6 +210,7 @@ def test_persisted_values_are_sorted_and_match_enum() -> None:
         "connector_rss",
         "content_export",
         "creative_generation",
+        "notifications_analytics",
         "opportunity_feedback",
         "recommendation_briefs",
         "scout_scheduling",

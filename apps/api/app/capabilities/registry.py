@@ -50,6 +50,10 @@ class Capability(StrEnum):
     CREATIVE_GENERATION = "creative_generation"
     #: Project Phase 5E audited manual export of approved creative text. Added at CF-3.
     CONTENT_EXPORT = "content_export"
+    #: Project Phase 5E in-app notifications and status analytics (one dark switch for
+    #: both surfaces). Operator ruling O-12(B) of 2026-11-12, which amends O-4's
+    #: three-flag limit. Added at 5E-CF.
+    NOTIFICATIONS_ANALYTICS = "notifications_analytics"
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +163,21 @@ _POLICIES: tuple[CapabilityPolicy, ...] = (
         # Operator decision O-3: enableable per workspace, global default False.
         # Activation additionally needs O-5 and the verified NULL-jurisdiction export
         # refusal (Project Phase 5 plan §10); nothing here activates it.
+        workspace_enableable=True,
+        workspace_disableable=True,
+        subject_to_safety_ceiling=True,
+        requires_workspace_context=True,
+        future_activation_phase="5E",
+    ),
+    CapabilityPolicy(
+        capability=Capability.NOTIFICATIONS_ANALYTICS,
+        label="Notifications and Analytics",
+        global_flag_attr="notifications_analytics_enabled",
+        # Operator ruling O-12(B) (2026-11-12): "one additional flag for the notifications
+        # and analytics surfaces, off by default. Explicitly amend O-4’s three-flag limit.
+        # Gate the backend routes, customer UI and applicable notification emission
+        # consistently." O-3's pattern for the Phase 5 flags: enableable per workspace,
+        # global default False. Nothing here activates it.
         workspace_enableable=True,
         workspace_disableable=True,
         subject_to_safety_ceiling=True,

@@ -3005,7 +3005,7 @@ export interface components {
          *     registry below.
          * @enum {string}
          */
-        Capability: "opportunity_feedback" | "scout_scheduling" | "connector_rss" | "recommendation_briefs" | "creative_generation" | "content_export";
+        Capability: "opportunity_feedback" | "scout_scheduling" | "connector_rss" | "recommendation_briefs" | "creative_generation" | "content_export" | "notifications_analytics";
         /**
          * CapabilityEffectiveListOut
          * @description Effective state for a workspace, one item per resolved capability.
@@ -3674,6 +3674,8 @@ export interface components {
             content_export_enabled: boolean;
             /** Creative Generation Enabled */
             creative_generation_enabled: boolean;
+            /** Notifications Analytics Enabled */
+            notifications_analytics_enabled: boolean;
             /** Opportunity Feedback Enabled */
             opportunity_feedback_enabled: boolean;
             /** Recommendation Briefs Enabled */

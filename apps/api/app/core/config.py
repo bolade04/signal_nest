@@ -557,9 +557,23 @@ class Settings(BaseSettings):
     #: decision (the deny-biased ``_require_feedback_feature`` pattern), never this raw
     #: flag. CF-3 adds the flag, the capability and the contracts only: nothing consumes it
     #: yet. Activation additionally needs O-5 and the verified NULL-jurisdiction refusal
-    #: (Project Phase 5 plan §10). Notifications and analytics have no flag (open O-12).
+    #: (Project Phase 5 plan §10). Notifications and analytics have their own flag below
+    #: (operator ruling O-12(B), 2026-11-12).
     content_export_enabled: bool = False
     # --- Project Phase 5E: audited manual export (W21 CF-3) — END --------------
+
+    # --- Project Phase 5E: notifications and analytics (W21 5E-CF) — BEGIN -----
+    #: Master switch for the in-app notifications and status-analytics surfaces (dark by
+    #: default). Operator ruling O-12(B) (2026-11-12): "one additional flag for the
+    #: notifications and analytics surfaces, off by default. Explicitly amend O-4’s
+    #: three-flag limit. Gate the backend routes, customer UI and applicable notification
+    #: emission consistently." Bound to ``Capability.NOTIFICATIONS_ANALYTICS``, which is
+    #: ``workspace_enableable`` (O-3's pattern), so availability is the capability
+    #: resolver's per-workspace decision (``effective_enabled`` only), never this raw flag.
+    #: 5E-CF adds the flag and the capability only: the notification and analytics routes,
+    #: the emitter and the customer UI gate on it when they land (5E lanes).
+    notifications_analytics_enabled: bool = False
+    # --- Project Phase 5E: notifications and analytics (W21 5E-CF) — END -------
 
     # --- LLM -----------------------------------------------------------------
     llm_provider: LLMProvider = "mock"

@@ -1679,7 +1679,8 @@
           "connector_rss",
           "recommendation_briefs",
           "creative_generation",
-          "content_export"
+          "content_export",
+          "notifications_analytics"
         ],
         "title": "Capability",
         "type": "string"
@@ -3245,6 +3246,10 @@
             "title": "Creative Generation Enabled",
             "type": "boolean"
           },
+          "notifications_analytics_enabled": {
+            "title": "Notifications Analytics Enabled",
+            "type": "boolean"
+          },
           "opportunity_feedback_enabled": {
             "title": "Opportunity Feedback Enabled",
             "type": "boolean"
@@ -3264,7 +3269,8 @@
           "connector_rss_enabled",
           "recommendation_briefs_enabled",
           "creative_generation_enabled",
-          "content_export_enabled"
+          "content_export_enabled",
+          "notifications_analytics_enabled"
         ],
         "title": "FeatureFlagsOut",
         "type": "object"
