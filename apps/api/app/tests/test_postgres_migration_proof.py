@@ -58,10 +58,13 @@ from app.db.base import Base
 from app.tests._auth2_support import pg_database, require_postgres
 
 API_DIR = Path(__file__).resolve().parents[2]
-#: The code head (D-N4 item 36, W21: the closed claim kinds; data only: the ``prohibited`` alias
+#: The code head (Project Phase 5E 5E-CF, operator ruling O-12(B): the capability-override CHECK
+#: admits ``notifications_analytics``; no table or column changes).
+HEAD = "53fdde95354a"
+#: One below head (D-N4 item 36, W21: the closed claim kinds; data only: the ``prohibited`` alias
 #: becomes ``blocked``, so no table or column changes).
-HEAD = "1574637e56d3"
-#: One below head (D-N4 item 37, W21: the PostgreSQL append-only backstop: one trigger function
+CLAIM_KINDS = "1574637e56d3"
+#: Two below head (D-N4 item 37, W21: the PostgreSQL append-only backstop: one trigger function
 #: and two triggers on each table the application guard covers; no table or column).
 BACKSTOP = "d0a8bce8de6a"
 #: Two below head (W21 ADDR, under the operator's limited CF-3 migration-freeze exception of
@@ -348,20 +351,29 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     assert "jurisdiction_code" in _columns(pg_url, "business_locations")
     assert ADDR_COLUMNS <= _columns(pg_url, "geo_coverage_rules")
 
-    # One guarded step down undoes exactly the head revision: D-N4 item 36's data-only claim-kind
-    # migration, so no table or column goes and the backstop stays; the spent token does not
-    # authorize the next step, and the base token minted at head is refused from the moved source.
+    # One guarded step down undoes exactly the head revision: 5E-CF's widening of the
+    # capability-override CHECK, so no table or column goes and the backstop stays; the spent
+    # token does not authorize the next step, and the base token minted at head is refused from
+    # the moved source.
     base_token_at_head = _confirmation(pg_url, "base")
     step_token = _confirmation(pg_url, "-1")
     schema_at_head = {t: _columns(pg_url, t) for t in _tables(pg_url)}
     _alembic(pg_url, "-x", f"confirm={step_token}", "downgrade", "-1")
-    assert _version(pg_url) == [BACKSTOP]
+    assert _version(pg_url) == [CLAIM_KINDS]
     assert {t: _columns(pg_url, t) for t in _tables(pg_url)} == schema_at_head
     assert _backstop_triggers(pg_url) == backstop | {("", "function")}
     spent = _run(["-x", f"confirm={step_token}", "downgrade", "-1"], pg_url)
-    assert spent.returncode != 0 and _version(pg_url) == [BACKSTOP]
+    assert spent.returncode != 0 and _version(pg_url) == [CLAIM_KINDS]
     stale = _run(["-x", f"confirm={base_token_at_head}", "downgrade", "base"], pg_url)
-    assert stale.returncode != 0 and _version(pg_url) == [BACKSTOP]
+    assert stale.returncode != 0 and _version(pg_url) == [CLAIM_KINDS]
+
+    # The next guarded step undoes D-N4 item 36's data-only claim-kind migration: no table or
+    # column goes and the backstop stays.
+    kinds_token = _confirmation(pg_url, "-1")
+    _alembic(pg_url, "-x", f"confirm={kinds_token}", "downgrade", "-1")
+    assert _version(pg_url) == [BACKSTOP]
+    assert {t: _columns(pg_url, t) for t in _tables(pg_url)} == schema_at_head
+    assert _backstop_triggers(pg_url) == backstop | {("", "function")}
 
     # The next guarded step undoes D-N4 item 37's append-only backstop: its triggers and function
     # go, and no table or column does.

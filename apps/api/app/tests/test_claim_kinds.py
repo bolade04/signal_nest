@@ -67,6 +67,8 @@ from app.tests._privacy_support import ALICE, API, ORG_A, WS_A, PrivacyEnv, priv
 from app.tests.test_campaign_locations_repair import BRANDS, ORGS, WORKSPACES, Db, _database
 
 API_DIR = Path(__file__).resolve().parents[2]
+#: This module's revision. 5E-CF's capability-CHECK widening (``53fdde95354a``) follows it as the
+#: single head, so the cases below upgrade to REVISION explicitly, not to "head".
 REVISION = "1574637e56d3"
 #: The revision below (D-N4 item 37: the PostgreSQL append-only backstop).
 BELOW = "d0a8bce8de6a"
@@ -371,7 +373,7 @@ def test_the_migration_maps_the_alias_and_inventories_the_rest(db: Db) -> None:
     _world_at_below(db)
     blocking_before = {i for i, k in _kinds(db).items() if is_blocking_kind(k)}
 
-    out = db.ok("upgrade", "head")
+    out = db.ok("upgrade", REVISION)
 
     assert db.version() == [REVISION]
     assert _kinds(db) == {entry_id: after for entry_id, (_, after) in STORED.items()}
@@ -391,6 +393,7 @@ def test_the_migration_maps_the_alias_and_inventories_the_rest(db: Db) -> None:
         f"{PREFIX}: {len(STORED)} entr(y/ies) read, {len(migrated)} migrated to 'blocked', "
         f"8 with an unsupported kind kept as stored (7 distinct value(s))" in out
     ), out
+    db.ok("upgrade", "head")  # ``alembic check`` compares at the head (5E-CF's CHECK above)
     db.ok("check")
 
 
@@ -413,7 +416,7 @@ def _digest(value: str) -> str:
 def test_the_migration_log_carries_no_stored_value_text(db: Db) -> None:
     """36-R-1: ids, counts and digests only; no stored value's text, escaped or not."""
     _world_at_below(db)
-    out = db.ok("upgrade", "head")
+    out = db.ok("upgrade", REVISION)
     assert f"sha256:{_digest(PERSON_KIND)}" in out, out
     for value in ("Jane Doe", "kind with a name", "zz-unsupported-kind", "y" * 40, "Blocked"):
         assert value not in out, value
@@ -428,7 +431,7 @@ def test_the_read_only_inventory_prints_the_values_beside_the_logs_digests(db: D
     from app.claims.kind_inventory import report_lines, unsupported_kinds
 
     _world_at_below(db)
-    db.ok("upgrade", "head")
+    db.ok("upgrade", REVISION)
     before = _kinds(db)
     with Session(db.engine) as session:
         inventory = unsupported_kinds(session)
@@ -462,19 +465,19 @@ def test_the_read_only_inventory_prints_the_values_beside_the_logs_digests(db: D
 
 def test_running_it_again_changes_nothing_and_the_downgrade_is_a_no_op(db: Db) -> None:
     _world_at_below(db)
-    db.ok("upgrade", "head")
+    db.ok("upgrade", REVISION)
     after = _kinds(db)
 
     db.ok("downgrade", "-1")
     assert db.version() == [BELOW]
     assert _kinds(db) == after  # nothing restored: the alias's spelling is not recorded
-    again = db.ok("upgrade", "head")
+    again = db.ok("upgrade", REVISION)
     assert _kinds(db) == after
     assert f"{PREFIX}: {len(STORED)} entr(y/ies) read, 0 migrated to 'blocked'" in again, again
 
 
 def test_an_empty_library_is_read_and_nothing_is_reported(db: Db) -> None:
-    out = db.ok("upgrade", "head")
+    out = db.ok("upgrade", REVISION)
     assert db.version() == [REVISION]
     assert PREFIX not in out, out
 
@@ -519,7 +522,7 @@ def test_more_than_two_chunks_of_the_alias_are_all_migrated(db: Db) -> None:
             for i in range(1001)
         ],
     )
-    out = db.ok("upgrade", "head")
+    out = db.ok("upgrade", REVISION)
     kinds = _kinds(db)
     assert sum(k == "blocked" for i, k in kinds.items() if i.startswith("k-bulk-")) == 1001
     assert "prohibited" not in kinds.values()

@@ -13,9 +13,9 @@ target-bound downgrade guard included), on a disposable SQLite file and, when
   ``jurisdiction_code``, is identical after the upgrade, and the new columns read NULL; one
   guarded step down removes exactly the ten columns and every row of every table is again
   identical to what it was before the upgrade;
-* **M-4** it follows 5D-W1's repair, below D-N4 item 37's append-only backstop ``d0a8bce8de6a``
-  and the single head, D-N4 item 36's closed claim kinds ``1574637e56d3``, so the cases below
-  upgrade to THIS revision explicitly;
+* **M-4** it follows 5D-W1's repair, below D-N4 item 37's append-only backstop ``d0a8bce8de6a``,
+  D-N4 item 36's closed claim kinds ``1574637e56d3`` and the single head, 5E-CF's capability-CHECK
+  widening ``53fdde95354a``, so the cases below upgrade to THIS revision explicitly;
 * **M-5** the CHECKs refuse a partial confirmation binding and a malformed code on both engines,
   and their frozen literals equal their Python authorities;
 * **M-6** deleting the confirming account sets only its reference NULL and keeps the binding;
@@ -50,7 +50,8 @@ API_DIR = Path(__file__).resolve().parents[2]
 #: REVISION explicitly, not to "head".
 REVISION = "6f8a80cf1785"
 BACKSTOP = "d0a8bce8de6a"
-CODE_HEAD = "1574637e56d3"
+CLAIM_KINDS = "1574637e56d3"
+CODE_HEAD = "53fdde95354a"
 D1_REPAIR = "d5f616c0ec97"
 CF3 = "c3f8e1a6d2b9"
 MIGRATION = next((API_DIR / "alembic" / "versions").glob(f"*-{REVISION}_*.py"))
@@ -271,7 +272,8 @@ def test_the_revision_follows_the_repair_below_the_single_head() -> None:
 
     script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
     assert [r.revision for r in script.get_revisions("heads")] == [CODE_HEAD]
-    assert script.get_revision(CODE_HEAD).down_revision == BACKSTOP
+    assert script.get_revision(CODE_HEAD).down_revision == CLAIM_KINDS
+    assert script.get_revision(CLAIM_KINDS).down_revision == BACKSTOP
     assert script.get_revision(BACKSTOP).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == D1_REPAIR
     assert script.get_revision(D1_REPAIR).down_revision == CF3
@@ -366,7 +368,8 @@ def test_upgrade_adds_exactly_the_ten_nullable_columns_and_rewrites_nothing(db: 
                         (TABLE, "US-AK")):
         assert [dict(r)["jurisdiction_code"] for r in after[table]] == [code], table
     assert [dict(r)["business_address"] for r in after[TABLE]] == [RULE["business_address"]]
-    # ``alembic check`` compares at the head; D-N4 items 37 and 36 above add no table or column.
+    # ``alembic check`` compares at the head; D-N4 items 37 and 36 and 5E-CF's CHECK widening
+    # above add no table or column.
     db.alembic("upgrade", "head")
     assert "No new upgrade operations detected." in db.alembic("check")
 
