@@ -27,6 +27,8 @@ import type {
   BusinessProfileBase,
   BusinessProfileOut,
   CampaignIn,
+  CampaignOut,
+  CampaignPatch,
   ChannelPrefIn,
   ClaimIn,
   CompetitorIn,
@@ -367,6 +369,28 @@ export const updateContext = <K extends ContextKind>(
 ) =>
   apiRequest<ContextRow>(`/workspaces/${workspaceId}/${kind}/${itemId}`, { method: 'PATCH', body });
 // ---- end campaign context: partial update ------------------------------------------
+
+// ---- Project Phase 5D campaigns: the dedicated router (5D-W1; I-5D share) -----------
+// `/workspaces/{workspace_id}/campaigns` (apps/api/app/campaign_context/campaigns.py). The
+// same paths as the generic context wrappers above, typed with the projected `CampaignOut`.
+export const listCampaigns = (workspaceId: string, signal?: AbortSignal) =>
+  apiRequest<CampaignOut[]>(`/workspaces/${workspaceId}/campaigns`, { signal });
+
+export const getCampaign = (workspaceId: string, campaignId: string, signal?: AbortSignal) =>
+  apiRequest<CampaignOut>(`/workspaces/${workspaceId}/campaigns/${campaignId}`, { signal });
+
+export const createCampaign = (workspaceId: string, body: CampaignIn) =>
+  apiRequest<CampaignOut>(`/workspaces/${workspaceId}/campaigns`, { method: 'POST', body });
+
+export const updateCampaign = (workspaceId: string, campaignId: string, body: CampaignPatch) =>
+  apiRequest<CampaignOut>(`/workspaces/${workspaceId}/campaigns/${campaignId}`, {
+    method: 'PATCH',
+    body,
+  });
+
+export const deleteCampaign = (workspaceId: string, campaignId: string) =>
+  apiRequest<void>(`/workspaces/${workspaceId}/campaigns/${campaignId}`, { method: 'DELETE' });
+// ---- end Phase 5D campaigns ---------------------------------------------------------
 
 // ---- Locations & geo ----
 export const listLocations = (workspaceId: string, signal?: AbortSignal) =>

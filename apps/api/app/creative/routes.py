@@ -30,7 +30,8 @@ capability decision; the feedback- and brief-capability precedent):
 * **Scope / IDOR.** The brief and the draft are resolved within the path workspace, and a
   revision's parent within the brief: an unknown or foreign id answers the same 404
   (non-enumerating).
-* **Generation is a durable job.** ``POST`` validates (brief approved 422 ``brief_not_approved``;
+* **Generation is a durable job.** ``POST`` validates (a jurisdiction recorded on the brief 422
+  ``brief_jurisdiction_missing``, S1-5D item 31; brief approved 422 ``brief_not_approved``;
   ceilings configured 503 ``creative_generation_unconfigured``; daily ceilings not reached 429
   ``llm_quota_exceeded``) and answers 202 with the ``creative.generate`` job to poll
   (``GET /workspaces/{workspace_id}/jobs/{job_id}``). A repeated identical request while that

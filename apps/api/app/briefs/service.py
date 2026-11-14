@@ -9,6 +9,36 @@ trustworthy compliance record:
   in the same organization and workspace (422 otherwise, the feedback precedent; the route
   has already answered 404 for a record outside the workspace). An optional ``campaign_id``
   must name a campaign of the same workspace (404 otherwise, uniform with a missing id).
+* **Jurisdiction snapshot, or an explicit refusal** (Project Phase 5D §2, lane 5D-W3; the
+  S1-5D capture rule as amended by operator ruling Q-4). Before any budget check or model
+  call, the record's location is examined (:func:`_capture_jurisdiction`):
+
+  - **No location** (``record.location_id IS NULL``, which includes a record whose location
+    was deleted: the reference is ``SET NULL``): the brief is created with
+    ``jurisdiction_code`` ``NULL`` (Q-4). Decided from the reference itself, never from the
+    resolver's answer. Nothing is inferred or defaulted: no workspace, scout, market or
+    other code stands in. S1-5D item 31 (the creative service) refuses drafts from it.
+  - **An existing location reference**: it must load inside the opportunity's workspace and
+    organization, and pass the check before a jurisdiction-dependent action,
+    :func:`app.jurisdiction.business_address.resolve_for_action` (W21 ADDR), with the coverage
+    rules attached to that location: the location's own country and state or province, then
+    its structured business address (complete, with the town when the location has a city,
+    and agreeing with the location), the free-text business address, and the town. Otherwise
+    the request is refused (422 ``jurisdiction_unresolved``,
+    :class:`BriefJurisdictionUnresolvedError`): no model call, no usage or budget, no brief.
+    A resolved code is stored once, at insert, as ``jurisdiction_code``.
+
+  So ``NULL`` is written for exactly one case, a record with no location; every other
+  ``NULL`` brief was written before 5D-W3. Existing briefs are never back-filled.
+
+  **The refusal's answer.** For an ``UNRESOLVED`` check it names the check's category, one key
+  of the closed vocabulary :data:`~app.jurisdiction.business_address.ACTION_CLARIFICATIONS`,
+  as ``error.details.reason``, with that category's fixed message. A location outside the
+  opportunity's workspace or organization gets the one fixed
+  :data:`JURISDICTION_UNRESOLVED_MESSAGE` and no ``details``, exactly as before, so the answer
+  says nothing about another tenant's location. The log carries the category (or the tenant
+  refusal's fixed reason) only. Neither ever carries the resolver's evidence, an address or
+  any other text of the location.
 * **Metered model call.** The brief's one model task goes through
   :meth:`app.llm.service.LLMService.run` with the tenant named and an
   :class:`~app.llm.metering.LLMMeter` bound to it: the run cap, the workspace's monthly
@@ -20,8 +50,9 @@ trustworthy compliance record:
   before it can be stored or shown; withheld output stores nothing (422 ``brief_withheld``).
   Content is validated against the frozen :class:`~app.briefs.schemas.BriefContent` bounds.
 * **Provenance from the server, never the caller.** ``analysis_version`` /
-  ``scoring_version`` / ``location_id`` are copied from the intelligence record; the prompt
-  name and version, model, ``input_hash`` (computed by the LLM service), trace id and
+  ``scoring_version`` / ``location_id`` are copied from the intelligence record, and
+  ``jurisdiction_code`` is resolved from that location, or ``NULL`` without one (above); the
+  prompt name and version, model, ``input_hash`` (computed by the LLM service), trace id and
   simulation flag come from the response; ``llm_usage_event_id`` is the usage-ledger row of
   the attempt that produced the brief; ``created_by_snapshot`` is the author as they are now.
 * **Versioning.** ``brief_version`` is the opportunity's highest version plus one and
@@ -67,6 +98,7 @@ from app.core.config import Settings
 from app.core.errors import NotFoundError, SignalNestError, ValidationDomainError
 from app.core.logging import get_logger, log_event
 from app.intelligence.records import SignalIntelligenceRecord
+from app.jurisdiction.business_address import ACTION_CLARIFICATIONS, resolve_for_action
 from app.llm.base import LLMError
 from app.llm.metering import (
     LLMBudgetExceededError,
@@ -77,6 +109,7 @@ from app.llm.metering import (
 from app.llm.models import LLMUsageEvent
 from app.llm.screening import screen_explanation
 from app.llm.service import LLMService
+from app.locations.models import BusinessLocation, GeoCoverageRule
 from app.opportunities.context import build_business_context
 from app.opportunities.models import Opportunity, ValidationEvidence
 from app.organizations.models import User
@@ -123,6 +156,117 @@ class BriefVersionConflictError(BriefNotProducedError):
 
     status_code = 409
     code = "conflict"
+
+
+class BriefJurisdictionUnresolvedError(ValidationDomainError):
+    """The record's existing location did not pass the check before a jurisdiction-dependent
+    action, or is not a location of the opportunity's workspace and organization (the S1-5D
+    capture rule; a record with no location is not refused, Q-4): no model call was made and
+    nothing was stored (422).
+
+    For a failed check its ``details`` is ``{"reason": <category>}``, a key of
+    :data:`~app.jurisdiction.business_address.ACTION_CLARIFICATIONS`, and its message is that
+    category's; the tenant refusal has no ``details``.
+
+    Not a :class:`BriefNotProducedError`: the refusal comes before any model call or budget
+    check, so there is no usage to keep."""
+
+    code = "jurisdiction_unresolved"
+
+
+#: The answer to a capture refused because the record's location is not in the opportunity's
+#: workspace and organization (or is gone). Fixed: it never quotes the location, and it names
+#: no category, so it reveals nothing about another tenant's location. It is also the answer
+#: to a check category outside the vocabulary, which :func:`resolve_for_action` never gives.
+#: One wording, true for every cause (review r3 F-4, r4 F-5).
+JURISDICTION_UNRESOLVED_MESSAGE = (
+    "The jurisdiction of this opportunity's location could not be determined, so no brief "
+    "was generated. Complete or correct the location's details so that its country, its state "
+    "or province (required in the United States, Canada, Australia and Nigeria) and its "
+    "business address all name the same place, then try again."
+)
+
+
+#: The brief-created log's category for a brief captured without a location (Q-4).
+NO_LOCATION = "no_location"
+
+#: The capture-refusal log's fixed reasons that are not check categories: the tenant refusal,
+#: and the fallback for a check category outside the vocabulary.
+OUTSIDE_WORKSPACE = "jurisdiction_location_outside_workspace"
+UNRESOLVED_OUTSIDE_VOCABULARY = "jurisdiction_location_unresolved"
+
+
+def _refuse_capture(
+    opportunity: Opportunity, reason: str, *, category: str | None = None
+) -> BriefJurisdictionUnresolvedError:
+    """Log the capture refusal and return the error to raise.
+
+    ``category`` is the check's category, a key of ``ACTION_CLARIFICATIONS``: the answer then
+    names it as ``details.reason`` with its fixed message. Without one (the tenant refusal),
+    the answer is the fixed :data:`JURISDICTION_UNRESOLVED_MESSAGE` with no ``details``. The
+    log carries ``reason`` only: a category or a fixed reason, never text."""
+    log_event(
+        logger,
+        "recommendation_brief_not_generated",
+        outcome="refused",
+        workspace_id=opportunity.workspace_id,
+        opportunity_id=opportunity.id,
+        reason=reason,
+    )
+    if category is None:
+        return BriefJurisdictionUnresolvedError(JURISDICTION_UNRESOLVED_MESSAGE)
+    return BriefJurisdictionUnresolvedError(
+        ACTION_CLARIFICATIONS[category], details={"reason": category}
+    )
+
+
+def _capture_jurisdiction(
+    db: Session, opportunity: Opportunity, record: SignalIntelligenceRecord
+) -> str | None:
+    """The jurisdiction code a new brief from ``record`` captures (Phase 5D §2): a code,
+    ``None`` for a record with no location (Q-4), or :class:`BriefJurisdictionUnresolvedError`.
+
+    * **No location** is exactly ``record.location_id IS NULL`` (a deleted location's
+      reference is ``SET NULL``, so it is included). It is decided from the reference itself,
+      before and without the resolver, and answers ``None``: nothing is inferred or defaulted.
+    * **An existing location reference** must load inside the opportunity's workspace and
+      organization; one that does not (another workspace's or organization's location, or a
+      row that is gone) is refused, never treated as no location, so a tenant-boundary fault
+      can never become a ``NULL`` brief. A loaded location is checked with
+      :func:`resolve_for_action` and its coverage rules, the ones attached to it in the
+      workspace (``GeoCoverageRule.location_id``), the rule set the scout pipeline and the
+      geo-coverage routes already choose for a location, in ``(created_at, id)`` order;
+      workspace-level rules (``location_id`` NULL) are not the location's and are not read.
+      ``UNRESOLVED`` is refused with its category.
+
+    Every refusal logs a reason category only, never location text or resolver evidence.
+    """
+    if record.location_id is None:
+        return None
+    location = db.get(BusinessLocation, record.location_id)
+    if (
+        location is None
+        or location.workspace_id != opportunity.workspace_id
+        or location.organization_id != opportunity.organization_id
+    ):
+        raise _refuse_capture(opportunity, OUTSIDE_WORKSPACE)
+    rules = list(
+        db.scalars(
+            select(GeoCoverageRule)
+            .where(
+                GeoCoverageRule.workspace_id == opportunity.workspace_id,
+                GeoCoverageRule.location_id == location.id,
+            )
+            .order_by(GeoCoverageRule.created_at, GeoCoverageRule.id)
+        ).all()
+    )
+    resolution = resolve_for_action(location, rules)
+    if not resolution.is_resolved:
+        category = resolution.reason
+        if category not in ACTION_CLARIFICATIONS:  # never, by resolve_for_action's contract
+            raise _refuse_capture(opportunity, UNRESOLVED_OUTSIDE_VOCABULARY)
+        raise _refuse_capture(opportunity, category, category=category)
+    return resolution.code
 
 
 def _brief_inputs(
@@ -238,7 +382,10 @@ def create_brief(
 
     Raises :class:`~app.core.errors.ValidationDomainError` (record not this opportunity's),
     :class:`~app.core.errors.NotFoundError` (campaign not in the workspace),
-    and :class:`BriefNotProducedError` subclasses (budget, model failure, withheld output, a
+    :class:`BriefJurisdictionUnresolvedError` (the record's existing location is not the
+    workspace's or did not resolve; raised before any budget check or model call; a record
+    with no location is not refused, its brief's ``jurisdiction_code`` is ``NULL``), and
+    :class:`BriefNotProducedError` subclasses (budget, model failure, withheld output, a
     concurrent capture that took the version).
     """
     record = intelligence_record
@@ -254,6 +401,11 @@ def create_brief(
         campaign = db.get(Campaign, campaign_id)
         if campaign is None or campaign.workspace_id != opportunity.workspace_id:
             raise NotFoundError("Campaign not found in this workspace.")
+
+    # The S1-5D capture rule (amended by Q-4): resolve first, refuse an existing location that
+    # is not the workspace's or is UNRESOLVED before any budget or model use; no location is
+    # NULL.
+    jurisdiction_code = _capture_jurisdiction(db, opportunity, record)
 
     try:
         ensure_run_allowed(db, settings, opportunity.workspace_id)
@@ -336,6 +488,8 @@ def create_brief(
         opportunity_id=opportunity.id,
         intelligence_record_id=record.id,
         location_id=record.location_id,
+        # Captured once, here (Phase 5D §2); NULL only for a record with no location (Q-4).
+        jurisdiction_code=jurisdiction_code,
         campaign_id=campaign_id,
         brief_version=version,
         parent_brief_id=parent_id,
@@ -390,14 +544,18 @@ def create_brief(
         brief_id=brief.id,
         brief_version=brief.brief_version,
         is_simulated=brief.is_simulated,
+        # A category, never the code or the location: whether a jurisdiction was captured.
+        jurisdiction="captured" if jurisdiction_code is not None else NO_LOCATION,
     )
     return brief
 
 
 __all__ = [
     "BRIEF_TASK",
+    "JURISDICTION_UNRESOLVED_MESSAGE",
     "BriefBudgetExhaustedError",
     "BriefGenerationUnavailableError",
+    "BriefJurisdictionUnresolvedError",
     "BriefNotProducedError",
     "BriefVersionConflictError",
     "BriefWithheldError",

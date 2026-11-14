@@ -2,10 +2,9 @@
 
 The 5D plan gives this module to lane 5D-W1 (§5): "a brief/draft/review row snapshots the
 jurisdiction, and a jurisdiction-restricted claims-library rule fires only in its
-jurisdictions". **Only the claims half is here.** The snapshot half tests lane 5D-W3's capture
-code in ``briefs/service.py`` and ``creative/service.py``, which does not exist yet and waits
-for the operator's ruling on packet item 33 (and ideally 31); its tests come with that code. No
-placeholder, skipped or expected-failure test stands in for it.
+jurisdictions". The claims half comes first (lane 5D-W1). The snapshot half, which tests lane
+5D-W3's capture code in ``briefs/service.py`` and ``creative/service.py``, is the section lane
+5D-W4 appended below, written after items 33 and 31 were ruled and that code existed (I-5D).
 
 What is proven here, with the shared gate :func:`app.jurisdiction.resolver.jurisdiction_permits`
 deciding every match (codes, never substrings):
@@ -18,12 +17,12 @@ deciding every match (codes, never substrings):
   approved entry only inside one of its codes; a blocking or required-disclaimer entry unless
   the draft's code is known to lie outside all of them.
 * **Fail closed when the draft's jurisdiction is unknown** (``None``, ``UNRESOLVED`` or
-  malformed; every draft today, since nothing captures one before 5D-W3): restricted entries
-  that restrict apply, restricted entries that permit do not. An unreadable stored restriction
-  fails closed both ways.
+  malformed; since 5D-W3 only a legacy draft has none): restricted entries that restrict
+  apply, restricted entries that permit do not. An unreadable stored restriction fails closed
+  both ways (ruling B-2).
 * **End to end through the database**: a rule set through the API and read by
-  :func:`app.claims.library.load_library` fires only in its jurisdictions, and the creative
-  service's own call (``active_entries(load_library(...))``, no jurisdiction) gets the
+  :func:`app.claims.library.load_library` fires only in its jurisdictions, and a call with no
+  jurisdiction (``active_entries(load_library(...))``, as a legacy draft's would be) gets the
   fail-closed reading.
 * **Reachable codes only (operator ruling Q-2, 2026-11-08)**: create and update refuse, with a
   422 naming the code, any code the shared resolver cannot produce (``US-PR``, ``US-ZZ``,
@@ -45,6 +44,7 @@ import os
 import string
 import subprocess
 import sys
+import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -307,9 +307,10 @@ def test_a_rule_set_through_the_api_fires_only_in_its_jurisdictions(env) -> None
 
 
 def test_callers_that_capture_no_jurisdiction_get_the_fail_closed_reading(env) -> None:
-    """The creative service reads ``active_entries(load_library(db, workspace_id))`` with no
-    jurisdiction (nothing captures one before 5D-W3): every restricted entry that restricts
-    applies, no restricted entry that permits is offered; a hand-written unreadable value too."""
+    """``active_entries(load_library(db, workspace_id))`` with no jurisdiction (the creative
+    service's call before 5D-W3, and a legacy draft's reading since): every restricted entry
+    that restricts applies, no restricted entry that permits is offered; a hand-written
+    unreadable value too."""
     ids = _library_world(env)
     with env.witness.begin() as conn:
         conn.execute(
@@ -612,3 +613,318 @@ def test_q2_the_report_command_runs_read_only_against_a_database(env) -> None:
     assert found.returncode == 1, found.stdout + found.stderr
     assert "entry=q2-blocked-us-pr" in found.stdout and "entry=q2-retired-us-pr" not in found.stdout
     assert _snapshot(env) == snapshot
+
+
+# =========================================================================== #
+# The snapshot half (exit criterion 6, first clause), lane 5D-W4 phase 2.
+#
+# Disclosed deviation: the plan gives this module to 5D-W1 (5d:189). W1's lane closed with the
+# claims half above; the snapshot half tests lane 5D-W3's capture and propagation code
+# (``briefs/service.py``, ``creative/service.py``), and 5D-W3 authors no tests (5d:191), so lane
+# 5D-W4 writes it, independently of W3, as this appended section. W1's rows above are unchanged
+# (at I-5D the module docstring was brought up to date with this section; text only).
+#
+# What is pinned, from the S1-5D rulings record (2026-11-08) and 5d §2's propagation chain
+# location -> brief -> creative -> review:
+#
+# * a brief captured through the 5A route stores its location's code, for each matrix city;
+#   its draft and that draft's review carry the same code;
+# * **Q-1, ruled 2026-11-08 (immutable jurisdiction):** "A draft inherits its brief's captured
+#   jurisdiction. Editing the location does not alter existing brief, draft or review snapshots.
+#   A new brief version is needed to use the changed location's jurisdiction."
+#   (``test_q1_ruled_*`` below);
+# * the claims engine is given the draft's code at the three sites (B-3 rows), and a legacy
+#   draft with no code gets B-2's fail-closed reading at the approval re-check.
+#
+# A real HTTP world on SQLite and, when ``TEST_POSTGRES_URL`` is set, on PostgreSQL migrated to
+# head (``app.tests._creative_support``); offline mock model only.
+# =========================================================================== #
+from sqlalchemy import select  # noqa: E402
+
+from app.brands.service import get_primary_brand  # noqa: E402
+from app.briefs.models import RecommendationBrief  # noqa: E402
+from app.core.config import get_settings  # noqa: E402
+from app.creative.models import ContentReview, CreativeDraft  # noqa: E402
+from app.creative.service import draft_approval_refusal  # noqa: E402
+from app.jurisdiction.business_address import resolve_for_action  # noqa: E402
+from app.llm import service as llm_service_module  # noqa: E402
+from app.locations.models import BusinessLocation, GeoCoverageRule  # noqa: E402
+from app.tests._address_support import complete_address_of  # noqa: E402
+from app.tests._creative_support import (  # noqa: E402
+    CEILINGS,
+    CreativeWorld,
+    creative_world,
+    postgres_creative_world,
+)
+from app.tests.test_jurisdiction_failclosed import (  # noqa: E402
+    MATRIX_LOCATIONS,
+    _CountingProvider,
+    backstop_refuses_update,
+    capture,
+    evidence,
+)
+
+
+@pytest.fixture(scope="module", params=["sqlite", "postgresql"])
+def snapshot_world(request, tmp_path_factory) -> Iterator[CreativeWorld]:
+    if request.param == "sqlite":
+        db_file = tmp_path_factory.mktemp("w4-snapshot") / "api.db"
+        with creative_world(db_file, "w4snap") as world:
+            yield world
+        return
+    with postgres_creative_world("w4snap") as world:  # pragma: no cover - gated on PostgreSQL
+        yield world
+
+
+@pytest.fixture
+def generation_on(monkeypatch) -> None:
+    monkeypatch.setattr(get_settings(), "recommendation_briefs_enabled", True)
+    for name, value in {**CEILINGS, "llm_max_calls_per_workspace_per_day": 1000}.items():
+        monkeypatch.setattr(get_settings(), name, value)
+
+
+@pytest.fixture
+def sent(monkeypatch) -> _CountingProvider:
+    spy = _CountingProvider(llm_service_module.llm_service._provider)
+    monkeypatch.setattr(llm_service_module.llm_service, "_provider", spy)
+    return spy
+
+
+def _restricted(world: CreativeWorld, ws: str, text: str, kind: str, codes: list[str]) -> str:
+    """A claims-library entry restricted to ``codes`` (written as the API stores it)."""
+    with world.session() as s:
+        entry = ClaimsLibraryEntry(
+            organization_id=world.org_of(ws),
+            workspace_id=ws,
+            brand_id=get_primary_brand(s, ws).id,
+            text=text,
+            kind=kind,
+            jurisdiction_codes=list(codes),
+        )
+        s.add(entry)
+        s.flush()
+        return entry.id
+
+
+def _drafts(world: CreativeWorld, brief_id: str) -> list[dict]:
+    return sorted(world.rows(CreativeDraft, brief_id=brief_id), key=lambda d: d["draft_version"])
+
+
+def _review(world: CreativeWorld, draft_id: str) -> dict:
+    (row,) = world.rows(ContentReview, draft_id=draft_id)
+    return row
+
+
+def _generate(world: CreativeWorld, ws: str, brief_id: str) -> dict:
+    """Generate through the route and the worker; the newest draft of the brief."""
+    job = world.generated(brief_id, ws=ws)
+    assert job["status"] == "succeeded", (job["last_error_code"], job["last_error_summary"])
+    return _drafts(world, brief_id)[-1]
+
+
+def _refusal(world: CreativeWorld, draft_id: str) -> str | None:
+    with world.session() as s:
+        return draft_approval_refusal(s, s.get(CreativeDraft, draft_id))
+
+
+def _legacy_draft(world: CreativeWorld, draft: dict) -> dict:
+    """A draft written before 5D-W3, with no ``jurisdiction_code``, made as such rows were made:
+    by INSERT, never by changing a stored draft. It is ``draft`` written again as the next version
+    of its brief, with its review, both without a code (the text and the passed review are the
+    generated ones, so only the jurisdiction differs).
+
+    On PostgreSQL, D-N4 item 37's append-only backstop (#318) refuses the older way, an UPDATE of
+    the stored draft, and that refusal is asserted first; the privacy-writer mark is never taken.
+    """
+    if world.witness.dialect.name == "postgresql":
+        backstop_refuses_update(world, CreativeDraft, draft["id"], jurisdiction_code=None)
+    review = _review(world, draft["id"])
+    version = max(d["draft_version"] for d in _drafts(world, draft["brief_id"])) + 1
+    legacy_id, review_id = uuid.uuid4().hex, uuid.uuid4().hex
+    with world.witness.begin() as conn:
+        conn.execute(
+            CreativeDraft.__table__.insert().values(
+                {**draft, "id": legacy_id, "draft_version": version,
+                 "parent_draft_id": draft["id"], "jurisdiction_code": None}
+            )
+        )  # fmt: skip
+        conn.execute(
+            ContentReview.__table__.insert().values(
+                {**review, "id": review_id, "draft_id": legacy_id, "draft_version": version,
+                 "jurisdiction_code": None}
+            )
+        )  # fmt: skip
+    legacy = world.row(CreativeDraft, legacy_id)
+    assert legacy["jurisdiction_code"] is None
+    assert _review(world, legacy_id)["jurisdiction_code"] is None
+    return legacy
+
+
+# --------------------------------------------------------------------------- #
+# 4. The snapshot: location -> brief -> draft -> review, for each matrix city
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("city", sorted(MATRIX_LOCATIONS))
+def test_each_matrix_city_is_snapshotted_on_the_brief_the_draft_and_the_review(
+    snapshot_world, generation_on, city
+) -> None:
+    world = snapshot_world
+    fields, address, code = MATRIX_LOCATIONS[city]
+    ws = world.workspace(f"snapshot {city}")
+    opp, record, _ = evidence(world, ws, location=fields, addresses=(address,))
+    created = capture(world, ws, opp, record)
+    assert created.status_code == 201, created.text
+    brief_id = created.json()["id"]
+    assert world.row(RecommendationBrief, brief_id)["jurisdiction_code"] == code
+    world.decide(brief_id, "approved")
+    draft = _generate(world, ws, brief_id)
+    assert draft["jurisdiction_code"] == code
+    assert _review(world, draft["id"])["jurisdiction_code"] == code
+
+
+def test_q1_ruled_a_draft_keeps_its_briefs_code_after_the_location_moves(
+    snapshot_world, generation_on
+) -> None:
+    """Q-1, ruled 2026-11-08 (immutable jurisdiction): a draft inherits its brief's captured
+    jurisdiction; editing the location alters no existing brief, draft or review snapshot; a new
+    brief version is needed to use the changed location's jurisdiction. So a location moved after
+    capture changes neither the brief nor any later draft or review of it."""
+    world = snapshot_world
+    fields, address, code = MATRIX_LOCATIONS["dallas"]
+    ws = world.workspace("q1 default")
+    opp, record, location_id = evidence(world, ws, location=fields, addresses=(address,))
+    brief_id = capture(world, ws, opp, record).json()["id"]
+    world.decide(brief_id, "approved")
+    locations, rules = BusinessLocation.__table__, GeoCoverageRule.__table__
+    # Each move is consistent (the location and its coverage address, free text and structured
+    # fields, move together), so a fresh capture would give another code (US-OK, GB) or none at
+    # all; the draft keeps US-TX.
+    for moved, address, fresh in (
+        ({"city": "Tulsa", "state_province": "OK", "country": "US"}, "Tulsa, OK", "US-OK"),
+        (
+            {"city": "London", "state_province": None, "country": "United Kingdom"},
+            "London, UK",
+            "GB",
+        ),
+        ({"city": "Dallas", "state_province": None, "country": "US"}, "Dallas, US", UNRESOLVED),
+    ):
+        with world.witness.begin() as conn:
+            conn.execute(update(locations).where(locations.c.id == location_id).values(**moved))
+            conn.execute(
+                update(rules)
+                .where(rules.c.location_id == location_id)
+                .values(business_address=address, **complete_address_of(moved))
+            )
+        with world.session() as s:  # the move is real: the capture's check now answers another
+            location = s.get(BusinessLocation, location_id)
+            moved_rules = s.scalars(
+                select(GeoCoverageRule).where(GeoCoverageRule.location_id == location_id)
+            ).all()
+            assert resolve_for_action(location, moved_rules).code == fresh
+        draft = _generate(world, ws, brief_id)
+        assert draft["jurisdiction_code"] == code, moved
+        assert _review(world, draft["id"])["jurisdiction_code"] == code, moved
+    assert world.row(RecommendationBrief, brief_id)["jurisdiction_code"] == code  # written once
+    assert [d["draft_version"] for d in _drafts(world, brief_id)] == [1, 2, 3]
+
+
+# --------------------------------------------------------------------------- #
+# 5. The claims engine is given the draft's code at all three sites
+# --------------------------------------------------------------------------- #
+def test_generation_offers_the_entries_of_the_drafts_jurisdiction(
+    snapshot_world, generation_on, sent
+) -> None:
+    """B-3 at the generation context: an approved US entry is offered for a US-TX draft, an
+    approved US-TX entry is not offered for a GB draft; a US disclaimer is required in US-TX."""
+    world = snapshot_world
+    ws = world.workspace("claims generation")
+    _restricted(world, ws, "Family run since 1998", "approved", ["US"])
+    _restricted(world, ws, "Texas owned and operated", "approved", ["US-TX"])
+    _restricted(world, ws, "Proudly British", "approved", ["GB"])
+    _restricted(world, ws, "Open every day", "approved", [])
+    _restricted(world, ws, "Terms apply in the US.", "required_disclaimer", ["US"])
+    offered = {}
+    for code in ("US-TX", "GB"):
+        draft = _generate(world, ws, world.seed_brief(ws, jurisdiction_code=code))
+        assert draft["jurisdiction_code"] == code
+        inputs = sent.requests[-1].inputs
+        offered[code] = (list(inputs["approved_claims"]), list(inputs["required_disclaimers"]))
+    assert offered["US-TX"] == (
+        ["Family run since 1998", "Texas owned and operated", "Open every day"],
+        ["Terms apply in the US."],
+    )
+    assert offered["GB"] == (["Proudly British", "Open every day"], [])
+
+
+def test_the_generation_review_reads_the_library_in_the_drafts_jurisdiction(
+    snapshot_world, generation_on
+) -> None:
+    """B-3 at review: a blocked GB entry does not block a US-TX draft and does block a GB one;
+    a blocked US entry blocks a US-TX draft (a country entry applies to its subdivisions)."""
+    world = snapshot_world
+    gb_only = world.workspace("claims review gb")
+    _restricted(world, gb_only, "weekend parking", "blocked", ["GB"])
+    us_tx = _generate(world, gb_only, world.seed_brief(gb_only, jurisdiction_code="US-TX"))
+    gb = _generate(world, gb_only, world.seed_brief(gb_only, jurisdiction_code="GB"))
+    assert (_review(world, us_tx["id"])["is_blocked"], _review(world, us_tx["id"])["passed"]) == (
+        False,
+        True,
+    )
+    assert _review(world, gb["id"])["is_blocked"] is True
+    us_only = world.workspace("claims review us")
+    _restricted(world, us_only, "weekend parking", "blocked", ["US"])
+    texan = _generate(world, us_only, world.seed_brief(us_only, jurisdiction_code="US-TX"))
+    assert _review(world, texan["id"])["is_blocked"] is True
+    for draft in (us_tx, gb, texan):
+        assert _review(world, draft["id"])["jurisdiction_code"] == draft["jurisdiction_code"]
+
+
+def test_the_approval_recheck_reads_the_library_in_the_drafts_jurisdiction(
+    snapshot_world, generation_on
+) -> None:
+    """B-3 at the approval re-check, then B-2 for a legacy draft whose code is NULL: restricting
+    entries apply to it wherever they are restricted to (rulings record, D-2 / B-2: "Preserve
+    this handling for legacy unknown-jurisdiction records")."""
+    world = snapshot_world
+    ws = world.workspace("claims recheck")
+    texan = _generate(world, ws, world.seed_brief(ws, jurisdiction_code="US-TX"))
+    british = _generate(world, ws, world.seed_brief(ws, jurisdiction_code="GB"))
+    legacy = _generate(world, ws, world.seed_brief(ws, jurisdiction_code="US-TX"))
+    legacy = _legacy_draft(world, legacy)  # a draft written before 5D-W3: no code
+    assert {_refusal(world, d["id"]) for d in (texan, british, legacy)} == {None}
+    _restricted(world, ws, "weekend parking", "blocked", ["GB"])
+    assert _refusal(world, texan["id"]) is None
+    assert _refusal(world, british["id"]) == "blocked_claim"
+    assert _refusal(world, legacy["id"]) == "blocked_claim"  # B-2
+    disclaimers = world.workspace("claims recheck disclaimer")
+    texan = _generate(world, disclaimers, world.seed_brief(disclaimers, jurisdiction_code="US-TX"))
+    legacy = _generate(world, disclaimers, world.seed_brief(disclaimers, jurisdiction_code="US-TX"))
+    legacy = _legacy_draft(world, legacy)
+    _restricted(world, disclaimers, "Licensed in Kenya.", "required_disclaimer", ["KE"])
+    assert _refusal(world, texan["id"]) is None
+    assert _refusal(world, legacy["id"]) == "disclaimer_missing"  # B-2
+    _restricted(world, disclaimers, "weekend parking", "blocked", ["US"])
+    assert _refusal(world, texan["id"]) == "blocked_claim"  # B-3: US applies to US-TX
+
+
+def test_b2_at_the_service_a_legacy_draft_gets_every_restricted_entry(
+    snapshot_world, generation_on
+) -> None:
+    """B-2 at the approval re-check, at the service (``draft_approval_refusal``, which the 5B
+    approval service calls): a draft whose ``jurisdiction_code`` is NULL (written before 5D-W3)
+    is refused by a jurisdiction-restricted blocked entry and by a jurisdiction-restricted
+    disclaimer it does not carry, whatever jurisdiction they are restricted to; a restricted
+    approved entry changes nothing for it."""
+    world = snapshot_world
+    for kind, text, codes, expected in (
+        ("blocked", "weekend parking", ["NG-LA"], "blocked_claim"),
+        ("prohibited", "weekend parking", ["KE"], "blocked_claim"),
+        ("required_disclaimer", "Licensed in Lagos State.", ["NG-LA"], "disclaimer_missing"),
+        ("approved", "Family run since 1998", ["GB"], None),
+    ):
+        ws = world.workspace(f"b2 service {kind}")
+        coded = _generate(world, ws, world.seed_brief(ws, jurisdiction_code="US-TX"))
+        legacy = _legacy_draft(world, coded)
+        assert world.row(CreativeDraft, legacy["id"])["jurisdiction_code"] is None
+        assert _refusal(world, legacy["id"]) is None  # the library is empty so far
+        _restricted(world, ws, text, kind, codes)
+        assert _refusal(world, legacy["id"]) == expected, kind

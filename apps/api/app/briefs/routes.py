@@ -19,9 +19,11 @@ The boundary mirrors the opportunity-feedback router (:mod:`app.feedback.routes`
   shipped state is the flag ``False`` with no override, so every endpoint is dark). A
   resolver failure is logged and re-raised (a 5xx), never turned into a decision. The gate
   runs before any scope lookup, so a dark deployment discloses nothing about ids.
-  Before any per-workspace enable (plan §10): a jurisdiction backfill plan for pre-5D
-  briefs, or a recorded operator decision blocking export and generation of rows with NULL
-  ``jurisdiction_code``.
+  The plan §10 precondition for any per-workspace enable (a jurisdiction back-fill plan for
+  pre-5D briefs, or a recorded operator decision blocking export and generation of rows with
+  NULL ``jurisdiction_code``) is ruled: item 31 = 31-A (2026-11-08), block and no back-fill.
+  The creative service refuses generation from such a brief (5D-W3); the export half is
+  5E-W1's.
 * **Authorization.** Capture (``POST``) is editor-only: owner / admin / marketer, the
   feedback precedent. Reads are open to every workspace member, like the opportunity they
   belong to, so the reviewer who approves a brief (Phase 5B, ``APPROVER_ROLES``) can read
@@ -208,6 +210,9 @@ def list_opportunity_briefs(
     )
 
 
+# The docstring below names every category of ACTION_CLARIFICATIONS (test_jurisdiction_failclosed
+# checks it). A category added to resolver.CLARIFICATIONS is named here too, then
+# `npm run gen:types`.
 @router.post(
     "/workspaces/{workspace_id}/opportunities/{opportunity_id}/briefs",
     response_model=RecommendationBriefOut,
@@ -225,11 +230,27 @@ def create_opportunity_brief(
     """Generate a brief from one of the opportunity's intelligence records (editor; gated).
 
     The record must live in this workspace (404) and belong to this opportunity (422); an
-    optional campaign must belong to the workspace (404). Answers 429
-    ``llm_budget_exhausted`` when the workspace's AI budget is spent, 503
-    ``brief_generation_unavailable`` when the model call fails, 422 ``brief_withheld`` when
-    the output fails the safety screen, and 409 when a concurrent capture took the version;
-    none of these stores a brief.
+    optional campaign must belong to the workspace (404). The brief records the jurisdiction
+    of the record's location; a record with no location gets a brief with no jurisdiction,
+    from which no draft can be generated. A location's jurisdiction needs its own country (and
+    its state or province in the United States, Canada, Australia and Nigeria) and, on its
+    coverage rules, a complete structured business address that agrees with it: the business
+    country, the business state or province where the location needs one, and the business
+    town or locality when the location has a city.
+
+    Answers 422 ``jurisdiction_unresolved``, before any model call or budget use, when the
+    record's location is not one of this workspace's, with no ``error.details``; or when its
+    jurisdiction cannot be determined, with ``error.details.reason`` naming one category of a
+    closed vocabulary and ``error.message`` that category's fixed text, never an address:
+    ``location_unresolved``, ``business_address_incomplete``, ``business_address_conflict``,
+    ``business_address_text_conflict``, ``business_address_locality_unconfirmed``, or one of
+    the business-address text's ``address_suffix_ambiguous``, ``address_names_another_place``,
+    ``address_place_unclear``, ``address_direction_ambiguous``, ``address_route_ambiguous`` and
+    ``address_territory_unclear``.
+    It answers 429 ``llm_budget_exhausted`` when the workspace's AI budget is spent, 503
+    ``brief_generation_unavailable`` when the model call fails, 422 ``brief_withheld`` when the
+    output fails the safety screen, and 409 when a concurrent capture took the version; none
+    of these stores a brief.
     """
     _require_briefs_feature(db, ctx)
     opportunity = _get_scoped_opportunity(db, workspace_id, opportunity_id)

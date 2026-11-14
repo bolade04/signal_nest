@@ -152,11 +152,21 @@ export const coverageTypeLabels: Record<string, string> = {
   online: 'Online / global',
 };
 
+// A campaign's location mode and status are saved with it; nothing in the product acts on
+// either yet (apps/api/app/core/enums.py), so no label here claims an action.
 export const campaignModeLabels: Record<string, string> = {
   same_for_all: 'Same for all locations',
   per_location: 'Independent per location',
   grouped: 'Grouped location sets',
-  recommend: 'Let SignalNest recommend',
+  recommend: 'Recommend',
+};
+
+export const campaignStatusLabels: Record<string, string> = {
+  draft: 'Draft',
+  active: 'Active',
+  paused: 'Paused',
+  completed: 'Completed',
+  archived: 'Archived',
 };
 
 export const roleLabels: Record<string, string> = {

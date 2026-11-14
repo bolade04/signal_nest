@@ -17,16 +17,25 @@ logger = get_logger("signalnest.errors")
 
 
 class SignalNestError(Exception):
-    """Base class for expected domain errors."""
+    """Base class for expected domain errors.
+
+    ``details`` is answered as the envelope's ``error.details`` only when a raise passes it;
+    otherwise the answer has no ``details`` key, as before. It must hold fixed, closed values,
+    never customer text. One raise passes it: the brief capture's ``jurisdiction_unresolved``,
+    ``{"reason": <category>}`` (:class:`app.briefs.service.BriefJurisdictionUnresolvedError`;
+    W21 #313, the structured-address wiring)."""
 
     status_code = 400
     code = "error"
+    details: object | None = None
 
-    def __init__(self, message: str, *, code: str | None = None):
+    def __init__(self, message: str, *, code: str | None = None, details: object | None = None):
         super().__init__(message)
         self.message = message
         if code:
             self.code = code
+        if details is not None:
+            self.details = details
 
 
 class NotFoundError(SignalNestError):
@@ -274,7 +283,9 @@ def _public_validation_errors(errors: Sequence[Any]) -> list[dict]:
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(SignalNestError)
     async def _domain(_: Request, exc: SignalNestError):
-        return JSONResponse(status_code=exc.status_code, content=_envelope(exc.code, exc.message))
+        return JSONResponse(
+            status_code=exc.status_code, content=_envelope(exc.code, exc.message, exc.details)
+        )
 
     @app.exception_handler(RequestValidationError)
     async def _validation(_: Request, exc: RequestValidationError):

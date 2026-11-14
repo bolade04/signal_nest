@@ -169,8 +169,12 @@ class CreativeWorld:
         summary: str = BRIEF_SUMMARY,
         version: int = 1,
         opportunity_id: str | None = None,
+        jurisdiction_code: str | None = "US-TX",
     ) -> str:
-        """One brief on a real evidence chain; approved by the reviewer unless told not."""
+        """One brief on a real evidence chain; approved by the reviewer unless told not.
+
+        It carries a captured ``jurisdiction_code`` (Dallas, TX by default), as every brief the
+        5A service writes after 5D-W3 does; ``None`` models a brief written before capture."""
         ws = ws or self.ws
         org = self.org_of(ws)
         author = self.owner_id(ws) if ws == self.ws_b else self.users[author_role]
@@ -222,7 +226,8 @@ class CreativeWorld:
                 ),
                 summary=summary, rationale="Inference: demand is forming around parking.",
                 recommended_actions=list(BRIEF_ACTIONS), suggested_angles=list(BRIEF_ANGLES),
-                risk_notes=[], evidence_refs=[record_id], **scoped,
+                risk_notes=[], evidence_refs=[record_id], jurisdiction_code=jurisdiction_code,
+                **scoped,
             ))
         if approved:
             self.decide(brief_id, "approved")

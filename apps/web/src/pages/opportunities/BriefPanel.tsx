@@ -1,5 +1,9 @@
+import { useQuery } from '@tanstack/react-query';
 import { FileText, Sparkles } from 'lucide-react';
 import { useState } from 'react';
+import { ApiError } from '@/api/client';
+import * as api from '@/api/endpoints';
+import { queryKeys } from '@/api/queryKeys';
 import type { RecommendationBriefOut } from '@/api/types';
 import { ErrorState } from '@/components/common/states';
 import { Badge } from '@/components/ui/badge';
@@ -11,6 +15,7 @@ import { canEditWorkspace, useActorRole } from '@/lib/roles';
 import { Link } from 'react-router-dom';
 import { BriefDecisions } from '@/pages/approvals/BriefDecisions';
 import { useCreativeCapability } from '@/pages/creative/useCreative';
+import { ACTION_CLARIFICATIONS } from '@/lib/jurisdictionClarifications';
 import { formatDateTime } from '@/lib/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
 import {
@@ -32,6 +37,67 @@ export function briefAuthorName(snapshot: string): string {
   const withoutId = snapshot.replace(/^\S+\s+/, '');
   const name = withoutId.replace(/\s*<[^<>]*>$/, '').trim();
   return name || 'Unknown author';
+}
+
+/**
+ * Operator ruling Q-1 (2026-11-08): a draft inherits its brief's captured jurisdiction;
+ * editing the location changes no existing brief, draft or review; a new brief version is
+ * needed to use a changed location. Said where a version's drafts are opened, to every member
+ * who sees "Open drafts"; the remedy (`NEW_VERSION_REMEDY`) only to members who can create a
+ * brief version (review r3 copy C-a). No jurisdiction code is shown: briefs do not expose one.
+ * For an opportunity known to have no location, `NO_LOCATION_NOTE` is said instead (Q-4).
+ */
+const DRAFT_JURISDICTION_NOTE =
+  'Drafts from this version use the jurisdiction recorded when this version was created. ' +
+  'Editing the location does not change existing briefs, drafts or reviews.';
+const NEW_VERSION_REMEDY = 'To use a changed location, generate a new version first.';
+
+/**
+ * Operator ruling Q-4 (2026-11-08): an opportunity with no location gets a recommendation
+ * brief with no jurisdiction, and item 31 refuses drafts from it. Said where the brief is
+ * created and viewed, only when the page's opportunity is known to have no location, and only
+ * while creative drafts are offered at all (as "Open drafts" is). It replaces the Q-1 note,
+ * which is about a recorded jurisdiction that such a brief does not have.
+ */
+const NO_LOCATION_NOTE =
+  'This opportunity has no location (for example, it came from a workspace-wide scout), so its ' +
+  'brief gives recommendations only. Creative drafts can’t be generated from it, because a ' +
+  'draft needs the jurisdiction of a location.';
+
+/**
+ * The brief capture's `jurisdiction_unresolved` refusal (5D-W3; S1-5D capture rule; since #313
+ * the structured-address check). Since Q-4 an opportunity with no location is not refused, so
+ * the cause is always an existing location. The API names the check's category in
+ * `error.details.reason`; the panel shows that category's static copy
+ * (`ACTION_CLARIFICATIONS`, mirrored from the API's vocabulary) after "No brief was
+ * generated." With no reason (the API's tenant refusal) or a reason the copy does not know,
+ * this one generic wording is shown. Never the server's text: its message is neither read nor
+ * rendered, so the client's 400-character clamp never cuts a category's copy (S-12).
+ */
+const JURISDICTION_UNRESOLVED_MESSAGE =
+  'No brief was generated because the jurisdiction of this opportunity’s location could not be ' +
+  'determined. Complete or correct the location’s details so that its country, its state or ' +
+  'province (required in the United States, Canada, Australia and Nigeria) and its business address all ' +
+  'name the same place, then generate the brief again.';
+
+function isJurisdictionUnresolved(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return false;
+  const detail = error.detail as { error?: { code?: string } } | null;
+  return detail?.error?.code === 'jurisdiction_unresolved';
+}
+
+/** The static copy for a `jurisdiction_unresolved` refusal: its category's, or the generic. */
+function jurisdictionUnresolvedCopy(error: unknown): string {
+  const detail = error instanceof ApiError ? (error.detail as { error?: { details?: unknown } } | null) : null;
+  const details = detail?.error?.details;
+  const reason =
+    details && typeof details === 'object' && !Array.isArray(details)
+      ? (details as { reason?: unknown }).reason
+      : undefined;
+  if (typeof reason === 'string' && Object.prototype.hasOwnProperty.call(ACTION_CLARIFICATIONS, reason)) {
+    return `No brief was generated. ${ACTION_CLARIFICATIONS[reason]}`;
+  }
+  return JURISDICTION_UNRESOLVED_MESSAGE;
 }
 
 function ListSection({ title, items }: { title: string; items: string[] }) {
@@ -132,6 +198,16 @@ function BriefPanelBody({
   const create = useCreateBrief({ workspaceId, opportunityId });
   // I-5C: the shown version's drafts are one link away while creative generation is enabled.
   const creative = useCreativeCapability(workspaceId);
+  // The opportunity the detail page has already loaded: its cache entry, read without a
+  // request of its own. Not loaded (unknown) is not "no location": the Q-4 note stays hidden.
+  const opportunity = useQuery({
+    queryKey: queryKeys.opportunity(workspaceId, opportunityId),
+    queryFn: ({ signal }) => api.getOpportunity(workspaceId, opportunityId, signal),
+    enabled: false,
+  });
+  // Q-4: the record a new brief is captured from carries the opportunity's location (both are
+  // the scout's), so no location here means the brief's jurisdiction is NULL.
+  const noLocationNote = creative.isEnabled && opportunity.data?.location_id === null;
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   // Enabled globally but resolved disabled for this workspace: hide, as when dark.
@@ -176,15 +252,34 @@ function BriefPanelBody({
               }}
             />
             {creative.isEnabled ? (
-              <Button size="sm" variant="outline" asChild>
-                <Link to={`/creative/${shown.id}?opportunity=${encodeURIComponent(opportunityId)}`}>
-                  Open drafts
-                </Link>
-              </Button>
+              <div className="space-y-1.5">
+                <Button size="sm" variant="outline" asChild>
+                  <Link to={`/creative/${shown.id}?opportunity=${encodeURIComponent(opportunityId)}`}>
+                    Open drafts
+                  </Link>
+                </Button>
+                {noLocationNote ? (
+                  <p role="note" className="text-xs text-muted-foreground">
+                    {NO_LOCATION_NOTE}
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    {DRAFT_JURISDICTION_NOTE}
+                    {canCreate ? ` ${NEW_VERSION_REMEDY}` : null}
+                  </p>
+                )}
+              </div>
             ) : null}
           </>
         ) : (
-          <p className="text-sm text-muted-foreground">No brief has been generated yet.</p>
+          <>
+            <p className="text-sm text-muted-foreground">No brief has been generated yet.</p>
+            {noLocationNote ? (
+              <p role="note" className="text-xs text-muted-foreground">
+                {NO_LOCATION_NOTE}
+              </p>
+            ) : null}
+          </>
         )}
 
         {items.length > 1 ? (
@@ -231,6 +326,11 @@ function BriefPanelBody({
               <p className="text-xs text-muted-foreground">
                 A brief needs this opportunity&apos;s signal intelligence, which is not available
                 yet.
+              </p>
+            ) : null}
+            {create.isError && isJurisdictionUnresolved(create.error) ? (
+              <p role="alert" className="text-sm text-destructive">
+                {jurisdictionUnresolvedCopy(create.error)}
               </p>
             ) : null}
           </div>

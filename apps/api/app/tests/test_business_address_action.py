@@ -533,11 +533,19 @@ def test_the_text_refusal_is_worded_as_a_reading() -> None:
 
 def test_the_web_copy_mirrors_these_categories_and_messages() -> None:
     """The web's static copy (``apps/web/src/lib/jurisdictionClarifications.ts``), which the brief
-    panel shows for ``error.details.reason``, holds exactly these five lines and the remedy."""
+    panel shows for ``error.details.reason`` (#313), holds exactly the vocabulary: this package's
+    five lines in ``ADDRESS_CLARIFICATIONS``, the reader's in ``READER_CLARIFICATIONS`` (RI-1's
+    ``address_territory_unclear`` among them, GEO-P4 #321), each word for word, and the remedy.
+    No line stands ahead of the API's vocabulary."""
     mirror = (APP.parents[1] / "web/src/lib/jurisdictionClarifications.ts").read_text()
+    address, _, reader = mirror.partition("export const READER_CLARIFICATIONS")
+    assert reader, "the reader's categories have their own export"
     for category, message in ADDRESS_CLARIFICATIONS.items():
-        assert f'  {category}: "{message}",\n' in mirror, category
-    assert mirror.count('",\n') == len(ADDRESS_CLARIFICATIONS)
+        assert f'  {category}: "{message}",\n' in address, category
+    for category, message in CLARIFICATIONS.items():
+        assert f'  {category}: "{message}",\n' in reader, category
+    assert address.count('",\n') == len(ADDRESS_CLARIFICATIONS)
+    assert reader.count('",\n') == len(CLARIFICATIONS)
     assert f'export const TEXT_REMEDY = "{TEXT_REMEDY}";' in mirror
 
 
@@ -622,11 +630,10 @@ def test_the_unresolved_answer_is_never_a_stored_code() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# G0: no product module calls the resolver or the action check yet
+# G0: the product callers of the resolver and of the action check
 # --------------------------------------------------------------------------- #
-def test_no_product_module_calls_the_resolver_or_the_action_check() -> None:
-    """Register gate G0 attaches to ``resolve_jurisdiction``'s first caller outside tests
-    (#313's capture, which will add itself here when it wires :func:`resolve_for_action`)."""
+def product_callers(name: str) -> set[str]:
+    """The product modules (outside tests) that call ``name``, by plain name or attribute."""
     callers = set()
     for path in APP.rglob("*.py"):
         if "tests" in path.parts:
@@ -634,7 +641,54 @@ def test_no_product_module_calls_the_resolver_or_the_action_check() -> None:
         tree = ast.parse(path.read_text())
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
-                name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
-                if name in {"resolve_jurisdiction", "resolve_for_action"}:
+                called = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+                if called == name:
                     callers.add(path.relative_to(APP).as_posix())
-    assert callers == {"jurisdiction/business_address.py"}
+    return callers
+
+
+def product_importers(name: str) -> set[str]:
+    """The product modules (outside tests) that import ``name`` itself, under any alias
+    (``from ... import resolve_jurisdiction as resolve`` would hide a call from
+    :func:`product_callers`)."""
+    importers = set()
+    for path in APP.rglob("*.py"):
+        if "tests" in path.parts:
+            continue
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.ImportFrom) and any(a.name == name for a in node.names):
+                importers.add(path.relative_to(APP).as_posix())
+    return importers
+
+
+def product_references(name: str) -> set[str]:
+    """The product modules (outside tests) that name ``name`` at all: a call, a binding
+    (``check = business_address.resolve_for_action``), an argument, or an import under any alias.
+    A reference that is not a call would hide a caller from :func:`product_callers` and
+    :func:`product_importers` (review W21-R5D-A r1, F-1)."""
+    references = set()
+    for path in APP.rglob("*.py"):
+        if "tests" in path.parts:
+            continue
+        for node in ast.walk(ast.parse(path.read_text())):
+            if (
+                (isinstance(node, ast.Name) and node.id == name)
+                or (isinstance(node, ast.Attribute) and node.attr == name)
+                or (isinstance(node, ast.ImportFrom) and any(a.name == name for a in node.names))
+            ):
+                references.add(path.relative_to(APP).as_posix())
+    return references
+
+
+def test_only_the_brief_capture_calls_the_action_check_and_only_it_calls_the_resolver() -> None:
+    """Register gate G0 attaches to ``resolve_jurisdiction``'s first caller outside tests: #313's
+    brief capture (W21 ADDR item 9, review r1 BC-4; COORDINATOR-RULINGS-ADDR-r1: the guard names
+    :func:`resolve_for_action` as the only function ``briefs/service.py`` may call). So the
+    capture calls the action check and never the resolver, and the resolver is called by the
+    action check's module alone. A new caller of either fails here until it is reviewed."""
+    assert product_callers("resolve_for_action") == {"briefs/service.py"}
+    assert product_callers("resolve_jurisdiction") == {"jurisdiction/business_address.py"}
+    assert product_importers("resolve_for_action") == {"briefs/service.py"}
+    assert product_importers("resolve_jurisdiction") == {"jurisdiction/business_address.py"}
+    assert product_references("resolve_for_action") == {"briefs/service.py"}
+    assert product_references("resolve_jurisdiction") == {"jurisdiction/business_address.py"}

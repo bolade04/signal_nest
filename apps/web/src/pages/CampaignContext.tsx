@@ -217,7 +217,10 @@ const KINDS: KindConfig[] = [
     kind: 'campaigns',
     tab: 'Campaigns',
     singular: 'campaign',
-    blurb: 'Campaign contexts scouts can attach to. Mode sets how locations are treated.',
+    // I-5D (W21-REV-5DW3 r2 §10): "Mode sets how locations are treated" was untrue, since
+    // nothing in scouting or scoring reads a campaign's mode; said as the Campaigns page says it.
+    blurb:
+      'Campaign contexts scouts can attach to. A campaign’s location mode, status and locations are saved with it; scouting does not use them yet.',
     title: (r) => str(r.name) ?? 'Untitled campaign',
     subtitle: (r) => {
       const mode = str(r.mode);

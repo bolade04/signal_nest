@@ -46,8 +46,10 @@ evaluated under (:mod:`app.jurisdiction.codes`), each written once at insert and
 (``NULL``: none captured; the 5E export refuses such a draft; the resolver's ``UNRESOLVED`` is
 never stored). Both tables gain ``deleted_at``, the soft-delete marker of the 5E retention
 mechanism (durations: O-5): the one post-insert write the contract foresees, made only
-through Core by the retention code in :mod:`app.privacy`; the ORM guard refuses it. Nothing
-writes either column yet.
+through Core by the retention code in :mod:`app.privacy`; the ORM guard refuses it. Since
+5D-W3 the creative service writes ``jurisdiction_code`` on both (the brief's code at
+generation, and the draft's on its review), and refuses generation from a brief without one
+(item 31); nothing writes ``deleted_at`` yet.
 
 Portable types only; CHECKs rendered from the Python vocabularies.
 """

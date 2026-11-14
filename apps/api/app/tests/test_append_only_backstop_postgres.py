@@ -1319,6 +1319,78 @@ def test_deleting_a_campaign_a_brief_or_draft_names_is_refused_with_a_fixed_409(
         assert env.rows(Campaign, Campaign.id == "c1-campaign") == []
 
 
+def _masked(response) -> tuple[int, bytes]:
+    """The status and the raw body, with the answer's own request id masked."""
+    request_id = response.json().get("error", {}).get("request_id")
+    body = response.content
+    if request_id:
+        body = body.replace(request_id.encode(), b"<RID>")
+    return response.status_code, body
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_a_referenced_campaign_of_another_workspace_is_the_uniform_404(engine, tmp_path) -> None:
+    """R-5D-B r1 F-2: item 37's 409 stays behind the uniform 404. A campaign that a brief or a
+    draft names, addressed under another workspace's path (of the same organization or of
+    another), answers byte for byte as an id that does not exist, and nothing changes;
+    otherwise the 409 would tell one workspace that another's campaign exists and is in use."""
+    with _either(engine, tmp_path, "sn_bsu") as env:
+        with env.engine.begin() as conn:
+            conn.execute(
+                insert(RecommendationBrief.__table__).values(
+                    _brief_row(
+                        "su-brief",
+                        ws=WS_A,
+                        org=ORG_A,
+                        opportunity="a1-opp",
+                        intel="a1-intel",
+                        campaign_id="a1-campaign",
+                    )
+                )
+            )
+            conn.execute(
+                insert(RecommendationBrief.__table__).values(
+                    _brief_row(
+                        "su-brief2",
+                        ws=WS_A2,
+                        org=ORG_A,
+                        opportunity="a2-opp",
+                        intel="a2-intel",
+                    )
+                )
+            )
+            conn.execute(
+                insert(CreativeDraft.__table__).values(
+                    _draft_row(
+                        "su-draft",
+                        ws=WS_A2,
+                        org=ORG_A,
+                        opportunity="a2-opp",
+                        brief="su-brief2",
+                        campaign_id="a2-campaign",
+                    )
+                )
+            )
+        headers = env.auth(ALICE)
+        before = env.snapshot()
+        answers = set()
+        for ws, campaign in (
+            (WS_A2, "a1-campaign"),  # named by a brief, addressed under another workspace
+            (WS_C, "a1-campaign"),  # ... under another organization's workspace
+            (WS_A, "a2-campaign"),  # named by a draft, addressed under another workspace
+            (WS_C, "a2-campaign"),
+            (WS_A2, "no-such-campaign"),
+            (WS_A, "no-such-campaign"),
+        ):
+            r = env.client.delete(f"{API}/workspaces/{ws}/campaigns/{campaign}", headers=headers)
+            assert r.status_code == 404, (ws, campaign, r.text)
+            answers.add(_masked(r))
+        assert len(answers) == 1, answers
+        assert env.snapshot() == before  # nothing changed, memberships included
+        assert env.rows(Campaign, Campaign.id == "a1-campaign")
+        assert env.rows(Campaign, Campaign.id == "a2-campaign")
+
+
 TAKEDOWN_KEY = "bs-taken"
 
 

@@ -36,9 +36,11 @@ SignalIntelligenceRecord` discipline (Phase 5A plan §2):
   chain; no status vocabulary is frozen (Phase 5A plan §2).
 * **Jurisdiction snapshot (Project Phase 5D, W21 CF-3).** ``jurisdiction_code`` is the
   resolved jurisdiction captured with the brief (:mod:`app.jurisdiction.codes`), written once
-  at insert. It is **nullable**: ``NULL`` means no resolution was captured (every brief
-  written before 5D-W3 adds the capture), which the 5E export service refuses explicitly;
-  the resolver's ``UNRESOLVED`` is never stored (the CHECK refuses it).
+  at insert. It is **nullable**: ``NULL`` means no resolution was captured, either a brief
+  written before 5D-W3 added the capture or one whose opportunity had no location at capture
+  (operator ruling Q-4); the creative service refuses drafts from either (item 31) and the
+  5E export service refuses it explicitly. The resolver's ``UNRESOLVED`` is never stored
+  (the CHECK refuses it): an existing location that does not resolve is refused at capture.
 * **Retention marker (Project Phase 5E, W21 CF-3).** ``deleted_at`` is the soft-delete
   marker of the 5E retention mechanism (plan 5E §2; durations are operator decision O-5).
   It is the one post-insert write the contract foresees, and it is made only through Core
