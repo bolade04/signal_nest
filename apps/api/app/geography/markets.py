@@ -978,6 +978,14 @@ def _unlisted_territory(part: str) -> bool:
     return _territory_form(part) is not None
 
 
+def _plain_letters(text: str) -> str:
+    """GEO-P4 (review W21-REV-GEO-P4 r1 I-1; ruling P4-r1-R-3): ``text`` in compatibility letters
+    without accents, as :func:`fold` reads letters, case kept (the word "Territory" in full-width
+    letters, and "Territóry", as "Territory")."""
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
 def _without_territory_names(text: str) -> str:
     """GEO-P4 (register RI-1): ``text`` with each part that names a territory the tables do not list
     (:func:`_unlisted_territory`) read as its territory word alone, as written, before any postcode
@@ -987,14 +995,19 @@ def _without_territory_names(text: str) -> str:
     word that names nothing, as "Alabama Territory" already was ("Lagos Territory" was read as Lagos
     State). The resolver asks about it (``BusinessAddressReading.territories``). A part that also
     writes a code ("US-AL Territory") is kept as written: the code is read, as everywhere.
-    Separators and every other part are kept as written."""
+    Separators and every other part are kept as written. Review r1 I-1 (ruling P4-r1-R-3): the word
+    may be written in full-width letters or with an accent ("Lagos Ｔｅｒｒｉｔｏｒｙ", "Lagos
+    Territóry"); such a part is read in plain letters (:func:`_plain_letters`) and masked too, so
+    its name is never read either."""
     pieces = re.split(f"({_PART_SEPARATORS.pattern})", text)
     for index in range(0, len(pieces), 2):
         piece = pieces[index]
-        words = list(_TERRITORY_WORD.finditer(piece))
+        plain = _plain_letters(piece)
+        words = list(_TERRITORY_WORD.finditer(plain))
         form = _territory_form(piece)
         if not words or form is None or _CODE_TOKEN.search(piece):
             continue
+        piece = plain
         lead = piece[: len(piece) - len(piece.lstrip())]
         if form == "of":
             postcode = _TRAILING_POSTCODE.search(piece.rstrip())

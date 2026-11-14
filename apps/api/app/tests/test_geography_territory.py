@@ -27,7 +27,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from app.geography.markets import read_business_address
+from app.geography.markets import MarketIdentity, read_business_address
 from app.jurisdiction.business_address import (
     ACTION_CLARIFICATIONS,
     BUSINESS_ADDRESS_INCOMPLETE,
@@ -43,6 +43,7 @@ from app.jurisdiction.resolver import (
     ADDRESS_SUFFIX_AMBIGUOUS,
     ADDRESS_TERRITORY_UNCLEAR,
     CLARIFICATIONS,
+    _stated_subdivision,
     resolve_jurisdiction,
     subdivision_code_of,
 )
@@ -210,6 +211,47 @@ def test_ri1a_a_listed_name_with_a_country_after_it_reads_as_before(location, ad
 
 def test_ri1a_the_state_twin_is_unchanged():
     _refused(ANCHORAGE, "1 Main St, Montgomery, Alabama State USA", "states subdivision US-AL")
+
+
+# --------------------------------------------------------------------------- #
+# Review r1 I-1 (ruling P4-r1-R-3): the word in full-width letters or with an accent is masked too
+# --------------------------------------------------------------------------- #
+UMUAHIA = _location("Umuahia", "Abia", "Nigeria")
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        f"1 Main St, Ikeja, Lagos {FULL_WIDTH_TERRITORY}",
+        f"Lagos {FULL_WIDTH_TERRITORY}, 1 Main St, Nigeria",
+        "1 Main St, Ikeja, Lagos Territ\u00f3ry",
+        "Lagos Territo\u0301ry, 1 Main St, Nigeria",
+    ],
+)
+@pytest.mark.parametrize("location", [UMUAHIA, IKEJA], ids=["elsewhere", "namesake"])
+def test_i1_a_nigerian_name_with_the_word_in_other_letters_is_not_read(location, address):
+    # Refused for an Abia location on current main and at 78f0c30a ("states subdivision NG-LA").
+    _asks(location, address)
+
+
+def test_i1_the_part_is_masked_and_recorded():
+    reading = read_business_address(f"1 Main St, Ikeja, Lagos {FULL_WIDTH_TERRITORY}")
+    assert reading.territories == (f"Lagos {FULL_WIDTH_TERRITORY}",)
+    assert reading.places == ()
+    assert read_business_address("Lagos Territ\u00f3ry").places == ()
+
+
+def test_i1_a_region_the_text_states_never_reads_a_territory_as_its_name():
+    # Review r1's mutant M11: since the masking above, no unlisted territory reaches the stated
+    # region's reader through the text; the reader itself still reads none.
+    assert (
+        _stated_subdivision(MarketIdentity(region="US:alabama territory", country="US"), "US")
+        is None
+    )
+    assert (
+        _stated_subdivision(MarketIdentity(region="NG:lagos territory", country="NG"), "NG") is None
+    )
+    assert _stated_subdivision(MarketIdentity(region="NG:lagos", country="NG"), "NG") == "NG-LA"
 
 
 @pytest.mark.parametrize(
