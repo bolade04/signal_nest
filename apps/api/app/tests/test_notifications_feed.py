@@ -23,6 +23,14 @@ global flag stays off):
   event code, the subject id and the two instants, nothing else; every member has one.
 * **Mark-read** (``POST …/notifications/{id}/read``) sets ``read_at`` once: a repeat, and a
   request that raced another, answer the first ``read_at``; the unread count follows.
+* **The hooks** (5E-W3 phase B), each through its real write path: a new brief version
+  (``POST …/briefs``) tells the reviewers ``brief.created``; a decision on a brief or a draft
+  (``POST …/approvals``) tells the subject's author ``approval.decided``; a generation (the
+  route and the real worker) tells the requester ``draft.generated``, and ``review.blocked``
+  when the stored review is blocked. With the capability off every one of them succeeds and
+  writes nothing. On PostgreSQL, an emission never waits for a recipient's user row held
+  elsewhere (account erasure holds it ``FOR UPDATE``): that recipient is skipped and the
+  decision commits.
 
 Positive paths and behaviour only: every refusal (cross-user and cross-workspace 404s, the
 membership 403, the dark 503s) is lane 5E-W4's.
@@ -31,18 +39,24 @@ membership 403, the dark 503s) is lane 5E-W4's.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import contextmanager
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import create_engine, select, text
 
 from app.approvals.models import Approval
+from app.approvals.service import record_draft_decision
+from app.auth.dependencies import TenantContext
 from app.briefs.models import RecommendationBrief
-from app.core.enums import NotificationEventCode
+from app.core.config import get_settings
+from app.core.enums import ApprovalDecision, NotificationEventCode, Role
 from app.creative.models import ContentReview, CreativeDraft
 from app.exports.models import Export
 from app.notifications.models import Notification
 from app.notifications.recipients import notify, resolve_recipients
 from app.notifications.service import emit_notifications, mark_read
+from app.organizations.models import Organization, User, Workspace
+from app.tests._creative_support import CEILINGS
 from app.tests.fixtures.analytics import T0, T1, Rows, at, creative_world_on, set_capability
 
 CODES = NotificationEventCode
@@ -400,3 +414,160 @@ def test_read_notifications_stay_in_the_feed_newest_first(world):
     feed = _feed(world, ws, "viewer")
     assert [i["id"] for i in feed["items"]] == [ids["newest"], ids["middle"], ids["oldest"]]
     assert (feed["total"], feed["unread"]) == (3, 1)
+
+
+# --------------------------------------------------------------------------- #
+# The hooks (5E-W3 phase B): each event through its real write path
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def generation_ceilings(monkeypatch) -> None:
+    """Every generation ceiling set (they ship unset, and generation refuses until set)."""
+    for name, value in {**CEILINGS, "llm_max_calls_per_workspace_per_day": 1000}.items():
+        monkeypatch.setattr(get_settings(), name, value)
+
+
+def _hook_workspace(world, name: str, *, notifications: bool = True) -> str:
+    """A workspace with briefs and creative generation open by override (flags off)."""
+    ws = world.workspace(name)  # creative_generation: the world's override
+    set_capability(world, ws, "recommendation_briefs")
+    if notifications:
+        set_capability(world, ws, NOTIFICATIONS)
+    return ws
+
+
+def _new_brief_version(world, ws: str) -> tuple[str, str]:
+    """A brief version captured through ``POST …/briefs`` by the marketer (create_brief)."""
+    seeded = world.row(RecommendationBrief, world.seed_brief(ws, approved=False))
+    r = world.send("POST", f"/workspaces/{ws}/opportunities/{seeded['opportunity_id']}/briefs",
+                   "marketer", {"intelligence_record_id": seeded["intelligence_record_id"]})
+    assert r.status_code == 201, r.text
+    return r.json()["id"], seeded["opportunity_id"]
+
+
+def _decide_brief(world, ws: str, opportunity_id: str, brief_id: str, decision: str) -> str:
+    version = world.row(RecommendationBrief, brief_id)["brief_version"]
+    r = world.send("POST",
+                   f"/workspaces/{ws}/opportunities/{opportunity_id}/briefs/{brief_id}/approvals",
+                   "reviewer", {"decision": decision, "subject_version": version})
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def _decide_draft(world, ws: str, draft_id: str, decision: str) -> str:
+    r = world.send("POST", f"/workspaces/{ws}/drafts/{draft_id}/approvals", "reviewer",
+                   {"decision": decision, "subject_version": 1})
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def _generate(world, ws: str) -> str:
+    """One draft of a fresh approved brief, requested by the marketer and run by the worker."""
+    brief = world.seed_brief(ws)  # approved by the reviewer (a 5B row, written directly)
+    job = world.generated(brief, ws=ws)
+    assert job["status"] == "succeeded", (job["last_error_code"], job["last_error_summary"])
+    [draft] = world.rows(CreativeDraft, brief_id=brief)
+    return draft["id"]
+
+
+def test_creating_a_brief_notifies_the_reviewers_not_its_author(world, generation_ceilings):
+    ws = _hook_workspace(world, "hook brief")
+    brief_id, _ = _new_brief_version(world, ws)
+    assert _received(world, ws) == {world.users["reviewer"]: [("brief.created", brief_id)]}
+
+
+def test_a_brief_decision_notifies_the_briefs_author(world, generation_ceilings):
+    users = world.users
+    ws = _hook_workspace(world, "hook brief decision", notifications=False)
+    brief_id, opportunity_id = _new_brief_version(world, ws)
+    set_capability(world, ws, NOTIFICATIONS)
+    approval_id = _decide_brief(world, ws, opportunity_id, brief_id, "approved")
+    assert _received(world, ws) == {users["marketer"]: [("approval.decided", approval_id)]}
+
+
+def test_generation_notifies_the_requester_and_a_blocked_review_too(world, generation_ceilings):
+    marketer = world.users["marketer"]
+    ws = _hook_workspace(world, "hook generation")
+    passed = _generate(world, ws)
+    assert _received(world, ws) == {marketer: [("draft.generated", passed)]}
+
+    world.claim("weekend parking", ws=ws)  # the claims library now blocks the model's text
+    blocked = _generate(world, ws)
+    [review] = world.rows(ContentReview, draft_id=blocked)
+    assert review["is_blocked"] is True
+    assert _received(world, ws) == {marketer: sorted([
+        ("draft.generated", passed),
+        ("draft.generated", blocked),
+        ("review.blocked", review["id"]),
+    ])}
+
+
+def test_a_draft_decision_notifies_the_drafts_author(world, generation_ceilings):
+    marketer = world.users["marketer"]
+    ws = _hook_workspace(world, "hook draft decision", notifications=False)
+    draft = _generate(world, ws)
+    set_capability(world, ws, NOTIFICATIONS)
+    approved = _decide_draft(world, ws, draft, "approved")
+    revoked = _decide_draft(world, ws, draft, "revoked")
+    assert _received(world, ws) == {marketer: sorted([
+        ("approval.decided", approved), ("approval.decided", revoked),
+    ])}
+
+
+def test_with_notifications_off_every_hook_succeeds_and_writes_none(world, generation_ceilings):
+    ws = _hook_workspace(world, "hook dark", notifications=False)
+    brief_id, opportunity_id = _new_brief_version(world, ws)
+    _decide_brief(world, ws, opportunity_id, brief_id, "approved")
+    world.claim("weekend parking", ws=ws)
+    draft = _generate(world, ws)
+    assert world.rows(ContentReview, draft_id=draft)[0]["is_blocked"] is True
+    _decide_draft(world, ws, draft, "rejected")
+    assert world.rows(Notification, workspace_id=ws) == []
+
+
+@contextmanager
+def _row_held_for_update(world, user_id: str) -> Iterator[None]:
+    """Another connection holds ``user_id``'s users row FOR UPDATE (as account erasure does)
+    until the block ends."""
+    other = create_engine(world.engine.url, future=True)
+    conn = other.connect()
+    tx = conn.begin()
+    try:
+        conn.execute(text("SELECT id FROM users WHERE id = :u FOR UPDATE"), {"u": user_id})
+        yield
+    finally:
+        tx.rollback()
+        conn.close()
+        other.dispose()
+
+
+def _decide_draft_in_session(world, ws: str, draft_id: str, decision: ApprovalDecision) -> str:
+    """``record_draft_decision`` as the route runs it, bounded by a 2 s lock timeout."""
+    s = world.factory()
+    try:
+        s.execute(text("SET LOCAL lock_timeout = '2s'"))
+        ctx = TenantContext(user=s.get(User, world.users["reviewer"]),
+                            organization=s.get(Organization, world.org),
+                            workspace=s.get(Workspace, ws), role=Role.REVIEWER)
+        approval = record_draft_decision(s, ctx=ctx, draft=s.get(CreativeDraft, draft_id),
+                                         decision=decision, subject_version=1)
+        s.commit()
+        return approval.id
+    finally:
+        s.close()
+
+
+def test_an_emission_never_waits_for_a_recipient_row_held_elsewhere(world, generation_ceilings):
+    if world.engine.dialect.name != "postgresql":
+        pytest.skip("row locks are PostgreSQL's (SQLite serializes every writer)")
+    marketer = world.users["marketer"]
+    ws = _hook_workspace(world, "hook lock", notifications=False)
+    draft = _generate(world, ws)
+    set_capability(world, ws, NOTIFICATIONS)
+    with _row_held_for_update(world, marketer):
+        skipped = _decide_draft_in_session(world, ws, draft, ApprovalDecision.APPROVED)
+    # The decision committed without waiting; the author, whose row was held, was skipped.
+    assert world.row(Approval, skipped) is not None
+    assert world.rows(Notification, workspace_id=ws) == []
+    # Released: the next decision reaches the author.
+    revoked = _decide_draft_in_session(world, ws, draft, ApprovalDecision.REVOKED)
+    assert _received(world, ws) == {marketer: [("approval.decided", revoked)]}

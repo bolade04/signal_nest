@@ -152,6 +152,9 @@ def test_an_export_skips_an_approver_who_turned_export_notifications_off(world):
         opp = rows.opportunity(location_id=None)
         brief = rows.brief(opportunity_id=opp, author=users["marketer"], location_id=None,
                            code="US-TX", created_at=T0)
+        # D-N4 item 38: a draft is exportable only while its brief version is approved.
+        rows.decision(subject=brief, kind="brief", decision="approved", seq=1,
+                      reviewer=users["reviewer"], decided_at=at(T0, 60))
         draft = rows.draft(brief_id=brief, author=users["marketer"], created_at=T1)
         rows.review(draft_id=draft, outcome="passed")
         rows.decision(subject=draft, kind="draft", decision="approved", seq=1,
