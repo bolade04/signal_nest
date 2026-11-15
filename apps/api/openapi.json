@@ -15960,7 +15960,7 @@
         ]
       },
       "post": {
-        "description": "Record one append-only decision (approve / reject / revoke) on the draft's exact\nversion. Reviewer only; never the draft's author; ``subject_version`` must be the draft's\nversion (409 otherwise); ``revoked`` only withdraws a controlling approval; an approval\nis refused (409 ``approval_review_blocked``) while the draft's content review does not\nallow it.",
+        "description": "Record one append-only decision (approve / reject / revoke) on the draft's exact\nversion. Reviewer only; never the draft's author; ``subject_version`` must be the draft's\nversion (409 otherwise); ``revoked`` only withdraws a controlling approval; an approval\nis refused (409 ``approval_review_blocked``) while the draft's content review does not\nallow it, or while the controlling decision on the brief version the draft was generated\nfrom is not ``approved``. A decision already recorded is not affected.",
         "operationId": "decide_on_draft_api_v1_workspaces__workspace_id__drafts__draft_id__approvals_post",
         "parameters": [
           {
