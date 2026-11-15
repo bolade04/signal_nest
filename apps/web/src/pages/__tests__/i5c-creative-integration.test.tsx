@@ -441,7 +441,12 @@ describe('I-5C: draft decisions match the API for every role', () => {
     await screen.user.click(await within(article).findByRole('button', { name: 'Approve' }));
     const dialog = await screen.findByRole('dialog');
     await screen.user.click(within(dialog).getByRole('button', { name: 'Approve' }));
-    expect(await screen.findByText(/the claims library changed since it was reviewed/)).toBeInTheDocument();
+    // D-N4 item 38: one code for every reason, so the sentence also names the brief.
+    expect(
+      await screen.findByText(
+        "This draft can't be approved: its content review doesn't allow it, the claims library changed since it was reviewed, or its brief is no longer approved.",
+      ),
+    ).toBeInTheDocument();
     expect(screen.queryByText('SERVER-TEXT-NOT-SHOWN')).not.toBeInTheDocument();
   });
 });
