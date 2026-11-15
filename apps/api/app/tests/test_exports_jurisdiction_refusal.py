@@ -24,7 +24,7 @@ from collections.abc import Iterator
 
 import pytest
 from sqlalchemy import delete, insert
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DataError, IntegrityError
 
 from app.approvals.models import Approval
 from app.audit.models import AuditLog
@@ -247,7 +247,9 @@ def test_success_copies_the_drafts_code_onto_the_export(world, ws, code):
 @pytest.mark.parametrize("value", [None, "UNRESOLVED", "us-tx", "USA", ""])
 def test_the_database_refuses_an_export_row_without_a_code(world, ws, value):
     """``exports.jurisdiction_code``: NOT NULL, and its CHECK has no ``IS NULL`` limb and
-    refuses the sentinel, lower case and a three-letter country (exports/models.py)."""
+    refuses the sentinel, lower case and a three-letter country (exports/models.py). On
+    PostgreSQL the 10-character sentinel is already refused by the column's length (a data
+    error) before the CHECK; SQLite has no length limit, so the CHECK refuses it there."""
     made = draft(world, ws, draft_code="US-TX", brief_code="US-TX")
     approval = world.rows(Approval, subject_id=made)[0]["id"]
     who = world.users["owner"]
@@ -257,7 +259,7 @@ def test_the_database_refuses_an_export_row_without_a_code(world, ws, value):
         "jurisdiction_code": value, "exported_by": who,
         "exported_by_snapshot": f"{who} owner <o@example.com>", "is_simulated": True,
     }
-    with pytest.raises(IntegrityError):
+    with pytest.raises((IntegrityError, DataError)):
         with world.engine.begin() as conn:
             conn.execute(insert(Export.__table__).values(**row))
     assert world.count(Export, draft_id=made) == 0
