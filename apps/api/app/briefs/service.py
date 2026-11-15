@@ -95,6 +95,7 @@ from app.campaign_context.models import Campaign
 from app.claims.engine import translate_competitor_weakness
 from app.core.actor_snapshot import actor_snapshot
 from app.core.config import Settings
+from app.core.enums import NotificationEventCode
 from app.core.errors import NotFoundError, SignalNestError, ValidationDomainError
 from app.core.logging import get_logger, log_event
 from app.intelligence.records import SignalIntelligenceRecord
@@ -110,6 +111,7 @@ from app.llm.models import LLMUsageEvent
 from app.llm.screening import screen_explanation
 from app.llm.service import LLMService
 from app.locations.models import BusinessLocation, GeoCoverageRule
+from app.notifications.recipients import notify
 from app.opportunities.context import build_business_context
 from app.opportunities.models import Opportunity, ValidationEvidence
 from app.organizations.models import User
@@ -535,6 +537,12 @@ def create_brief(
             "is_simulated": brief.is_simulated,
         },
     )
+    # 5E-W3: brief.created, in this transaction, after the brief and its audit row are flushed
+    # and after the opportunity lock. No lock of its own: while notifications_analytics is off
+    # it only reads; while on, its rows' foreign keys reuse the organization and workspace this
+    # brief's insert holds, and the reviewers' user rows are taken KEY SHARE SKIP LOCKED, never
+    # waited for (app.notifications.service, "Locks").
+    notify(db, NotificationEventCode.BRIEF_CREATED, brief, actor_user_id=author.id)
     log_event(
         logger,
         "recommendation_brief_created",

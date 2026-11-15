@@ -117,7 +117,7 @@ from app.claims.engine import (
 from app.claims.library import load_library
 from app.core.actor_snapshot import actor_snapshot
 from app.core.config import Settings
-from app.core.enums import ApprovalDecision, ApprovalSubjectType, Role
+from app.core.enums import ApprovalDecision, ApprovalSubjectType, NotificationEventCode, Role
 from app.core.errors import NotFoundError, SignalNestError, ValidationDomainError
 from app.core.logging import get_logger, log_event
 from app.creative.models import ContentReview, CreativeDraft
@@ -152,6 +152,7 @@ from app.llm.quota import (
     unusable_ceilings,
 )
 from app.llm.screening import screen_creative
+from app.notifications.recipients import notify
 from app.organizations.models import OrganizationMember, User
 
 logger = get_logger("signalnest.creative")
@@ -825,7 +826,8 @@ def execute_generation(
         db.flush()
     except IntegrityError:
         raise _fail(JobErrorCode.TRANSIENT, "version_conflict") from None
-    db.add(_review_row(draft, review))
+    review_row = _review_row(draft, review)
+    db.add(review_row)
     db.flush()
 
     record_audit(
@@ -848,6 +850,15 @@ def execute_generation(
             "is_blocked": review.is_blocked,
         },
     )
+    # 5E-W3: draft.generated, and review.blocked when the stored review is blocked, in this
+    # attempt's transaction, after the draft, its review and its audit row are flushed and under
+    # the generation locks. No new lock: while notifications_analytics is off it only reads;
+    # while on, its rows' foreign keys reuse the organization (KEY SHARE), the workspace (held
+    # NO KEY UPDATE) and the requester's user row the draft's own created_by already holds. A
+    # job has no acting user, so the requester is notified (app.notifications.recipients).
+    notify(db, NotificationEventCode.DRAFT_GENERATED, draft, actor_user_id=None)
+    if review_row.is_blocked:
+        notify(db, NotificationEventCode.REVIEW_BLOCKED, review_row, actor_user_id=None)
     log_event(
         logger,
         "creative_draft_created",

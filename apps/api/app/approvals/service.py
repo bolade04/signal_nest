@@ -230,7 +230,7 @@ from app.audit.service import record_audit
 from app.auth.dependencies import TenantContext
 from app.briefs.models import RecommendationBrief
 from app.core.actor_snapshot import actor_snapshot
-from app.core.enums import ApprovalDecision, ApprovalSubjectType, Role
+from app.core.enums import ApprovalDecision, ApprovalSubjectType, NotificationEventCode, Role
 from app.core.errors import (
     ConflictError,
     NotFoundError,
@@ -240,6 +240,7 @@ from app.core.errors import (
 from app.core.logging import get_logger, log_event
 from app.creative.models import CreativeDraft
 from app.creative.service import draft_approval_refusal
+from app.notifications.recipients import notify
 from app.organizations.models import Organization, OrganizationMember, User
 
 logger = get_logger("signalnest.approvals")
@@ -610,6 +611,14 @@ def record_decision(
             "reason_code": approval.reason_code,
         },
     )
+    # 5E-W3: approval.decided, in this transaction, after the decision and its audit row are
+    # flushed and after every lock of "Lock order" (steps 1-5 are unchanged). It adds no lock to
+    # that order: while notifications_analytics is off it only reads; while on, its rows'
+    # foreign keys reuse step 2's organization, take the workspace KEY SHARE (it can wait only
+    # for an override or schedule-cap mutation, which waits on nothing a decision holds), and
+    # the author's user row is taken KEY SHARE SKIP LOCKED, never waited for
+    # (app.notifications.service, "Locks").
+    notify(db, NotificationEventCode.APPROVAL_DECIDED, approval, actor_user_id=ctx.user.id)
     log_event(
         logger,
         "approval_decision_recorded",
@@ -883,6 +892,14 @@ def record_draft_decision(
             "reason_code": approval.reason_code,
         },
     )
+    # 5E-W3: approval.decided, in this transaction, after the decision and its audit row are
+    # flushed and after every lock of "Lock order" (steps 1-5 are unchanged). It adds no lock to
+    # that order: while notifications_analytics is off it only reads; while on, its rows'
+    # foreign keys reuse step 2's organization, take the workspace KEY SHARE (it can wait only
+    # for an override or schedule-cap mutation, which waits on nothing a decision holds), and
+    # the author's user row is taken KEY SHARE SKIP LOCKED, never waited for
+    # (app.notifications.service, "Locks").
+    notify(db, NotificationEventCode.APPROVAL_DECIDED, approval, actor_user_id=ctx.user.id)
     log_event(
         logger,
         "approval_decision_recorded",
