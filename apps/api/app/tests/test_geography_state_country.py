@@ -209,10 +209,58 @@ LOCATIONS = [MONTGOMERY, ANCHORAGE, IKEJA, UMUAHIA, TORONTO, VANCOUVER, DARWIN, 
 @pytest.mark.parametrize("shape", SHAPES)
 @pytest.mark.parametrize("sep", SEPARATORS, ids=repr)
 def test_ri2_each_form_answers_as_its_twin_with_a_comma(part, twin, shape, sep):
+    """The same answer as the twin with a comma, or a refusal where the twin asks: what D1's reader
+    read explicitly from a later part ("Alabama US": US-AL) stays read, and refuses where the comma
+    twin's names ask (GEO-P1's address_names_another_place). Never weaker than the twin, and never
+    accepted where it is not."""
     for location in LOCATIONS:
         written = shape.format(p=part, s=sep, c=location.country)
         separated = shape.format(p=twin.replace(", ", sep), s=sep, c=location.country)
-        assert _answer(location, written) == _answer(location, separated), (location, written)
+        got, twin_answer = _answer(location, written), _answer(location, separated)
+        if got != twin_answer:
+            assert got[:2] == (UNRESOLVED, None) and twin_answer[1] is not None, (
+                location,
+                written,
+                got,
+                twin_answer,
+            )
+            assert not shape.startswith("{p}"), (
+                location,
+                written,
+            )  # the first part is always split
+
+
+@pytest.mark.parametrize(
+    ("address", "evidence_end", "twin"),
+    [
+        ("1 Main St, Alabama US, Kenya", "states country US", "1 Main St, Alabama, US, Kenya"),
+        (
+            "1 Main St, Nairobi, Alabama State US, Kenya",
+            "states country US",
+            "1 Main St, Nairobi, Alabama State, US, Kenya",
+        ),
+        (
+            "1 Main St, Springfield, Alabama 36104 US, Kenya",
+            "states country US",
+            "1 Main St, Springfield, Alabama 36104, US, Kenya",
+        ),
+        ("1 Main St, New York US, Kenya", "states country US", "1 Main St, New York, US, Kenya"),
+        ("Suite 5, 1 Main St, Springfield, Alabama State USA, Kenya", "states country US", None),
+        ("1 Main St, Ikeja, Lagos State NG, Kenya", "states country NG", None),
+        ("1 Main St, Edmonton, Alberta State CA, Kenya", "states country CA or country US", None),
+    ],
+)
+def test_ri2_what_d1_read_from_a_later_part_stays_read(address, evidence_end, twin):
+    # Refused on current main: D1 reads the later part as a town and a code ("Alabama US": US-AL;
+    # "Lagos State NG": Nigeria). D1's explicit reading is kept beside the two parts, so the address
+    # is still refused where the comma twin asks (address_names_another_place or
+    # address_place_unclear: the address also names Kenya).
+    _refused(NAIROBI, address, evidence_end)
+    if twin is not None:
+        assert _resolve(NAIROBI, twin).reason in (
+            ADDRESS_NAMES_ANOTHER_PLACE,
+            ADDRESS_PLACE_UNCLEAR,
+        ), twin
 
 
 @pytest.mark.parametrize(

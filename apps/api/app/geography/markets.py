@@ -1109,7 +1109,8 @@ def _with_state_country_parts(text: str) -> str:
     (:func:`_state_and_country`) read as two parts, the state and then the country, as if a comma
     stood between them ("Alabama State United States, 1 Main St" reads as "Alabama State, United
     States, 1 Main St"). Every existing rule then reads both: the state is compared with the
-    location, and so is the country. Separators and every other part are kept as written."""
+    location, and so is the country. Separators and every other part are kept as written. What
+    D1's reader read explicitly from such a later part stays read (:func:`_kept_readings`)."""
     pieces = re.split(f"({_PART_SEPARATORS.pattern})", text)
     for index in range(0, len(pieces), 2):
         piece = pieces[index]
@@ -1117,6 +1118,27 @@ def _with_state_country_parts(text: str) -> str:
         if at is not None:
             pieces[index] = piece[:at].rstrip() + ", " + piece[at:]
     return "".join(pieces)
+
+
+def _kept_readings(
+    text: str,
+) -> tuple[tuple[MarketIdentity, ...], tuple[tuple[MarketIdentity, ...], ...]]:
+    """GEO-P5 (register RI-2): ``(readings, groups)``: D1's explicit readings
+    (:func:`_part_reading`) and explicit groups (:func:`_part_groups`, C-8) of each later part, as
+    written, that :func:`_with_state_country_parts` reads as two parts ("Alabama US" is US-AL,
+    "Lagos State NG" is Nigeria, "New York US" the United States, "Alberta State CA" Canada or
+    California). They stay explicit beside the two parts, so reading a part as two never turns D1's
+    refusal into a clarification ("1 Main St, Alabama US, Kenya" for Nairobi is refused, as on
+    main, where its comma twin "..., Alabama, US, Kenya" asks). The first part has no explicit
+    reading (W21-REV-GEO r1 C-1), so none is kept."""
+    plain = _with_listed_aliases(_other_separators("\n".join(text.splitlines())))
+    readings: list[MarketIdentity] = []
+    groups: list[tuple[MarketIdentity, ...]] = []
+    for part in _written_parts(plain)[1:]:
+        if _state_and_country(part) is not None:
+            readings += _part_reading(part)[0]
+            groups += _part_groups(part)[0]
+    return tuple(readings), tuple(groups)
 
 
 def _separated_text(text: str) -> str:
@@ -1223,6 +1245,8 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
         return BusinessAddressReading(None)
     # GEO-P4 (register RI-1): the parts that name a territory the tables do not list, as written.
     territories = _territory_parts(text)
+    # GEO-P5 (register RI-2): what D1 read explicitly from a later part that is now read as two.
+    kept, kept_groups = _kept_readings(text)
     # W21-REV-GEO r1 C-4: every line break is one; GEO-P3 (register G-10): the other separators
     # (review I-2) and the listed aliases (operator ruling, option (a)); GEO-P4: each such
     # territory part read as its territory word alone.
@@ -1231,9 +1255,9 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
     reading = _read_business_address(text)
     return BusinessAddressReading(
         reading.stated,
-        reading.parts,
+        reading.parts + kept,
         reading.ambiguous,
-        reading.alternatives,
+        reading.alternatives + kept_groups,
         reading.ambiguous_alternatives,
         _part_places(text),
         reading.routes,
