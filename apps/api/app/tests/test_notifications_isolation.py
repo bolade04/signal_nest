@@ -20,6 +20,11 @@ The round's one new cross-USER IDOR class (5e exit 2(d)). Proven through the rea
   the flag on; the safety ceiling outranks both. The emitter writes no row while dark (and
   does not consume its recipient list): an export with O-12(B) off commits without a
   notification; with it on, the draft's author and the approver are told, never the exporter.
+* **The emission hooks** (5E-W3 phase B: brief creation, brief and draft decisions, generation
+  and a blocked review): while dark (no override, a disable override with the flag off or on,
+  the ceiling) every triggering write succeeds and writes no notification; a refused decision
+  (blocked review, item 38's unapproved brief, a role that may not decide) and a refused
+  export write none; a rolled-back decision or export leaves none.
 
 The world is the 5C harness on SQLite and, with ``TEST_POSTGRES_URL``, PostgreSQL at head (the
 override CHECK admits ``notifications_analytics`` there since revision 53fdde95354a).
@@ -553,3 +558,193 @@ def test_the_dark_check_is_per_workspace(world, ws):
     assert notes(world, workspace_id=dark) == []
     assert len(notes(world, workspace_id=ws)) == 1
     assert world.count(Notification, workspace_id=dark) == 0
+
+
+# =========================================================================== #
+# The emission hooks (5E-W3 phase B, I-5E stage 1b): their negatives
+# =========================================================================== #
+# Every event goes through its real write path: a brief and its decision through their
+# routes, generation through the route and the real worker (mock model), a draft decision
+# through its route. ``notify`` is the last write of each, inside the triggering transaction.
+
+
+@pytest.fixture
+def hooks(monkeypatch) -> None:
+    """The parent features on (briefs globally; creative generation is the world's override)
+    and every generation ceiling set, so each event really happens."""
+    from app.tests._creative_support import CEILINGS
+
+    for name, value in {**CEILINGS, "llm_max_calls_per_workspace_per_day": 1000}.items():
+        monkeypatch.setattr(get_settings(), name, value)
+    monkeypatch.setattr(get_settings(), "recommendation_briefs_enabled", True)
+
+
+def _model_says(monkeypatch, body: str) -> None:
+    from app.llm.mock import MockLLMProvider
+
+    monkeypatch.setattr(MockLLMProvider, "_creative",
+                        lambda self, inputs, rng: {"headline": "", "body": body,
+                                                   "call_to_action": ""})  # fmt: skip
+
+
+def _brief_by_route(world: CreativeWorld, ws: str) -> tuple[str, str]:
+    """A new brief through ``POST …/briefs`` (the real ``create_brief``); (brief, opportunity)."""
+    seeded = world.row(RecommendationBrief, world.seed_brief(ws, approved=False))
+    body = {"intelligence_record_id": seeded["intelligence_record_id"]}
+    r = world.send("POST", f"{base(ws)}/opportunities/{seeded['opportunity_id']}/briefs",
+                   "marketer", body)  # fmt: skip
+    assert r.status_code == 201, r.text
+    return r.json()["id"], seeded["opportunity_id"]
+
+
+def _decide_brief(world: CreativeWorld, ws: str, opp: str, brief: str, decision: str = "approved",
+                  role: str = "reviewer"):  # fmt: skip
+    version = world.row(RecommendationBrief, brief)["brief_version"]
+    return world.send("POST", f"{base(ws)}/opportunities/{opp}/briefs/{brief}/approvals", role,
+                      {"decision": decision, "subject_version": version})  # fmt: skip
+
+
+def _decide_draft(world: CreativeWorld, ws: str, draft: str, decision: str = "approved",
+                  role: str = "reviewer"):  # fmt: skip
+    return world.send("POST", f"{base(ws)}/drafts/{draft}/approvals", role,
+                      {"decision": decision, "subject_version": 1})  # fmt: skip
+
+
+def _generated(world: CreativeWorld, ws: str, monkeypatch, body: str,
+               brief: str | None = None) -> str:  # fmt: skip
+    brief = brief or world.seed_brief(ws)  # approved, US-TX
+    _model_says(monkeypatch, body)
+    job = world.generated(brief, ws=ws)
+    assert job["status"] == "succeeded", (job["last_error_code"], job["last_error_summary"])
+    return max(world.rows(CreativeDraft, brief_id=brief), key=lambda d: d["draft_version"])["id"]
+
+
+def _every_event(world: CreativeWorld, ws: str, monkeypatch) -> None:
+    """brief.created, approval.decided (brief and draft), draft.generated and review.blocked,
+    each through its real path; every one succeeds."""
+    brief, opp = _brief_by_route(world, ws)
+    assert _decide_brief(world, ws, opp, brief).status_code == 201
+    passed = _generated(world, ws, monkeypatch, "Weekend parking made easy.")
+    assert _decide_draft(world, ws, passed).status_code == 201
+    world.claim("Guaranteed results", ws=ws)
+    blocked = _generated(world, ws, monkeypatch, "Guaranteed results every weekend.")
+    assert world.rows(ContentReview, draft_id=blocked)[0]["is_blocked"] is True
+    assert _decide_draft(world, ws, blocked, "rejected").status_code == 201
+
+
+def test_no_hook_writes_a_notification_while_dark(world, hooks, monkeypatch):
+    """O-12(B)'s "applicable notification emission": no override (flag off), a disable
+    override (flag off, then on), and the safety ceiling over an enable override and the flag.
+    Every triggering write still succeeds; no notification row is written for the workspace."""
+    real = resolver_mod._ceiling_blocks
+    for state, flag, ceiling in ((None, False, False), (False, False, False),
+                                 (False, True, False), (True, True, True)):  # fmt: skip
+        ws = world.workspace(f"n hooks dark {state} {flag} {ceiling}")
+        set_cap(world, ws, state)
+        monkeypatch.setattr(get_settings(), "notifications_analytics_enabled", flag)
+        if ceiling:
+            monkeypatch.setattr(
+                resolver_mod, "_ceiling_blocks",
+                lambda c, **kw: c is Capability.NOTIFICATIONS_ANALYTICS or real(c, **kw),
+            )
+        _every_event(world, ws, monkeypatch)
+        assert world.count(Notification, workspace_id=ws) == 0, (state, flag, ceiling)
+    # The control: on, the same paths write (so the hooks are live and the zero above is the
+    # gate's, not an absent hook's).
+    monkeypatch.setattr(resolver_mod, "_ceiling_blocks", real)
+    monkeypatch.setattr(get_settings(), "notifications_analytics_enabled", False)
+    ws = world.workspace("n hooks on")
+    set_cap(world, ws, True)
+    _every_event(world, ws, monkeypatch)
+    assert {r["event_code"] for r in notes(world, workspace_id=ws)} == {
+        "brief.created", "approval.decided", "draft.generated", "review.blocked"
+    }
+
+
+def test_a_refused_decision_writes_no_notification(world, hooks, monkeypatch):
+    """With notifications on, a decision the approval service refuses writes nothing: a draft
+    whose review blocks it (409), a draft whose brief is no longer approved (item 38, 409), a
+    role that may not decide (403); and a refused export notifies no one."""
+    ws = world.workspace("n hooks refused")
+    set_cap(world, ws, True)
+    world.claim("Guaranteed results", ws=ws)
+    blocked = _generated(world, ws, monkeypatch, "Guaranteed results every weekend.")
+    before = world.count(Notification, workspace_id=ws)  # draft.generated + review.blocked
+    r = _decide_draft(world, ws, blocked, "approved")
+    assert r.status_code == 409, r.text
+    assert world.count(Notification, workspace_id=ws) == before
+
+    brief = world.seed_brief(ws)
+    orphan = _generated(world, ws, monkeypatch, "Weekend parking made easy.", brief=brief)
+    before = world.count(Notification, workspace_id=ws)
+    world.decide(brief, "revoked")
+    r = _decide_draft(world, ws, orphan, "approved")
+    assert r.status_code == 409, r.text
+    assert "brief version this draft was generated from is not approved" in r.json()["error"][
+        "message"
+    ]
+    for role in ("marketer", "owner", "viewer"):
+        assert _decide_draft(world, ws, orphan, "approved", role=role).status_code == 403
+    assert world.count(Notification, workspace_id=ws) == before
+    assert not [n for n in notes(world, workspace_id=ws) if n["event_code"] == "approval.decided"]
+    seeded, opp = _brief_by_route(world, ws)
+    before = world.count(Notification, workspace_id=ws)  # brief.created
+    assert _decide_brief(world, ws, opp, seeded, role="marketer").status_code == 403
+    assert world.count(Notification, workspace_id=ws) == before
+
+    set_cap(world, ws, True, capability="content_export")
+    unapproved = _generated(world, ws, monkeypatch, "Weekend parking made easy.")
+    before = world.count(Notification, workspace_id=ws)
+    r = world.send("POST", f"{base(ws)}/drafts/{unapproved}/exports", "admin",
+                   {"format": "text/plain"})  # fmt: skip
+    assert r.status_code == 409, r.text
+    assert world.count(Notification, workspace_id=ws) == before
+    assert not [n for n in notes(world, workspace_id=ws) if n["event_code"] == "export.completed"]
+
+
+def test_a_rolled_back_transaction_leaves_no_notification(world, hooks, monkeypatch):
+    """The decision (or the export) and its notification are one transaction: inside it the
+    row exists; after a rollback neither does."""
+    from sqlalchemy import select
+
+    from app.approvals.service import record_draft_decision
+    from app.auth.dependencies import TenantContext
+    from app.core.enums import ApprovalDecision, Role
+    from app.exports.service import create_export
+    from app.organizations.models import Organization, Workspace
+
+    ws = world.workspace("n hooks rollback")
+    set_cap(world, ws, True)
+    set_cap(world, ws, True, capability="content_export")
+    draft = _generated(world, ws, monkeypatch, "Weekend parking made easy.")
+    before = world.count(Notification, workspace_id=ws)
+    s = world.factory()
+    try:
+        reviewer = TenantContext(user=s.get(User, world.users["reviewer"]),
+                                 organization=s.get(Organization, world.org),
+                                 workspace=s.get(Workspace, ws), role=Role.REVIEWER)  # fmt: skip
+        approval = record_draft_decision(s, ctx=reviewer, draft=s.get(CreativeDraft, draft),
+                                         decision=ApprovalDecision.APPROVED,
+                                         subject_version=1)  # fmt: skip
+        assert s.scalar(select(Notification.id).where(Notification.subject_id == approval.id))
+        s.rollback()
+    finally:
+        s.close()
+    assert world.count(Notification, workspace_id=ws) == before
+    assert world.rows(Approval, subject_id=draft) == []
+
+    assert _decide_draft(world, ws, draft).status_code == 201  # now really approved
+    before = world.count(Notification, workspace_id=ws)
+    s = world.factory()
+    try:
+        admin = TenantContext(user=s.get(User, world.users["admin"]),
+                              organization=s.get(Organization, world.org),
+                              workspace=s.get(Workspace, ws), role=Role.ADMIN)  # fmt: skip
+        result = create_export(s, ctx=admin, draft_id=draft, export_format="text/plain",
+                               emitter=emit_notifications)  # fmt: skip
+        assert s.scalar(select(Notification.id).where(Notification.subject_id == result.export.id))
+        s.rollback()
+    finally:
+        s.close()
+    assert world.count(Notification, workspace_id=ws) == before
+    assert world.count(Export, draft_id=draft) == 0

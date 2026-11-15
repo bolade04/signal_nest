@@ -2,7 +2,8 @@ import { screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { API_PREFIX } from '@/api/config';
-import type { DraftExportSummary } from '@/api/types';
+import type { ApprovalHistoryOut, CreativeDraftOut, DraftExportSummary } from '@/api/types';
+import { CreativeDraftsPanel } from '@/pages/creative/CreativeDraftsPanel';
 import { DraftExportControls } from '@/pages/creative/ExportDialog';
 import { ExportHistory } from '@/pages/creative/ExportHistory';
 import { orgModel } from '@/test/handlers';
@@ -17,6 +18,8 @@ import { renderApp } from '@/test/utils';
 // - Empty says so; 503, 403 and 404 are static lines, never server text; any other failure
 //   offers a retry.
 // - `enabled={false}` renders nothing and sends no request, and a VIEWER's controls never ask.
+// - In CreativeDraftsPanel (stage 1b): an approved version shows its history to every reader,
+//   asked once; a rejected version and a viewer's panel never ask.
 
 const WS = 'ws-1';
 const DRAFT = 'd-1';
@@ -167,5 +170,129 @@ describe('export history — who asks', () => {
     history([item()]);
     renderApp(<DraftExportControls workspaceId={WS} draftId={DRAFT} draftVersion={2} />);
     expect(await screen.findByRole('list', { name: 'Draft export history' })).toBeInTheDocument();
+  });
+});
+
+// --------------------------------------------------------------------------------------
+// In the drafts panel (5E-W3 phase B mount): the history of an approved version
+// --------------------------------------------------------------------------------------
+const BRIEF = 'brief-1';
+const OPP = 'opp-1';
+
+function approvals(kind: 'brief' | 'draft', decision: string): ApprovalHistoryOut {
+  const brief = kind === 'brief';
+  return {
+    items: [
+      {
+        id: `${kind}-appr-1`,
+        workspace_id: WS,
+        subject_type: brief ? 'recommendation_brief' : 'creative_draft',
+        subject_id: brief ? BRIEF : DRAFT,
+        subject_version: 1,
+        brief_id: brief ? BRIEF : null,
+        draft_id: brief ? null : DRAFT,
+        decision: decision as ApprovalHistoryOut['items'][number]['decision'],
+        decision_seq: 1,
+        reason_code: null,
+        note: null,
+        decided_by: 'user-reviewer',
+        decided_by_snapshot: 'user-reviewer Rhea Reviewer <rhea@example.com>',
+        decided_role: 'reviewer',
+        is_simulated: true,
+        created_at: '2026-11-01T11:00:00Z',
+      },
+    ],
+    total: 1,
+    limit: 20,
+    offset: 0,
+  };
+}
+
+function panelWorld(decision: 'approved' | 'rejected') {
+  const draftRow: CreativeDraftOut = {
+    id: DRAFT,
+    brief_id: BRIEF,
+    opportunity_id: OPP,
+    location_id: null,
+    campaign_id: null,
+    draft_version: 2,
+    parent_draft_id: null,
+    channel: 'email',
+    headline: 'Weekend parking',
+    body: 'Body.',
+    call_to_action: null,
+    prompt_name: 'generate_creative',
+    prompt_version: '1.0.0',
+    model_identifier: 'mock-1',
+    is_simulated: true,
+    created_by: 'user-1',
+    created_by_snapshot: 'user-1 Demo <demo@signalnest.dev>',
+    created_at: '2026-11-01T10:00:00Z',
+    review: {
+      id: 'review-1',
+      draft_id: DRAFT,
+      draft_version: 2,
+      risk_level: 'low',
+      is_blocked: false,
+      findings: [],
+      warnings: [],
+      blocked_claim_ids: [],
+      required_disclaimers: [],
+      disclaimers_resolved: true,
+      passed: true,
+      created_at: '2026-11-01T10:00:00Z',
+    },
+  };
+  server.use(
+    http.get(P('/workspaces/:ws/creative-capability'), () =>
+      HttpResponse.json({ enabled: true, generation_configured: true }),
+    ),
+    http.get(P(`/workspaces/${WS}/briefs/${BRIEF}/drafts`), () =>
+      HttpResponse.json({ items: [draftRow], total: 1, limit: 100, offset: 0 }),
+    ),
+    http.get(P(`/workspaces/${WS}/opportunities/${OPP}/briefs/${BRIEF}/approvals`), () =>
+      HttpResponse.json(approvals('brief', 'approved')),
+    ),
+    http.get(P(`/workspaces/${WS}/drafts/${DRAFT}/approvals`), () =>
+      HttpResponse.json(approvals('draft', decision)),
+    ),
+    http.get(P(`/workspaces/${WS}/export-capability`), () => HttpResponse.json({ enabled: true })),
+  );
+  return history([item()]);
+}
+
+describe('export history — in the drafts panel', () => {
+  it.each(['owner', 'reviewer', 'compliance_reviewer'] as const)(
+    '%s sees the approved version’s history, asked once for that draft',
+    async (role) => {
+      orgModel.setMembership('org-1', 'user-1', role);
+      const calls = panelWorld('approved');
+      renderApp(<CreativeDraftsPanel workspaceId={WS} briefId={BRIEF} opportunityId={OPP} />);
+      const list = await screen.findByRole('list', { name: 'Draft export history' });
+      expect(within(list).getByText(/^by Erin Exporter · /)).toBeInTheDocument();
+      expect(within(list).getByText('Jurisdiction US-TX')).toBeInTheDocument();
+      await settle();
+      expect(calls()).toBe(1);
+    },
+  );
+
+  it('a rejected version has no history in the panel and the history is never asked', async () => {
+    const calls = panelWorld('rejected');
+    renderApp(<CreativeDraftsPanel workspaceId={WS} briefId={BRIEF} opportunityId={OPP} />);
+    await waitFor(() => expect(seen.some((s) => s.endsWith(`/drafts/${DRAFT}/approvals`))).toBe(true));
+    await settle();
+    expect(screen.queryByRole('list', { name: 'Draft export history' })).not.toBeInTheDocument();
+    expect(calls()).toBe(0);
+  });
+
+  it('a viewer’s panel never asks for the history', async () => {
+    orgModel.setMembership('org-1', 'user-1', 'viewer');
+    const calls = panelWorld('approved');
+    renderApp(<CreativeDraftsPanel workspaceId={WS} briefId={BRIEF} opportunityId={OPP} />);
+    expect(await screen.findByRole('heading', { name: 'Drafts' })).toBeInTheDocument();
+    await settle();
+    await settle();
+    expect(calls()).toBe(0);
+    expect(seen.filter((s) => s.endsWith(`/drafts/${DRAFT}/approvals`))).toEqual([]);
   });
 });

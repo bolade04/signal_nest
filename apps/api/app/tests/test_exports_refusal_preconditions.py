@@ -12,8 +12,10 @@ no notification):
 * **Precondition 2, the review** (409 ``export_review_blocked``, P6: ``draft_approval_refusal``
   is reused): no review; a blocked review; a review that did not pass (a required disclaimer
   unresolved); a soft-deleted review (P2: counts as none); a claim the library blocks *now*;
-  a disclaimer the library requires *now*. Any reason a later change adds to
-  ``draft_approval_refusal`` (item 38's ``brief_not_approved`` among them) refuses too.
+  a disclaimer the library requires *now*; and D-N4 item 38's ``brief_not_approved``: the
+  brief version the draft was generated from is not approved now (rejected, revoked, never
+  approved; another version's approval does not count). Any reason a later change adds to
+  ``draft_approval_refusal`` refuses too.
 * **Precondition 4, the role** (403 ``permission_denied``; operator ruling D-N4 item 32):
   creating an export is exactly OWNER, ADMIN, MARKETER; reading the history is those plus
   REVIEWER and COMPLIANCE_REVIEWER; VIEWER is admitted to neither. The route's dependency is
@@ -68,6 +70,9 @@ MESSAGES = {
     ),
     "disclaimer_missing": (
         "This draft lacks a disclaimer the claims library now requires, so it can't be exported."
+    ),
+    "brief_not_approved": (
+        "This draft's brief is no longer approved, so the draft can't be exported."
     ),
     "other": "This draft can no longer be approved, so it can't be exported.",
 }
@@ -324,14 +329,54 @@ def test_another_workspaces_library_does_not_refuse_this_draft(world, ws):
 
 def test_a_reason_added_later_to_draft_approval_refusal_is_inherited(world, ws, monkeypatch):
     """P6: export reuses ``draft_approval_refusal``, so a precondition added there later (item
-    38's ``brief_not_approved``, item 39's withheld reasons) refuses export with no change in
-    the export service: an unknown reason gets the generic line, never an export."""
+    39's withheld reasons, say) refuses export with no change in the export service: a reason
+    the service does not name gets the generic line, never an export."""
     import app.exports.service as service
 
     made = draft(world, ws)
     decide(world, made, "approved")
-    monkeypatch.setattr(service, "draft_approval_refusal", lambda db, d: "brief_not_approved")
+    monkeypatch.setattr(service, "draft_approval_refusal", lambda db, d: "a_reason_added_later")
     assert_refused(world, ws, made, REVIEW_BLOCKED, "other")
+
+
+@pytest.mark.parametrize("brief_history", [("rejected",), ("revoked",), ()],
+                         ids=["approved-then-rejected", "approved-then-revoked", "never-approved"])
+def test_a_draft_whose_brief_version_is_not_approved_now_is_refused(world, ws, brief_history):
+    """D-N4 item 38 (inherited through ``draft_approval_refusal``, P6): the draft keeps its
+    own approval, but export refuses while the brief version it was generated from is not
+    approved now (approved then rejected, approved then revoked, or never approved): 409
+    ``export_review_blocked`` with the brief's own message, and nothing is written."""
+    brief = world.seed_brief(ws, jurisdiction_code="US-TX", approved=bool(brief_history))
+    made = draft(world, ws, brief_id=brief)
+    decide(world, made, "approved")
+    if brief_history:
+        assert export(world, ws, made).status_code == 201  # exportable while the brief is
+    for decision in brief_history:
+        world.decide(brief, decision)
+    assert_refused(world, ws, made, REVIEW_BLOCKED, "brief_not_approved")
+
+
+def test_the_brief_check_reads_the_drafts_own_brief_version(world, ws):
+    """Another version of the brief being approved does not count: a newer approved brief
+    version on the same opportunity leaves the old version's draft refused."""
+    old = world.seed_brief(ws, jurisdiction_code="US-TX")
+    made = draft(world, ws, brief_id=old)
+    decide(world, made, "approved")
+    world.decide(old, "revoked")
+    opportunity = world.row(RecommendationBrief, old)["opportunity_id"]
+    newer = world.seed_brief(ws, jurisdiction_code="US-TX", version=2, opportunity_id=opportunity)
+    assert world.row(RecommendationBrief, newer)["brief_version"] == 2
+    assert_refused(world, ws, made, REVIEW_BLOCKED, "brief_not_approved")
+    world.decide(old, "approved")  # the control: its own version approved again
+    assert export(world, ws, made).status_code == 201
+
+
+def test_the_brief_refusal_comes_after_the_decision_refusal(world, ws):
+    brief = world.seed_brief(ws, jurisdiction_code="US-TX", approved=False)
+    made = draft(world, ws, brief_id=brief)
+    assert_refused(world, ws, made, NOT_APPROVED, "no_decision")
+    decide(world, made, "approved")
+    assert_refused(world, ws, made, REVIEW_BLOCKED, "brief_not_approved")
 
 
 def test_the_decision_refusal_precedes_the_review_refusal(world, ws):

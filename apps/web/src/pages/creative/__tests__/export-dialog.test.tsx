@@ -2,7 +2,13 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { API_PREFIX } from '@/api/config';
-import type { DraftExport, DraftExportSummary } from '@/api/types';
+import type {
+  ApprovalHistoryOut,
+  CreativeDraftOut,
+  DraftExport,
+  DraftExportSummary,
+} from '@/api/types';
+import { CreativeDraftsPanel } from '@/pages/creative/CreativeDraftsPanel';
 import { DraftExportControls, ExportDialog } from '@/pages/creative/ExportDialog';
 import { orgModel, type ModelRole } from '@/test/handlers';
 import { server } from '@/test/server';
@@ -19,6 +25,8 @@ import { renderApp } from '@/test/utils';
 //   history refreshes.
 // - Every refusal is a static line, never the server's text: 503, 403, 404, and each of the
 //   four 409 codes of the export service, with a generic line for any other code.
+// - Mounted in CreativeDraftsPanel (stage 1b): only under a version whose latest decision is
+//   an approval; Export only for exporters; a viewer reads no decision and nothing of export.
 
 const WS = 'ws-1';
 const DRAFT = 'd-1';
@@ -236,7 +244,7 @@ const REFUSALS: [string, number, string, string][] = [
     'review blocked',
     409,
     'export_review_blocked',
-    "This draft's content review doesn't allow export, or the claims library changed since it was reviewed.",
+    "This draft can't be exported: its content review doesn't allow it, the claims library changed since it was reviewed, or its brief is no longer approved.",
   ],
   ['another conflict', 409, 'conflict', "This draft can't be exported in its current state."],
   ['an inherited key', 409, 'toString', "This draft can't be exported in its current state."],
@@ -284,5 +292,175 @@ describe('export dialog — standalone', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     expect(closed).toBe(1);
     expect(posted).toEqual([]);
+  });
+});
+
+// --------------------------------------------------------------------------------------
+// Mounted in CreativeDraftsPanel (5E-W3 phase B, I-5E stage 1b; interface sheet P3)
+// --------------------------------------------------------------------------------------
+// The panel mounts the controls under a draft version only while that version's controlling
+// decision is an approval, reads the decision history only for the roles that may read it
+// (every role but viewer), and the controls then follow the export reflection and the role.
+
+const BRIEF = 'brief-1';
+const OPP = 'opp-1';
+const DRAFT_ROW: CreativeDraftOut = {
+  id: DRAFT,
+  brief_id: BRIEF,
+  opportunity_id: OPP,
+  location_id: null,
+  campaign_id: null,
+  draft_version: 1,
+  parent_draft_id: null,
+  channel: 'email',
+  headline: 'Weekend parking',
+  body: 'Body of version 1.',
+  call_to_action: 'Learn more',
+  prompt_name: 'generate_creative',
+  prompt_version: '1.0.0',
+  model_identifier: 'mock-1',
+  is_simulated: true,
+  created_by: 'user-1',
+  created_by_snapshot: 'user-1 Demo <demo@signalnest.dev>',
+  created_at: '2026-11-01T10:00:00Z',
+  review: {
+    id: 'review-1',
+    draft_id: DRAFT,
+    draft_version: 1,
+    risk_level: 'low',
+    is_blocked: false,
+    findings: [],
+    warnings: [],
+    blocked_claim_ids: [],
+    required_disclaimers: [],
+    disclaimers_resolved: true,
+    passed: true,
+    created_at: '2026-11-01T10:00:00Z',
+  },
+};
+
+function decisionRow(kind: 'brief' | 'draft', decision: string): ApprovalHistoryOut['items'][number] {
+  const brief = kind === 'brief';
+  return {
+    id: `${kind}-appr-1`,
+    workspace_id: WS,
+    subject_type: brief ? 'recommendation_brief' : 'creative_draft',
+    subject_id: brief ? BRIEF : DRAFT,
+    subject_version: 1,
+    brief_id: brief ? BRIEF : null,
+    draft_id: brief ? null : DRAFT,
+    decision: decision as ApprovalHistoryOut['items'][number]['decision'],
+    decision_seq: 1,
+    reason_code: null,
+    note: null,
+    decided_by: 'user-reviewer',
+    decided_by_snapshot: 'user-reviewer Rhea Reviewer <rhea@example.com>',
+    decided_role: 'reviewer',
+    is_simulated: true,
+    created_at: '2026-11-01T11:00:00Z',
+  };
+}
+
+/** A creative workspace (generation on), one draft version whose latest decision is `decision`. */
+function panelBackend(decision: 'approved' | 'rejected' | 'revoked', { exportOn = true } = {}) {
+  const history = (items: ApprovalHistoryOut['items']): ApprovalHistoryOut => ({
+    items,
+    total: items.length,
+    limit: 20,
+    offset: 0,
+  });
+  server.use(
+    http.get(P('/workspaces/:ws/creative-capability'), () =>
+      HttpResponse.json({ enabled: true, generation_configured: true }),
+    ),
+    http.get(P(`/workspaces/${WS}/briefs/${BRIEF}/drafts`), () =>
+      HttpResponse.json({ items: [DRAFT_ROW], total: 1, limit: 100, offset: 0 }),
+    ),
+    http.get(P(`/workspaces/${WS}/opportunities/${OPP}/briefs/${BRIEF}/approvals`), () =>
+      HttpResponse.json(history([decisionRow('brief', 'approved')])),
+    ),
+    http.get(P(`/workspaces/${WS}/drafts/${DRAFT}/approvals`), () =>
+      HttpResponse.json(history([decisionRow('draft', decision)])),
+    ),
+    reflection({ enabled: exportOn }),
+  );
+  backend(); // the export routes (and the reflection again, on)
+  if (!exportOn) server.use(reflection({ enabled: false }));
+}
+
+function panel() {
+  return renderApp(<CreativeDraftsPanel workspaceId={WS} briefId={BRIEF} opportunityId={OPP} />);
+}
+
+const decisionReads = () => seen.filter((s) => s.endsWith(`/drafts/${DRAFT}/approvals`));
+
+describe('export controls — mounted in the drafts panel', () => {
+  it.each(['owner', 'admin', 'marketer'] as ModelRole[])(
+    '%s is offered Export and the history under an approved version',
+    async (role) => {
+      orgModel.setMembership('org-1', 'user-1', role);
+      panelBackend('approved');
+      panel();
+      expect(await screen.findByRole('button', { name: 'Export' })).toBeInTheDocument();
+      expect(await screen.findByRole('list', { name: 'Draft export history' })).toBeInTheDocument();
+    },
+  );
+
+  it.each(['reviewer', 'compliance_reviewer'] as ModelRole[])(
+    '%s sees the history under an approved version but is never offered Export',
+    async (role) => {
+      orgModel.setMembership('org-1', 'user-1', role);
+      panelBackend('approved');
+      panel();
+      expect(await screen.findByRole('list', { name: 'Draft export history' })).toBeInTheDocument();
+      await settle();
+      expect(screen.queryByRole('button', { name: 'Export' })).not.toBeInTheDocument();
+      expect(seen.filter((s) => s.startsWith('POST'))).toEqual([]);
+    },
+  );
+
+  it('a viewer reads no decision history and nothing about export', async () => {
+    orgModel.setMembership('org-1', 'user-1', 'viewer');
+    panelBackend('approved');
+    panel();
+    expect(await screen.findByRole('heading', { name: 'Drafts' })).toBeInTheDocument();
+    await settle();
+    await settle();
+    expect(decisionReads()).toEqual([]);
+    expect(seen.filter((s) => s.includes('export'))).toEqual([]);
+    expect(screen.queryByRole('button', { name: 'Export' })).not.toBeInTheDocument();
+  });
+
+  it.each(['rejected', 'revoked'] as const)(
+    'a version whose latest decision is %s offers no export and asks nothing about it',
+    async (decision) => {
+      panelBackend(decision);
+      panel();
+      await waitFor(() => expect(decisionReads().length).toBeGreaterThan(0));
+      await settle();
+      expect(screen.queryByRole('button', { name: 'Export' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('list', { name: 'Draft export history' })).not.toBeInTheDocument();
+      expect(seen.filter((s) => s.includes('export'))).toEqual([]);
+    },
+  );
+
+  it('an approved version with the export reflection off shows nothing and asks no export route', async () => {
+    panelBackend('approved', { exportOn: false });
+    panel();
+    await waitFor(() => expect(seen.some((s) => s.endsWith('/export-capability'))).toBe(true));
+    await settle();
+    expect(screen.queryByRole('button', { name: 'Export' })).not.toBeInTheDocument();
+    expect(exportRequests()).toEqual([]);
+  });
+
+  it('an export from the panel posts once and refreshes the history under the version', async () => {
+    panelBackend('approved');
+    const { user } = panel();
+    const list = await screen.findByRole('list', { name: 'Draft export history' });
+    expect(within(list).getAllByRole('listitem')).toHaveLength(1);
+    const dialog = await exportOnce(user);
+    expect(await within(dialog).findByRole('textbox')).toHaveValue('# Weekend parking\n\nEasy weekend visits.');
+    expect(posted).toEqual([{ format: 'text/plain' }]);
+    await waitFor(() => expect(within(list).getAllByRole('listitem', { hidden: true })).toHaveLength(2));
   });
 });
