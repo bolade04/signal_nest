@@ -163,6 +163,21 @@ export type CreativeGenerationQueuedOut = S['CreativeGenerationQueuedOut'];
 export type CreativeCapability = S['CreativeGenerationCapabilityOut'];
 // --- Project Phase 5C: text creative generation (W21 lane P5C) — END -----------
 
+// ---- Project Phase 5E: status analytics (W21 lane 5E-W2; I-5E share) — begin -----------
+// Generated contract types only (`GET /workspaces/{ws}/analytics`). Every family is a closed
+// shape; a figure without a basis is `null`, never 0.
+export type WorkspaceAnalytics = S['AnalyticsOut'];
+export type AnalyticsOpportunityCounts = S['OpportunityStateCounts'];
+export type AnalyticsSubjectCounts = S['SubjectStateCounts'];
+export type AnalyticsApprovalCounts = S['ApprovalStateCounts'];
+export type AnalyticsReviewCounts = S['ReviewStateCounts'];
+export type AnalyticsExportCounts = S['ExportStateCounts'];
+export type AnalyticsLatency = S['LatencyOut'];
+export type AnalyticsOutcomes = S['OutcomesOut'];
+export type AnalyticsLocationTotals = S['LocationTotalsOut'];
+export type AnalyticsLocationRow = S['LocationComparisonOut'];
+// ---- Project Phase 5E: status analytics (W21 lane 5E-W2; I-5E share) — end -------------
+
 export type RuntimeSummary = S['RuntimeSummaryOut'];
 export type RuntimeCapability = S['CapabilityOut'];
 export type RuntimeCapabilities = S['CapabilitiesOut'];
