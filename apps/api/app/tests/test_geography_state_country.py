@@ -11,10 +11,16 @@ So a part that is a state's name, with or without "State", followed by a country
 ("Alabama State United States", "Alabama United States", "Lagos State Nigeria", "Alabama State
 US") is read as two parts, the state and then the country, as if a comma stood between them: each
 such address answers exactly as its twin with the comma does. A two-letter word counts as the
-country only when it is the code of the state's own country (and, for "CA", which is also
-California's code, only after a name written with "State", "Province" or "Region"); any other
-two-letter word is read as before, since it may be a state's code after a town of that name
-("Nevada MO", "Abia AD", "Ontario CA"), a legal form or an abbreviation ("Texas Co", "Victoria SA").
+country only when it is the code of the state's own country ("Alberta CA" too: the operator's
+answer of 2026-11-15, "Drop only the 'CA' clause"); any other two-letter word is read as before,
+since it may be a state's code after a town of that name ("Nevada MO", "Abia AD"), a legal form or
+an abbreviation ("Texas Co", "Victoria SA").
+
+The operator's answer of 2026-11-15 on the comma-twin cost, "Accept and disclose": towns named like
+a state with only their country ("1 Main St, Victoria Canada" for Victoria, BC), a person's or
+business's name made of a state and a country on the first line ("Georgia Jordan, 1 Main St,
+Atlanta, GA 30303") and "LA USA" for Los Angeles answer as their comma twins do; one row of each is
+pinned.
 
 Boundaries: the brief capture (``POST .../opportunities/{id}/briefs``) refuses such an address with
 the existing contract before any model call or budget use, and nothing is written; no creative
@@ -350,6 +356,11 @@ def test_ri2_a_town_named_like_a_state_asks_as_its_comma_twin(address):
         (ANCHORAGE, "1 Main St, Montgomery, Alabama US", "subdivision US-AL"),
         (UMUAHIA, "1 Allen Ave, Ikeja, Lagos State NG", "subdivision NG-LA"),
         (VANCOUVER, "1 Main St, Toronto, Ontario Province CA", "subdivision CA-ON"),
+        # The operator's answer of 2026-11-15, "Drop only the 'CA' clause": "CA" after a Canadian
+        # province's or territory's name is Canada, as any state's own country's code is.
+        (VANCOUVER, "1 Main St, Toronto, Ontario CA", "subdivision CA-ON"),
+        (VANCOUVER, "1 Main St, Springfield, Alberta CA", "subdivision CA-AB"),
+        (TORONTO, "1 Main St, Toronto, Northwest Territories CA", "subdivision CA-NT"),
     ],
 )
 def test_ri2_the_code_of_the_states_own_country_is_read(location, address, evidence_end):
@@ -360,11 +371,10 @@ def test_ri2_the_code_of_the_states_own_country_is_read(location, address, evide
     ("location", "address", "code"),
     [
         # A town and its state's code, the form the clarification messages ask for, whose code
-        # is also another country's: Macao, Andorra, Saint Kitts and Nevis, Canada.
+        # is also another country's: Macao, Andorra.
         (NEVADA_MO, "Nevada MO, Vernon County, MO, USA", "US-MO"),
         (NEVADA_MO, "1 Main St, Nevada MO", "US-MO"),
         (YOLA, "1 Main St, Abia AD, Nigeria", "NG-AD"),
-        (ONTARIO_CA, "1 Main St, Ontario CA 91761", "US-CA"),
         (TORONTO, "1 Main St, Toronto, Ontario CA", "CA-ON"),
         # A business's name: a state's name and a legal form or an abbreviation.
         (DALLAS, "Texas Co, 1 Main St, Dallas, TX", "US-TX"),
@@ -379,6 +389,41 @@ def test_ri2_another_two_letter_word_is_read_as_before(location, address, code):
     _resolves(location, address, code)
 
 
+def test_ri2_ontario_ca_for_ontario_california_asks_and_the_town_left_out_resolves():
+    # The operator's answer of 2026-11-15, "Drop only the 'CA' clause", accepted this cost:
+    # "'Ontario CA' for Ontario, California then asks", as "1 Main St, Ontario, CA 91761" already
+    # does on main. Leaving the town out resolves it.
+    _asks(ONTARIO_CA, "1 Main St, Ontario CA 91761", ADDRESS_NAMES_ANOTHER_PLACE)
+    assert (
+        _answer(ONTARIO_CA, "1 Main St, Ontario CA 91761")[:2]
+        == _answer(ONTARIO_CA, "1 Main St, Ontario, CA 91761")[:2]
+    )
+    _resolves(ONTARIO_CA, "1 Main St, CA 91761", "US-CA")
+
+
+VICTORIA_BC = _location("Victoria", "British Columbia", "Canada")
+INDIANA_PA = _location("Indiana", "Pennsylvania", "United States")
+LOS_ANGELES = _location("Los Angeles", "California", "United States")
+
+
+def test_qc1_the_three_accepted_comma_twin_classes():
+    # The operator's answer of 2026-11-15 on the comma-twin cost (Q-C1), "Accept and disclose":
+    # each row answers as its comma twin does on main; one row of each class is pinned, with the
+    # remedy that resolves it.
+    # (1) A town named like a state or province, with only its country.
+    _asks(VICTORIA_BC, "1 Main St, Victoria Canada", ADDRESS_NAMES_ANOTHER_PLACE)
+    _resolves(VICTORIA_BC, "1 Main St, Victoria BC Canada", "CA-BC")
+    _refused(INDIANA_PA, "1 Main St, Indiana United States", "states subdivision US-IN")
+    _resolves(INDIANA_PA, "1 Main St, Indiana PA United States", "US-PA")
+    # (2) A person's or business's name made of a state and a country, on the first line (found by
+    # review W21-REV-GEO-P5 r1, C-1).
+    _asks(ATLANTA, "Georgia Jordan, 1 Main St, Atlanta, GA 30303", ADDRESS_NAMES_ANOTHER_PLACE)
+    _resolves(ATLANTA, "1 Main St, Atlanta, GA 30303", "US-GA")
+    # (3) "LA" (Louisiana's code) as the town's abbreviation, before a country (review r1, C-1).
+    _refused(LOS_ANGELES, "1 Main St, LA USA", "states subdivision US-LA")
+    _resolves(LOS_ANGELES, "1 Main St, Los Angeles CA USA", "US-CA")
+
+
 @pytest.mark.parametrize(
     ("part", "read_as"),
     [
@@ -386,6 +431,8 @@ def test_ri2_another_two_letter_word_is_read_as_before(location, address, code):
         ("Alabama 36104 United States", "Alabama 36104, United States"),
         ("Lagos State NG", "Lagos State, NG"),
         ("Ontario Province CA", "Ontario Province, CA"),
+        ("Ontario CA", "Ontario, CA"),
+        ("Alberta CA", "Alberta, CA"),
         ("State of New Jersey USA", "State of New Jersey, USA"),
         ("Western Australia Australia", "Western Australia, Australia"),
         ("New South Wales 2000 Australia", "New South Wales 2000, Australia"),
@@ -408,7 +455,7 @@ def test_ri2_another_two_letter_word_is_read_as_before(location, address, code):
         ("Papua New Guinea", "Papua New Guinea"),
         ("Dallas TX United States", "Dallas TX United States"),
         ("Nevada MO", "Nevada MO"),
-        ("Ontario CA", "Ontario CA"),
+        ("California CA", "California CA"),
         ("Texas Co", "Texas Co"),
         ("Dakota State US", "Dakota State US"),
         ("Empire State AG", "Empire State AG"),

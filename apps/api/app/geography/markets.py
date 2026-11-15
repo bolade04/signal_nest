@@ -1048,21 +1048,6 @@ def _state_countries(folded: str) -> frozenset[str]:
     )
 
 
-def _is_state_code(folded: str) -> bool:
-    """GEO-P5 (register RI-2): is ``folded`` a listed state's or province's code ("ca": California;
-    "la": Louisiana and Lagos State)?"""
-    return bool(_region_entries(folded)) or folded in _JURISDICTION_CODE_AREAS
-
-
-def _subdivision_word(folded: str) -> bool:
-    """GEO-P5 (register RI-2): is ``folded`` written with "State", "Province" or "Region" after it
-    or "State of" or "Province of" before it ("ontario province", "state of alabama"), which a
-    town's name is not?"""
-    return bool(_AREA_PREFIX.match(folded)) or any(
-        folded.endswith(suffix) and len(folded) > len(suffix) for suffix in _REGION_SUFFIXES
-    )
-
-
 def _state_and_country(piece: str) -> int | None:
     """GEO-P5 (register RI-2; operator instruction of 2026-11-14): where the country starts in
     ``piece`` (one part as written) when the part is a state's name or code
@@ -1074,15 +1059,15 @@ def _state_and_country(piece: str) -> int | None:
     "Western Australia", "New Jersey" and "State of New Jersey" stay whole.
 
     A two-letter word counts only as the code of a country the state is in ("Alabama State US",
-    "Alabama US", "AL US", "Lagos State NG"), and, when that code is also a listed state's ("CA" is
-    California's), only after a name written with "State", "Province" or "Region" or after "State
-    of" ("Ontario Province CA"). After a "<Name> State" that names no listed state, only a
-    country's name counts ("Dakota State United States", not "Dakota State US"). Any other
-    two-letter word is read as before: it may be a state's code after a town of that name, the form
-    the clarification messages ask for ("Nevada MO", "Abia AD", "Kano KN", whose codes are also
-    Macao's, Andorra's and Saint Kitts and Nevis'; "Ontario CA" for Ontario, California), a
-    company's legal form or an abbreviation ("Texas Co", "Victoria SA", "Georgia TV", "Empire State
-    AG"). A part that holds a code form with a hyphen ("US-AL", "GA-400") is read as before too."""
+    "Alabama US", "AL US", "Lagos State NG", "Alberta CA"; the operator's answer of 2026-11-15,
+    "Drop only the 'CA' clause", so "Ontario CA" for Ontario, California asks as "Ontario, CA"
+    does). After a "<Name> State" that names no listed state, only a country's name counts
+    ("Dakota State United States", not "Dakota State US"). Any other two-letter word is read as
+    before: it may be a state's code after a town of that name, the form the clarification messages
+    ask for ("Nevada MO", "Abia AD", "Kano KN", whose codes are also Macao's, Andorra's and Saint
+    Kitts and Nevis'), a company's legal form or an abbreviation ("Texas Co", "Victoria SA",
+    "Georgia TV", "Empire State AG"). A part that holds a code form with a hyphen ("US-AL",
+    "GA-400") is read as before too."""
     words = list(_WRITTEN_WORD.finditer(piece))
     folded = [fold(word.group(0)) for word in words]
     for index in range(1, len(words)):
@@ -1094,9 +1079,7 @@ def _state_and_country(piece: str) -> int | None:
         countries = _state_countries(head) if head else frozenset()
         if not countries and not head.endswith(" state"):
             continue
-        if len(country) == 2 and (
-            code not in countries or (_is_state_code(country) and not _subdivision_word(head))
-        ):
+        if len(country) == 2 and code not in countries:
             continue
         return None if _CODE_TOKEN.search(piece) else words[index].start()
     return None
