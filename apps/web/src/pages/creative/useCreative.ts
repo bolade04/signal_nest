@@ -124,7 +124,7 @@ export function draftDecisionFailureMessage(error: unknown): string {
       : null;
   switch (code) {
     case 'approval_review_blocked':
-      return "This draft can't be approved: its content review doesn't allow it, or the claims library changed since it was reviewed.";
+      return "This draft can't be approved: its content review doesn't allow it, the claims library changed since it was reviewed, or its brief is no longer approved.";
     case 'approval_author_conflict':
       return 'You generated this draft, so another reviewer must decide on it.';
     case 'approval_stale_version':

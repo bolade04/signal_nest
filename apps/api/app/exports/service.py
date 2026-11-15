@@ -131,6 +131,14 @@ NOT_APPROVED_MESSAGES: dict[str, str] = {
 EXPORT_REVIEW_BLOCKED = "export_review_blocked"
 #: Why an approved draft is no longer exportable, per ``draft_approval_refusal`` reason.
 REVIEW_MESSAGES: dict[str, str] = {
+    # D-N4 item 38 (I-5E stage 1b): "preserve historical decisions while enforcing the
+    # approved-parent requirement for new approvals. Explain downstream consequences
+    # explicitly." The draft's own approval stands, but export, which re-checks
+    # ``draft_approval_refusal`` (interface sheet P6), refuses once the brief version it was
+    # generated from is no longer approved.
+    "brief_not_approved": (
+        "This draft's brief is no longer approved, so the draft can't be exported."
+    ),
     "review_missing": "This draft has no content review, so it can't be exported.",
     "review_blocked": "This draft's content review blocked it, so it can't be exported.",
     "review_not_passed": (

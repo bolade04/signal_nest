@@ -46,9 +46,39 @@ step    row                                 mode              why
                                                               row ``FOR UPDATE`` first
 3       the decider's                       ``SHARE``         the ruled re-read; held to commit
         ``organization_members`` row
-4       the subject (brief or draft)        ``UPDATE``        the ``decision_seq`` serializer
-5       inserts: ``approvals``,             FK ``KEY SHARE``  only on rows 1 and 4, already held
+4       the subject: a brief                ``UPDATE``        the ``decision_seq`` serializer
+        the subject: a draft                ``NO KEY UPDATE`` the same serializer (two decisions
+                                                              on one draft still exclude each
+                                                              other); not ``UPDATE``, so a
+                                                              revision's foreign-key ``KEY
+                                                              SHARE`` on its parent draft never
+                                                              waits for the decision (step 5)
+5       an ``approved`` decision on a       ``KEY SHARE``     D-N4 item 38: the brief's
+        draft only: the draft's brief row                     controlling decision is read under
+                                                              it, held to commit, so a decision
+                                                              on the brief (``UPDATE``, step 4 of
+                                                              its own) waits for the approval, or
+                                                              the approval for that decision
+6       inserts: ``approvals``,             FK ``KEY SHARE``  only on rows 1 and 4, already held
         ``audit_logs``
+7       ``notifications`` inserts (5E-W3's  FK ``KEY SHARE``  the organization: row 2's, already
+        ``notify``, the decision's last                       held. The author's ``users`` row:
+        write, after its audit row); only                     taken first ``KEY SHARE SKIP
+        while ``notifications_analytics``                     LOCKED``
+        resolves enabled for the                              (``app.notifications.service``),
+        workspace; while off it only reads                    so a row held ``FOR UPDATE``
+                                                              (account erasure, a credential
+                                                              flow) skips that recipient and is
+                                                              never waited for. The workspace:
+                                                              new, and it conflicts only with
+                                                              ``FOR UPDATE`` or a delete of that
+                                                              row: an override set or clear and
+                                                              a schedule-cap mutation, neither
+                                                              of which waits on a row a decision
+                                                              holds; organization deletion locks
+                                                              the organization ``FOR UPDATE``
+                                                              first and so meets the decision at
+                                                              step 2, never here
 ======  ==================================  ================  ==================================
 
 Every other path that locks one of those rows, and where it first meets the decision:
@@ -72,8 +102,11 @@ still belongs to the organization       touches the subject
 ``created_by`` on the subject)
 account deletion of a former member     the subject (step 4)                   no (it holds no
 (that user → ``created_by`` and its                                            row the decision
-snapshot on the subject; it locks no                                           waits for)
-organization it has left)
+snapshot on the subject, the brief                                             waits for: its
+before the draft, ``NO KEY UPDATE``;                                           ``NO KEY UPDATE``
+it locks no organization it has left)                                          on a brief admits
+                                                                               step 5's ``KEY
+                                                                               SHARE``)
 role change or removal                  the organization (step 2)              no
 (organization → membership)
 invitation accept                       the organization (step 2)              no
@@ -83,15 +116,29 @@ invitation create or revoke             none: they lock no user, organization  n
 (invitation rows only)                  or membership row
 credential flows (user ``FOR UPDATE``   the user (step 1); they lock nothing   no
 → tokens, sessions)                     else a decision holds
-creative generation (organization       the subject (step 4): a brief          no (a decision
-``KEY SHARE`` → advisory → workspace →  ``FOR UPDATE`` at version allocation,  holds no advisory
-brief ``FOR UPDATE``; a revision's      or a parent draft's FK ``KEY SHARE``   or workspace lock;
-parent draft FK)                                                               step 2 is
-                                                                               compatible)
+creative generation (organization       a brief ``FOR UPDATE`` at version      no (a decision
+``KEY SHARE`` → advisory → workspace →  allocation: step 4 of a brief          holds no advisory
+brief ``FOR UPDATE``; a revision's      decision, step 5 of a draft approval   or workspace lock;
+parent draft FK ``KEY SHARE``)          (the decision waits); a parent         step 2 is
+                                        draft's FK ``KEY SHARE`` is admitted   compatible, and
+                                        by a draft's step 4                    generation never
+                                                                               waits on a draft
+                                                                               the decision
+                                                                               holds)
 retention purge of opportunities        the subject (step 4), deleted with     no (the purge
-(… → brief → draft)                     its opportunity                        locks no user,
-                                                                               organization or
-                                                                               membership)
+(… → brief → draft, but the walk        its opportunity                        locks no user,
+deletes children first: a draft row                                           organization or
+before its brief; a newer brief                                                membership; it
+version's ``parent_brief_id`` is set                                           reaches a brief
+NULL, ``NO KEY UPDATE``, before that)                                          ``FOR UPDATE``
+                                                                               only after its
+                                                                               drafts, which a
+                                                                               draft approval
+                                                                               takes before the
+                                                                               brief)
+a decision on the draft's brief         the brief (``FOR UPDATE`` vs step 5)   no (it locks no
+(user → organization → membership →                                            draft)
+brief ``FOR UPDATE``)
 another decision                        the same order                         no
 ======================================  =====================================  =================
 
@@ -104,6 +151,18 @@ ruled; with step 2 before it, a membership writer that takes the organization fi
 reaches it during a decision, and one that did not (none exists) would wait on it. On SQLite
 every lock compiles to a plain read; the re-read still reads the persisted role, and the single
 writer serializes.
+
+**Why step 5 is ``KEY SHARE`` after the draft, not ``SHARE`` before it** (D-N4 item 38). Only
+``FOR UPDATE`` excludes ``KEY SHARE``, and every path that holds a brief ``FOR UPDATE`` waits on
+no draft a decision holds: a brief decision locks no draft; generation's only later draft lock
+is the parent's foreign-key ``KEY SHARE``, which step 4's ``NO KEY UPDATE`` admits; the purge and
+organization deletion delete a brief only after its drafts. Before the draft, the brief lock would
+cycle with the purge, which holds the draft when it reaches the brief; ``SHARE`` would also wait
+on the ``NO KEY UPDATE`` that account erasure (brief, then draft) and the purge's
+``parent_brief_id`` clearing take on a brief, while they wait on the draft; and a draft held
+``UPDATE`` would cycle with generation of its revision (brief ``FOR UPDATE``, then the parent's
+``KEY SHARE``). Each of these is exercised on PostgreSQL in
+``test_dn4_38_brief_approved_parent.py``.
 
 **The latest decision controls.** Decisions are append-only; a change of mind is a new
 row. The controlling decision of a subject version is the row with the highest
@@ -159,6 +218,18 @@ claims and required disclaimers as they are *now*); rejecting or revoking is nev
 by the review. :func:`list_draft_decisions` reads a draft version's decisions. Drafts are not in
 the approval queue (an I-5C follow-up). The only edit to an existing function is
 ``_next_decision_seq``, which now takes the subject type (``_insert_decision`` passes it).
+
+**A draft is approvable only while its brief is approved (operator ruling D-N4 item 38,
+2026-11-12: "preserve historical decisions while enforcing the approved-parent requirement for
+new approvals. Explain downstream consequences explicitly.").** The first reason
+``draft_approval_refusal`` gives is ``brief_not_approved``: the controlling decision on the brief
+version the draft was generated from (``draft.brief_id``; a brief row is one immutable version)
+is absent, ``rejected`` or ``revoked``. :func:`record_draft_decision` reads it under step 5 of
+"Lock order", so a revocation of that brief either commits before the approval (which then reads
+it and is refused) or waits until the approval commits. It is checked for a new ``approved``
+decision only: rejecting or revoking a draft is allowed whatever the brief's state, and nothing
+already recorded (a draft's earlier approval, its audit rows) is read again, changed or
+withdrawn when the brief's approval is later withdrawn.
 """
 
 from __future__ import annotations
@@ -177,7 +248,7 @@ from app.audit.service import record_audit
 from app.auth.dependencies import TenantContext
 from app.briefs.models import RecommendationBrief
 from app.core.actor_snapshot import actor_snapshot
-from app.core.enums import ApprovalDecision, ApprovalSubjectType, Role
+from app.core.enums import ApprovalDecision, ApprovalSubjectType, NotificationEventCode, Role
 from app.core.errors import (
     ConflictError,
     NotFoundError,
@@ -187,6 +258,7 @@ from app.core.errors import (
 from app.core.logging import get_logger, log_event
 from app.creative.models import CreativeDraft
 from app.creative.service import draft_approval_refusal
+from app.notifications.recipients import notify
 from app.organizations.models import Organization, OrganizationMember, User
 
 logger = get_logger("signalnest.approvals")
@@ -557,6 +629,14 @@ def record_decision(
             "reason_code": approval.reason_code,
         },
     )
+    # 5E-W3: approval.decided, in this transaction, after the decision and its audit row are
+    # flushed and after every lock of "Lock order" (steps 1-5 are unchanged). It adds no lock to
+    # that order: while notifications_analytics is off it only reads; while on, its rows'
+    # foreign keys reuse step 2's organization, take the workspace KEY SHARE (it can wait only
+    # for an override or schedule-cap mutation, which waits on nothing a decision holds), and
+    # the author's user row is taken KEY SHARE SKIP LOCKED, never waited for
+    # (app.notifications.service, "Locks").
+    notify(db, NotificationEventCode.APPROVAL_DECIDED, approval, actor_user_id=ctx.user.id)
     log_event(
         logger,
         "approval_decision_recorded",
@@ -663,6 +743,11 @@ REVIEW_BLOCKS_APPROVAL = "approval_review_blocked"
 #: Why an approval is refused, per ``draft_approval_refusal`` reason (no draft text, no
 #: claim text: a static sentence per reason).
 REVIEW_REFUSALS = {
+    # D-N4 item 38: the brief version the draft was generated from is not approved now.
+    "brief_not_approved": (
+        "The brief version this draft was generated from is not approved, so the draft cannot "
+        "be approved."
+    ),
     "review_missing": "This draft has no content review yet, so it cannot be approved.",
     "review_blocked": (
         "This draft's content review blocked it, so it cannot be approved. Generate a "
@@ -692,12 +777,28 @@ def is_draft_author(draft: CreativeDraft, user_id: str) -> bool:
 
 
 def draft_lock_select(draft_id: str) -> Select:
-    """``SELECT id, draft_version … FOR UPDATE`` on the draft row: the per-subject
-    serializer for a draft's ``decision_seq`` (the brief's ``subject_lock_select``)."""
+    """``SELECT id, draft_version … FOR NO KEY UPDATE`` on the draft row: the per-subject
+    serializer for a draft's ``decision_seq`` (the brief's ``subject_lock_select``; step 4 of
+    "Lock order"). ``NO KEY UPDATE`` excludes another decision's, as ``UPDATE`` did, but admits
+    the foreign-key ``KEY SHARE`` a new revision takes on its parent draft, so generation never
+    waits for a decision that waits for generation's brief lock (step 5, D-N4 item 38)."""
     return (
         select(CreativeDraft.id, CreativeDraft.draft_version)
         .where(CreativeDraft.id == draft_id)
-        .with_for_update()
+        .with_for_update(key_share=True)
+    )
+
+
+def draft_brief_lock_select(brief_id: str) -> Select:
+    """``SELECT id … FOR KEY SHARE`` on the brief row a draft was generated from: step 5 of
+    "Lock order", taken for an ``approved`` decision on a draft only and held to commit (D-N4
+    item 38). A decision on that brief locks it ``FOR UPDATE`` before it reads or inserts, so
+    the brief's controlling decision, read after this lock, cannot change before the approval
+    commits. Factored out so a test can compile it against the PostgreSQL dialect."""
+    return (
+        select(RecommendationBrief.id)
+        .where(RecommendationBrief.id == brief_id)
+        .with_for_update(read=True, key_share=True)
     )
 
 
@@ -726,7 +827,10 @@ def record_draft_decision(
     version 409, the revoke rule 409),
     then the 5C precondition: an ``approved`` decision is refused (409
     ``approval_review_blocked``, nothing written) while
-    :func:`app.creative.service.draft_approval_refusal` gives a reason.
+    :func:`app.creative.service.draft_approval_refusal` gives a reason. For an ``approved``
+    decision it is read under the draft's brief row lock (step 5, D-N4 item 38), so its first
+    reason, ``brief_not_approved``, reflects every brief decision committed before the approval
+    and none can commit until the approval does.
     """
     decision = ApprovalDecision(decision)
     role = Role(ctx.role)
@@ -752,6 +856,9 @@ def record_draft_decision(
     ):
         raise ConflictError(NOTHING_TO_REVOKE_DRAFT, code="approval_nothing_to_revoke")
     if decision is ApprovalDecision.APPROVED:
+        # D-N4 item 38: step 5 of "Lock order", held to commit, before the brief's controlling
+        # decision is read (``draft_approval_refusal``'s first reason). Reject and revoke skip it.
+        db.execute(draft_brief_lock_select(draft.brief_id))
         refusal = draft_approval_refusal(db, draft)
         if refusal is not None:
             log_event(
@@ -803,6 +910,14 @@ def record_draft_decision(
             "reason_code": approval.reason_code,
         },
     )
+    # 5E-W3: approval.decided, in this transaction, after the decision and its audit row are
+    # flushed and after every lock of "Lock order" (steps 1-5 are unchanged). It adds no lock to
+    # that order: while notifications_analytics is off it only reads; while on, its rows'
+    # foreign keys reuse step 2's organization, take the workspace KEY SHARE (it can wait only
+    # for an override or schedule-cap mutation, which waits on nothing a decision holds), and
+    # the author's user row is taken KEY SHARE SKIP LOCKED, never waited for
+    # (app.notifications.service, "Locks").
+    notify(db, NotificationEventCode.APPROVAL_DECIDED, approval, actor_user_id=ctx.user.id)
     log_event(
         logger,
         "approval_decision_recorded",
@@ -857,6 +972,7 @@ __all__ = [
     "approver_organization_lock_select",
     "approver_user_lock_select",
     "controlling_decision",
+    "draft_brief_lock_select",
     "draft_lock_select",
     "is_draft_author",
     "list_draft_decisions",

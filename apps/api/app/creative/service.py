@@ -52,7 +52,10 @@ findings, the workspace's active blocking claims it contains (``blocked`` or ``p
 kinds in canonical form), and whether every required
 disclaimer (the library's, plus the offer calendar's active offers') is carried. The review
 is stored with the draft, one row per draft version, and a blocked or failed review makes
-the draft unapprovable (:func:`draft_approval_refusal`).
+the draft unapprovable (:func:`draft_approval_refusal`). So does its brief version's approval
+being withdrawn or replaced by a rejection after generation (D-N4 item 38): a new approval of
+the draft is refused while the brief's controlling decision is not ``approved``; an approval
+already recorded stands.
 
 **Jurisdiction propagation** (Project Phase 5D §2: location → brief → creative → review). A
 draft's ``jurisdiction_code`` is its brief's captured code (:func:`draft_jurisdiction`); the
@@ -114,7 +117,7 @@ from app.claims.engine import (
 from app.claims.library import load_library
 from app.core.actor_snapshot import actor_snapshot
 from app.core.config import Settings
-from app.core.enums import ApprovalDecision, ApprovalSubjectType, Role
+from app.core.enums import ApprovalDecision, ApprovalSubjectType, NotificationEventCode, Role
 from app.core.errors import NotFoundError, SignalNestError, ValidationDomainError
 from app.core.logging import get_logger, log_event
 from app.creative.models import ContentReview, CreativeDraft
@@ -149,6 +152,7 @@ from app.llm.quota import (
     unusable_ceilings,
 )
 from app.llm.screening import screen_creative
+from app.notifications.recipients import notify
 from app.organizations.models import OrganizationMember, User
 
 logger = get_logger("signalnest.creative")
@@ -346,7 +350,23 @@ def draft_approval_refusal(db: Session, draft: CreativeDraft) -> str | None:
     is read for the draft's own ``jurisdiction_code`` (Phase 5D; S1-5D B-3), so a
     jurisdiction-restricted entry counts only where it applies; a legacy draft with none gets
     the engine's fail-closed reading (S1-5D B-2).
+
+    First of all (operator ruling D-N4 item 38), ``brief_not_approved`` while the brief version
+    the draft was generated from (``draft.brief_id``: a brief row is one immutable version) is
+    not approved now: its controlling decision (:func:`brief_is_approved`, the highest
+    ``decision_seq``) is absent, ``rejected`` or ``revoked``, or the row is gone or not the
+    draft's workspace's. Another version of the brief being approved does not count. The 5B
+    approval path takes the brief row's lock before calling this (``app.approvals.service``,
+    "Lock order" step 5). Nothing recorded is re-evaluated here: this answers whether a *new*
+    approval (or a consumer that calls it, such as the 5E export) may proceed.
     """
+    brief = db.get(RecommendationBrief, draft.brief_id)
+    if (
+        brief is None
+        or brief.workspace_id != draft.workspace_id
+        or not brief_is_approved(db, brief)
+    ):
+        return "brief_not_approved"
     review = db.scalar(
         select(ContentReview).where(
             ContentReview.workspace_id == draft.workspace_id,
@@ -806,7 +826,8 @@ def execute_generation(
         db.flush()
     except IntegrityError:
         raise _fail(JobErrorCode.TRANSIENT, "version_conflict") from None
-    db.add(_review_row(draft, review))
+    review_row = _review_row(draft, review)
+    db.add(review_row)
     db.flush()
 
     record_audit(
@@ -829,6 +850,15 @@ def execute_generation(
             "is_blocked": review.is_blocked,
         },
     )
+    # 5E-W3: draft.generated, and review.blocked when the stored review is blocked, in this
+    # attempt's transaction, after the draft, its review and its audit row are flushed and under
+    # the generation locks. No new lock: while notifications_analytics is off it only reads;
+    # while on, its rows' foreign keys reuse the organization (KEY SHARE), the workspace (held
+    # NO KEY UPDATE) and the requester's user row the draft's own created_by already holds. A
+    # job has no acting user, so the requester is notified (app.notifications.recipients).
+    notify(db, NotificationEventCode.DRAFT_GENERATED, draft, actor_user_id=None)
+    if review_row.is_blocked:
+        notify(db, NotificationEventCode.REVIEW_BLOCKED, review_row, actor_user_id=None)
     log_event(
         logger,
         "creative_draft_created",
