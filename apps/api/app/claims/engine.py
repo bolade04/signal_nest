@@ -120,13 +120,10 @@ _RISK_ORDER = {ClaimRisk.LOW: 0, ClaimRisk.MEDIUM: 1, ClaimRisk.HIGH: 2, ClaimRi
 def contains_phrase(text: str, phrase: str | None) -> bool:
     """Whether ``text`` contains the non-empty ``phrase`` (case-insensitive substring).
 
-    The rule before D-N4 item 39, unchanged. The review no longer uses it: it detects a blocked
-    claim with :func:`contains_claim` and resolves a required disclaimer with
-    :func:`carries_phrase`. Its one remaining caller is the approval-time re-check
-    (``app.creative.service.draft_approval_refusal``) for entries added or changed after a
-    draft's review; this lane does not own that file, so the re-check still reads both kinds
-    with this rule (a recorded limitation of item 39; the review's stored verdict, which the
-    re-check enforces first, uses the new rules)."""
+    The rule before D-N4 item 39, unchanged and no longer used to match protected text: the
+    review and the approval-time re-check (``app.creative.service.draft_approval_refusal``)
+    both detect a blocked claim with :func:`contains_claim` and resolve a required disclaimer
+    with :func:`carries_phrase`. :func:`contains_claim` keeps this rule as its first form."""
     return bool(phrase) and phrase.lower() in text.lower()
 
 

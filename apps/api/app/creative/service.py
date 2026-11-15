@@ -104,7 +104,8 @@ from app.claims.engine import (
     LibraryEntry,
     LibraryReview,
     active_entries,
-    contains_phrase,
+    carries_phrase,
+    contains_claim,
     fold,
     is_approved_kind,
     is_blocking_kind,
@@ -338,7 +339,10 @@ def draft_approval_refusal(db: Session, draft: CreativeDraft) -> str | None:
     did not pass), when the text contains a blocking claim (``blocked`` or ``prohibited``)
     that is active in the workspace's library *now* (one added after the draft was
     reviewed), or when it lacks a ``required_disclaimer`` that is active in the library *now*
-    — the same "library now" re-check for both kinds (W21 review r1, O-4). Kinds are read in
+    — the same "library now" re-check for both kinds (W21 review r1, O-4), with the review's
+    matching rules (D-N4 item 39, :mod:`app.claims.engine`) on the draft's text as written: a
+    blocking entry is detected with ``contains_claim`` (its confusable spellings included)
+    and a disclaimer is carried only as whole words (``carries_phrase``). Kinds are read in
     their canonical form (:func:`app.claims.engine.canonical_kind`, DEFECT-5CW4-2), as the
     review reads them; any other kind blocks and requires nothing. An offer's disclaimer is
     not re-read: which offers apply depends on the generation's date and location, so the
@@ -359,16 +363,16 @@ def draft_approval_refusal(db: Session, draft: CreativeDraft) -> str | None:
         return "review_blocked"
     if not review.disclaimers_resolved or not review.passed:
         return "review_not_passed"
-    text = fold(_draft_text(draft))
+    text = _draft_text(draft)
     active = active_entries(
         load_library(db, draft.workspace_id), jurisdiction=draft.jurisdiction_code
     )
     for entry in active:
-        if is_blocking_kind(entry.kind) and contains_phrase(text, fold(entry.text)):
+        if is_blocking_kind(entry.kind) and contains_claim(text, entry.text):
             return "blocked_claim"
     for entry in active:
         required = fold(entry.text)
-        if is_disclaimer_kind(entry.kind) and required and not contains_phrase(text, required):
+        if is_disclaimer_kind(entry.kind) and required and not carries_phrase(text, entry.text):
             return "disclaimer_missing"
     return None
 

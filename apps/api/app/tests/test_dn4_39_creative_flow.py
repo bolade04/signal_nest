@@ -13,8 +13,8 @@ Each finding of W21-REV-R4 r1 F-1 passed review on main ``6a3afe3a`` (capture
   passed, approval refused (409).
 
 Legitimate text is stored exactly as the model wrote it and is approvable. The approval-time
-re-check of entries added *after* the review is outside this lane's files and is pinned as a
-recorded limitation (``…_stated``). The PostgreSQL rows run when ``TEST_POSTGRES_URL`` is set.
+re-check of entries added *after* the review applies the same rules. The PostgreSQL rows run
+when ``TEST_POSTGRES_URL`` is set.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ import pytest
 
 from app.approvals.models import Approval
 from app.campaign_context.models import ClaimsLibraryEntry
-from app.claims.engine import contains_claim, contains_phrase, fold
+from app.claims.engine import contains_phrase, fold
 from app.core.config import get_settings
 from app.creative.models import ContentReview, CreativeDraft
 from app.creative.service import draft_approval_refusal
@@ -188,36 +188,48 @@ def test_legitimate_names_and_scripts_are_stored_as_written_and_approvable(world
 
 
 # --------------------------------------------------------------------------- #
-# Recorded limitation: the approval re-check of entries added after the review
+# The approval re-check of entries added after the review uses the item-39 rules
 # --------------------------------------------------------------------------- #
-def test_the_recheck_of_entries_added_after_the_review_keeps_the_old_rule_stated(world):
-    """STATED LIMITATION (D-N4 item 39, recorded in the hand-off): the approval-time re-check
-    (``app.creative.service.draft_approval_refusal``, a file this lane does not own) reads the
-    library *as it is now* with ``contains_phrase``, the rule before item 39, for both kinds.
-    The stored review — which the re-check enforces first — uses the new rules, so this matters
-    only for an entry added or changed after the draft was reviewed:
+RECHECK = [
+    # (draft body, kind of the entry added after the review, its text, the re-check's answer)
+    (WHOLE_CYRILLIC, "blocked", "easy cash", "blocked_claim"),
+    (GREEK_CAPITALS, "blocked", "no tax", "blocked_claim"),
+    (AVOID, "required_disclaimer", "Void where prohibited.", "disclaimer_missing"),
+    ("Spaces are limited. Offer void where prohibited.", "required_disclaimer",
+     "Void where prohibited.", None),
+]
 
-    * a whole-script look-alike of a blocked claim added later is not refused by the re-check,
-      though :func:`contains_claim` detects it;
-    * a disclaimer added later is resolved by "Avoid where prohibited.".
 
-    The fix is in that caller: ``contains_claim`` for blocking entries, ``carries_phrase`` for
-    disclaimers. When it lands, this test must change with it."""
-    ws = world.workspace("recheck look-alike")
-    job, brief_id = _run(world, ws, WHOLE_CYRILLIC)
+@pytest.mark.parametrize(
+    "body, kind, text, refusal", RECHECK,
+    ids=["whole_script_cyrillic", "whole_script_greek_capitals", "disclaimer_in_longer_word",
+         "disclaimer_carried"],
+)
+def test_the_recheck_of_entries_added_after_the_review_uses_the_item_39_rules(
+    world, body, kind, text, refusal
+):
+    """The approval-time re-check (``app.creative.service.draft_approval_refusal``) reads the
+    library *as it is now*, for an entry added or changed after the draft was reviewed, with
+    the review's rules (D-N4 item 39) on the draft's text as written: a whole-script look-alike
+    of a blocked claim added later refuses approval (in Greek capitals too, which folding the
+    text first would lose), a disclaimer added later is not carried by "Avoid where
+    prohibited.", and one carried as whole words still is. On ``e4fb42fa`` the re-check used
+    the rule before item 39 and approved the first three."""
+    ws = world.workspace(f"recheck {kind} {text} {refusal}")
+    job, brief_id = _run(world, ws, body)
     [draft] = world.rows(CreativeDraft, brief_id=brief_id)
     [review] = world.rows(ContentReview, draft_id=draft["id"])
-    assert review["passed"] is True
-    world.claim("easy cash", ws=ws)
-    assert contains_phrase(fold(draft["body"]), fold("easy cash")) is False  # the old rule
-    assert contains_claim(draft["body"], "easy cash") is True  # the review's rule
-    assert _refusal(world, draft["id"]) is None
-
-    ws = world.workspace("recheck disclaimer")
-    job, brief_id = _run(world, ws, AVOID)
-    [draft] = world.rows(CreativeDraft, brief_id=brief_id)
-    world.claim("Void where prohibited.", kind="required_disclaimer", ws=ws)
-    assert _refusal(world, draft["id"]) is None
+    assert review["passed"] is True  # reviewed with an empty library
+    world.claim(text, kind=kind, ws=ws)
+    old_rule = contains_phrase(fold(draft["body"]), fold(text))
+    assert old_rule is (kind != "blocked")  # what the rule before item 39 answered
+    assert _refusal(world, draft["id"]) == refusal
+    r = _approve(world, ws, draft["id"])
+    if refusal is None:
+        assert r.status_code == 201, r.text
+    else:
+        assert (r.status_code, r.json()["error"]["code"]) == (409, "approval_review_blocked")
+        assert world.count(Approval, draft_id=draft["id"]) == 0
 
 
 # --------------------------------------------------------------------------- #
@@ -245,4 +257,10 @@ def test_postgres_findings_are_refused_and_legitimate_text_round_trips():
         pg.claim("Void where prohibited.", kind="required_disclaimer", ws=ws)
         job, brief_id = _run(pg, ws, AVOID)
         [draft] = pg.rows(CreativeDraft, brief_id=brief_id)
+        assert _approve(pg, ws, draft["id"]).status_code == 409
+        ws = pg.workspace("pg recheck")
+        job, brief_id = _run(pg, ws, GREEK_CAPITALS)
+        [draft] = pg.rows(CreativeDraft, brief_id=brief_id)
+        pg.claim("no tax", ws=ws)  # added after the review
+        assert _refusal(pg, draft["id"]) == "blocked_claim"
         assert _approve(pg, ws, draft["id"]).status_code == 409

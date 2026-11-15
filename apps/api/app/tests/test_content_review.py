@@ -401,9 +401,9 @@ def test_cross_script_confusables_are_detected_though_the_canonical_form_keeps_t
     (``app.claims.engine.fold``: NFKC + invisibles removed + the three stops + whitespace
     collapse + casefold) still keeps these forms apart — NFKC does not map one script's letters
     to another's, and U+2800 is not whitespace — but the review now detects the blocked claim
-    through the UTS #39 skeleton and reads U+2800 as a space (``contains_claim``). The rule the
-    approval re-check still uses for entries added after the review, ``contains_phrase``, does
-    not (``test_dn4_39_creative_flow``, recorded limitation)."""
+    through the UTS #39 skeleton and reads U+2800 as a space (``contains_claim``), and so does
+    the approval re-check (``test_dn4_39_creative_flow``). The rule before item 39,
+    ``contains_phrase``, does not."""
     entry = LibraryEntry("b1", "free parking forever", "blocked")
     review = review_against_library(f"Try {outside} today.", None, [entry])
     assert review.blocked_claim_ids == ["b1"] and review.is_blocked, why
