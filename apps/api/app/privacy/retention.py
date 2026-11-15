@@ -16,9 +16,11 @@ Mechanics, identical for every class:
   cut-off and deletes them with their dependents through the foreign-key walk
   (:func:`app.privacy.erasure.delete_rows`) — re-running a batch deletes nothing more, so
   every step is idempotent;
-* **platform classes** (no workspace: sessions, account tokens, invitations, audit
-  records, approvals and exports) are purged by the sweep itself, each batch in its own
-  committed transaction, up to ``retention_purge_max_batches`` batches per class per sweep;
+* **platform classes** (sessions, account tokens, invitations, audit records, approvals
+  and exports, none of which has a workspace; and in-app notifications, which do but are
+  kept out of the job path by operator ruling D-N4 item 30 — never enqueued, no ``JobType``)
+  are purged by the sweep itself, each batch in its own committed transaction, up to
+  ``retention_purge_max_batches`` batches per class per sweep;
 * **workspace classes** (signals, opportunities, job history) are purged by the
   ``retention.purge`` durable job, enqueued once per workspace per class per day (the
   idempotency key carries the cut-off), purging only inside its own tenant scope; a full
@@ -53,6 +55,7 @@ from app.exports.models import Export
 from app.jobs.context import ExecutionContext
 from app.jobs.models import Job
 from app.jobs.status import TERMINAL_STATUSES, JobErrorCode, JobExecutionError, JobType
+from app.notifications.models import Notification
 from app.opportunities.models import Opportunity
 from app.organizations.models import OrganizationInvitation, Workspace
 from app.privacy.erasure import ErasureCounts, delete_rows
@@ -113,6 +116,9 @@ _ROOTS: dict[RetentionClass, tuple[tuple[Any, Callable[[datetime], Any]], ...]] 
         (Approval, lambda c: Approval.created_at < c),
         (Export, lambda c: Export.created_at < c),
     ),
+    # In-app notifications (Project Phase 5E; operator ruling D-N4 item 30): by age, once the
+    # duration is set. Not a workspace class, so the sweep alone purges it (see above).
+    RetentionClass.NOTIFICATIONS: ((Notification, lambda c: Notification.created_at < c),),
 }
 
 
