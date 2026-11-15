@@ -19,8 +19,32 @@ it inside the transaction of the event they report. In order, it:
 5. skips every recipient who is not a member of ``organization_id``, and every recipient whose
    ``notification_preferences`` row for ``(workspace_id, user_id, event_code)`` has
    ``enabled = False``. Recipients are de-duplicated: one row per user per event;
-6. inserts one :class:`~app.notifications.models.Notification` per remaining recipient and
+6. takes ``KEY SHARE`` on the remaining recipients' ``users`` rows with ``SKIP LOCKED``, and
+   skips any recipient whose row another transaction holds ``FOR UPDATE`` at that instant (see
+   "Locks" below);
+7. inserts one :class:`~app.notifications.models.Notification` per remaining recipient and
    flushes. It **never commits**: the rows commit with the triggering event, or not at all.
+
+**Locks (PostgreSQL; 5E-W3 phase B).** While the capability is off the emitter only reads
+(plain ``SELECT``s, no row lock). While it is on, a notification row's foreign keys make
+PostgreSQL take ``KEY SHARE`` on the organization, workspace and recipient ``users`` rows it
+references. The emitter takes no other lock and never waits on a ``users`` row:
+
+* The **recipients' ``users`` rows** are locked first, ``FOR KEY SHARE SKIP LOCKED``, so the
+  insert's foreign-key check finds them already held. A recipient whose row is held ``FOR
+  UPDATE`` is skipped, not waited for. The holder is an account erasure, a password change or
+  reset, or an email verification. Without the skip, a hook's transaction that already holds
+  the organization in ``KEY SHARE`` would wait on that user, while an erasure of that user
+  (user ``FOR UPDATE``, then its organizations ``FOR UPDATE``) waits on the organization: a
+  cycle. The cost is that such a recipient misses that one in-app notification.
+* The **organization** row is always already held by the triggering transaction (a decision's
+  step 2; a brief's or draft's own foreign key).
+* The **workspace** row is already held by a brief's or a draft's own foreign key, or by
+  generation's ``NO KEY UPDATE``. For a decision (whose rows are FK-less) it is new: it can
+  wait only for a capability-override or schedule-cap mutation (``FOR UPDATE`` on the
+  workspace). Neither waits on any row a decision holds, so no cycle forms. Organization
+  deletion locks the organization first, which the decision already holds.
+On SQLite every lock compiles to nothing; the single writer serializes.
 
 Steps 1-3 are the caller's contract. A breach raises :class:`NotificationContractError`
 whatever the capability says, so a hook passing the wrong ids fails in the dark state too,
@@ -64,7 +88,7 @@ from app.db.base import utcnow
 from app.exports.models import Export
 from app.notifications.interface import NotificationEmitter
 from app.notifications.models import Notification, NotificationPreference
-from app.organizations.models import OrganizationMember, Workspace
+from app.organizations.models import OrganizationMember, User, Workspace
 
 logger = get_logger(__name__)
 
@@ -174,6 +198,26 @@ def _deliverable(
     return [user_id for user_id in candidates if user_id in members and user_id not in opted_out]
 
 
+def _lock_recipient_rows(db: Session, recipients: list[str]) -> list[str]:
+    """The recipients whose ``users`` row this transaction now holds ``KEY SHARE``, in order.
+
+    ``FOR KEY SHARE SKIP LOCKED``: the lock the notification row's foreign key takes anyway,
+    taken first and without waiting. A row held ``FOR UPDATE`` elsewhere is skipped, so is
+    its recipient (module docstring, "Locks"). A row this transaction already holds is never
+    skipped.
+    """
+    if not recipients:
+        return []
+    held = set(
+        db.scalars(
+            select(User.id)
+            .where(User.id.in_(recipients))
+            .with_for_update(read=True, key_share=True, skip_locked=True)
+        )
+    )
+    return [user_id for user_id in recipients if user_id in held]
+
+
 def _emission_capability(
     db: Session, organization_id: str, workspace_id: str, event_code: NotificationEventCode
 ) -> CapabilityResolution:
@@ -242,13 +286,14 @@ def emit_notifications(
 
     # Materialised only now, so a lazy iterable is not consumed while the capability is off.
     candidates = list(dict.fromkeys(user_id for user_id in recipient_user_ids if user_id))
-    recipients = _deliverable(
+    deliverable = _deliverable(
         db,
         organization_id=organization_id,
         workspace_id=workspace_id,
         event_code=code,
         candidates=candidates,
     )
+    recipients = _lock_recipient_rows(db, deliverable)
     if recipients:
         db.add_all(
             Notification(
@@ -269,6 +314,7 @@ def emit_notifications(
         organization_id=organization_id,
         workspace_id=workspace_id,
         candidates=len(candidates),
+        skipped_busy=len(deliverable) - len(recipients),
         written=len(recipients),
     )
     return len(recipients)
