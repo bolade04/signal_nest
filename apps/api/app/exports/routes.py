@@ -29,8 +29,9 @@ capability decision; the brief- and creative-capability precedent; interface she
   written in one transaction, committed before the 201 is sent (``WriteDb``).
 
 **The notification emitter is injected** (:func:`get_notification_emitter`), so the service
-codes against the frozen :class:`~app.notifications.interface.NotificationEmitter` Protocol
-and the integration owner binds the real one, lane 5E-W3's, in that one function.
+codes against the frozen :class:`~app.notifications.interface.NotificationEmitter` Protocol.
+At I-5E it is bound to lane 5E-W3's emitter,
+:func:`app.notifications.service.emit_notifications`, the one emitter of the codebase.
 """
 
 from __future__ import annotations
@@ -60,6 +61,7 @@ from app.exports.service import (
     list_exports,
 )
 from app.notifications.interface import NotificationEmitter
+from app.notifications.service import emit_notifications
 
 logger = get_logger(__name__)
 
@@ -68,25 +70,16 @@ router = APIRouter(tags=["exports"])
 _DRAFT_EXPORTS = "/workspaces/{workspace_id}/drafts/{draft_id}/exports"
 
 
-class NotificationEmitterNotBoundError(RuntimeError):
-    """``export.completed`` was about to be emitted with no emitter bound (see below)."""
-
-
-def _unbound_notification_emitter(*_args: object, **_kwargs: object) -> int:
-    raise NotificationEmitterNotBoundError(
-        "no NotificationEmitter is bound for export.completed (5E-W3's, at I-5E)"
-    )
-
-
 def get_notification_emitter() -> NotificationEmitter:
     """The emitter an export writes ``export.completed`` through (the injection seam).
 
-    Lane 5E-W3 implements the frozen Protocol in ``app/notifications/``; until the
-    integration owner binds it here, this returns an emitter that raises when called. It is
-    called only after every precondition has passed, inside the export's transaction, so an
-    unbound emitter rolls the export back (a 500) and nothing is written: an export never
-    commits without its notification. Refusals (403, 503, 404, 409) are unaffected."""
-    return _unbound_notification_emitter
+    Bound at I-5E to lane 5E-W3's :func:`~app.notifications.service.emit_notifications`. It is
+    called only after every precondition has passed, inside the export's transaction: it
+    writes nothing while the O-12(B) capability is off for the workspace, flushes and never
+    commits, and if it raises the export rolls back (a 500) and nothing is written, so an
+    export never commits without its notification. Refusals (403, 503, 404, 409) are
+    unaffected. Tests may override this dependency."""
+    return emit_notifications
 
 
 @router.get(
@@ -175,4 +168,4 @@ def list_draft_exports(
     )
 
 
-__all__ = ["NotificationEmitterNotBoundError", "get_notification_emitter", "router"]
+__all__ = ["get_notification_emitter", "router"]

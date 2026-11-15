@@ -45,8 +45,11 @@ whatever its decision. A refusal writes nothing.
 * its audit row, ``creative_draft.exported`` (ids, version, format, jurisdiction and flags;
   no text and no identity beyond the actor column);
 * ``export.completed`` through the injected
-  :class:`~app.notifications.interface.NotificationEmitter`, in the same transaction: the
-  emitter writes and flushes at most, never commits; if it raises, nothing is written.
+  :class:`~app.notifications.interface.NotificationEmitter`, in the same transaction, to the
+  recipients of the one ``export.completed`` resolver
+  (:func:`app.notifications.recipients.export_completed_recipients`, interface sheet P9) via
+  :func:`app.notifications.recipients.notify`: the emitter writes and flushes at most, never
+  commits; if it raises, nothing is written.
 
 **No lock is taken.** The checks read the decision, the review and the library, then insert;
 a decision recorded concurrently (which locks the draft row) can commit between the read and
@@ -91,6 +94,7 @@ from app.exports.policy import EXPORT_HISTORY_READER_ROLES, EXPORTER_ROLES
 from app.exports.render import ExportSource, render_export
 from app.jurisdiction.codes import is_jurisdiction_code
 from app.notifications.interface import NotificationEmitter
+from app.notifications.recipients import notify
 
 logger = get_logger("signalnest.exports")
 
@@ -318,22 +322,6 @@ def _require_review(db: Session, draft: CreativeDraft, ctx: TenantContext) -> No
 # --------------------------------------------------------------------------- #
 # The export
 # --------------------------------------------------------------------------- #
-def export_completed_recipients(
-    draft: CreativeDraft, approval: Approval, *, actor_user_id: str
-) -> tuple[str, ...]:
-    """Who ``export.completed`` notifies: the draft's author and the approving reviewer.
-
-    The coordinator's least-disclosure default (interface sheet P9), which the operator
-    confirms at activation; the actor is always excluded. Ids only (an erased author or
-    decider is NULL and is skipped); the emitter further drops anyone who is not a member of
-    the organization or who disabled the event."""
-    out: list[str] = []
-    for user_id in (draft.created_by, approval.decided_by):
-        if user_id and user_id != actor_user_id and user_id not in out:
-            out.append(user_id)
-    return tuple(out)
-
-
 def _source(draft: CreativeDraft, jurisdiction_code: str) -> ExportSource:
     return ExportSource(
         draft_id=draft.id,
@@ -402,13 +390,15 @@ def create_export(
             "is_simulated": export.is_simulated,
         },
     )
-    notified = emitter(
+    # export.completed: the recipients are the one resolver's for the event code
+    # (app.notifications.recipients, interface sheet P9), written through the injected
+    # emitter after the Export row is flushed (I-5E: one emitter, one resolver).
+    notified = notify(
         db,
-        organization_id=ctx.organization.id,
-        workspace_id=ctx.workspace.id,
-        recipient_user_ids=export_completed_recipients(draft, approval, actor_user_id=ctx.user.id),
-        event_code=NotificationEventCode.EXPORT_COMPLETED,
-        subject_id=export.id,
+        NotificationEventCode.EXPORT_COMPLETED,
+        export,
+        actor_user_id=ctx.user.id,
+        emitter=emitter,
     )
     log_event(
         logger,
@@ -480,7 +470,6 @@ __all__ = [
     "ExportResult",
     "create_export",
     "export_capability",
-    "export_completed_recipients",
     "list_exports",
     "require_export_feature",
     "scoped_subject",

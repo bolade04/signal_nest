@@ -3305,6 +3305,217 @@
         "title": "ErasureVerificationOut",
         "type": "object"
       },
+      "ExportCapabilityOut": {
+        "description": "Customer-visible export availability for one workspace.\n\nExactly one field (the ``RecommendationBriefCapabilityOut`` precedent): no governance\nmetadata (deciding rule, global flag, override) reaches a customer. Returned by\n``GET /workspaces/{workspace_id}/export-capability`` with 200 while export is dark\n(interface sheet P7), so the UI can show the dark state without calling an export route.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "ExportCapabilityOut",
+        "type": "object"
+      },
+      "ExportFormat": {
+        "description": "The closed set of manual-export render formats (Phase 5E). Text only.",
+        "enum": [
+          "text/plain",
+          "text/markdown",
+          "json"
+        ],
+        "title": "ExportFormat",
+        "type": "string"
+      },
+      "ExportHistoryItemOut": {
+        "description": "One audited export record of one draft version (no rendered text).",
+        "properties": {
+          "approval_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Id"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "draft_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Id"
+          },
+          "draft_version": {
+            "title": "Draft Version",
+            "type": "integer"
+          },
+          "exported_by_snapshot": {
+            "title": "Exported By Snapshot",
+            "type": "string"
+          },
+          "format": {
+            "$ref": "#/components/schemas/ExportFormat"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_simulated": {
+            "title": "Is Simulated",
+            "type": "boolean"
+          },
+          "jurisdiction_code": {
+            "title": "Jurisdiction Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "draft_id",
+          "draft_version",
+          "approval_id",
+          "format",
+          "jurisdiction_code",
+          "exported_by_snapshot",
+          "is_simulated",
+          "created_at"
+        ],
+        "title": "ExportHistoryItemOut",
+        "type": "object"
+      },
+      "ExportHistoryOut": {
+        "description": "A bounded page of one draft version's exports, newest first.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ExportHistoryItemOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "ExportHistoryOut",
+        "type": "object"
+      },
+      "ExportIn": {
+        "additionalProperties": false,
+        "description": "Export one approved draft version in one format.",
+        "properties": {
+          "format": {
+            "$ref": "#/components/schemas/ExportFormat"
+          }
+        },
+        "required": [
+          "format"
+        ],
+        "title": "ExportIn",
+        "type": "object"
+      },
+      "ExportOut": {
+        "description": "The export just recorded, with its rendered text.",
+        "properties": {
+          "approval_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Id"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "draft_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Id"
+          },
+          "draft_version": {
+            "title": "Draft Version",
+            "type": "integer"
+          },
+          "exported_by_snapshot": {
+            "title": "Exported By Snapshot",
+            "type": "string"
+          },
+          "format": {
+            "$ref": "#/components/schemas/ExportFormat"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_simulated": {
+            "title": "Is Simulated",
+            "type": "boolean"
+          },
+          "jurisdiction_code": {
+            "title": "Jurisdiction Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "draft_id",
+          "draft_version",
+          "approval_id",
+          "format",
+          "jurisdiction_code",
+          "exported_by_snapshot",
+          "is_simulated",
+          "created_at",
+          "content"
+        ],
+        "title": "ExportOut",
+        "type": "object"
+      },
       "ExportStateCounts": {
         "additionalProperties": false,
         "description": "Manual exports in scope by render format (``ExportFormat``); a partition.\n\n``plain_text`` = ``text/plain``, ``markdown`` = ``text/markdown``, ``json_document`` =\n``json`` (a field named ``json`` would shadow ``BaseModel.json``).",
@@ -16605,6 +16816,232 @@
         "summary": "Record a decision on one draft version (reviewer only)",
         "tags": [
           "creative-drafts"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/drafts/{draft_id}/exports": {
+      "get": {
+        "description": "The draft version's export records, newest first, without their text. Read-only.",
+        "operationId": "list_draft_exports_api_v1_workspaces__workspace_id__drafts__draft_id__exports_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true,
+            "schema": {
+              "title": "Draft Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportHistoryOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "A draft version's exports, newest first",
+        "tags": [
+          "exports"
+        ]
+      },
+      "post": {
+        "description": "Record one audited export of the draft's exact version and answer its text, rendered\nin ``format`` (``text/plain``, ``text/markdown`` or ``json``).\n\nAnswers 503 ``capability_unavailable`` while export is not available for the workspace,\n404 for an unknown, foreign or deleted draft, and 409 when the draft cannot be exported:\n``export_jurisdiction_missing`` (no valid jurisdiction recorded on the draft or its brief),\n``jurisdiction_mismatch`` (the two differ), ``export_not_approved`` (the latest decision on\nthis version is not an approval) or ``export_review_blocked`` (its content review, or the\nclaims library as it stands now, does not allow it). A refusal records nothing.",
+        "operationId": "export_draft_api_v1_workspaces__workspace_id__drafts__draft_id__exports_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true,
+            "schema": {
+              "title": "Draft Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export one approved draft version (owner, admin or marketer)",
+        "tags": [
+          "exports"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/export-capability": {
+      "get": {
+        "description": "Customer-facing, workspace-effective export availability (any member). Advisory\nonly: both export endpoints re-decide and answer 503 while it is false. Answers 200 while\nexport is dark.",
+        "operationId": "read_export_capability_api_v1_workspaces__workspace_id__export_capability_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportCapabilityOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Whether export is available for this workspace",
+        "tags": [
+          "exports"
         ]
       }
     },

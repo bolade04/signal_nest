@@ -1625,6 +1625,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/drafts/{draft_id}/exports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A draft version's exports, newest first
+         * @description The draft version's export records, newest first, without their text. Read-only.
+         */
+        get: operations["list_draft_exports_api_v1_workspaces__workspace_id__drafts__draft_id__exports_get"];
+        put?: never;
+        /**
+         * Export one approved draft version (owner, admin or marketer)
+         * @description Record one audited export of the draft's exact version and answer its text, rendered
+         *     in ``format`` (``text/plain``, ``text/markdown`` or ``json``).
+         *
+         *     Answers 503 ``capability_unavailable`` while export is not available for the workspace,
+         *     404 for an unknown, foreign or deleted draft, and 409 when the draft cannot be exported:
+         *     ``export_jurisdiction_missing`` (no valid jurisdiction recorded on the draft or its brief),
+         *     ``jurisdiction_mismatch`` (the two differ), ``export_not_approved`` (the latest decision on
+         *     this version is not an approval) or ``export_review_blocked`` (its content review, or the
+         *     claims library as it stands now, does not allow it). A refusal records nothing.
+         */
+        post: operations["export_draft_api_v1_workspaces__workspace_id__drafts__draft_id__exports_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/export-capability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether export is available for this workspace
+         * @description Customer-facing, workspace-effective export availability (any member). Advisory
+         *     only: both export endpoints re-decide and answer 503 while it is false. Answers 200 while
+         *     export is dark.
+         */
+        get: operations["read_export_capability_api_v1_workspaces__workspace_id__export_capability_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/feedback-capability": {
         parameters: {
             query?: never;
@@ -3792,6 +3846,100 @@ export interface components {
             subject_type: string;
             /** Tables Checked */
             tables_checked: number;
+        };
+        /**
+         * ExportCapabilityOut
+         * @description Customer-visible export availability for one workspace.
+         *
+         *     Exactly one field (the ``RecommendationBriefCapabilityOut`` precedent): no governance
+         *     metadata (deciding rule, global flag, override) reaches a customer. Returned by
+         *     ``GET /workspaces/{workspace_id}/export-capability`` with 200 while export is dark
+         *     (interface sheet P7), so the UI can show the dark state without calling an export route.
+         */
+        ExportCapabilityOut: {
+            /** Enabled */
+            enabled: boolean;
+        };
+        /**
+         * ExportFormat
+         * @description The closed set of manual-export render formats (Phase 5E). Text only.
+         * @enum {string}
+         */
+        ExportFormat: "text/plain" | "text/markdown" | "json";
+        /**
+         * ExportHistoryItemOut
+         * @description One audited export record of one draft version (no rendered text).
+         */
+        ExportHistoryItemOut: {
+            /** Approval Id */
+            approval_id: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Draft Id */
+            draft_id: string | null;
+            /** Draft Version */
+            draft_version: number;
+            /** Exported By Snapshot */
+            exported_by_snapshot: string;
+            format: components["schemas"]["ExportFormat"];
+            /** Id */
+            id: string;
+            /** Is Simulated */
+            is_simulated: boolean;
+            /** Jurisdiction Code */
+            jurisdiction_code: string;
+        };
+        /**
+         * ExportHistoryOut
+         * @description A bounded page of one draft version's exports, newest first.
+         */
+        ExportHistoryOut: {
+            /** Items */
+            items: components["schemas"]["ExportHistoryItemOut"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
+        /**
+         * ExportIn
+         * @description Export one approved draft version in one format.
+         */
+        ExportIn: {
+            format: components["schemas"]["ExportFormat"];
+        };
+        /**
+         * ExportOut
+         * @description The export just recorded, with its rendered text.
+         */
+        ExportOut: {
+            /** Approval Id */
+            approval_id: string | null;
+            /** Content */
+            content: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Draft Id */
+            draft_id: string | null;
+            /** Draft Version */
+            draft_version: number;
+            /** Exported By Snapshot */
+            exported_by_snapshot: string;
+            format: components["schemas"]["ExportFormat"];
+            /** Id */
+            id: string;
+            /** Is Simulated */
+            is_simulated: boolean;
+            /** Jurisdiction Code */
+            jurisdiction_code: string;
         };
         /**
          * ExportStateCounts
@@ -9712,6 +9860,114 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApprovalOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_draft_exports_api_v1_workspaces__workspace_id__drafts__draft_id__exports_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportHistoryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_draft_api_v1_workspaces__workspace_id__drafts__draft_id__exports_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExportIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_export_capability_api_v1_workspaces__workspace_id__export_capability_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportCapabilityOut"];
                 };
             };
             /** @description Validation Error */

@@ -40,6 +40,7 @@ from app.briefs.models import RecommendationBrief
 from app.core.enums import ApprovalSubjectType, NotificationEventCode
 from app.creative.models import ContentReview, CreativeDraft
 from app.exports.models import Export
+from app.notifications.interface import NotificationEmitter
 from app.notifications.service import emit_notifications
 from app.organizations.models import OrganizationMember
 
@@ -176,6 +177,7 @@ def notify(
     subject: Any,
     *,
     actor_user_id: str | None,
+    emitter: NotificationEmitter = emit_notifications,
 ) -> int:
     """Resolve the recipients of one event and emit it, in the caller's transaction.
 
@@ -186,12 +188,16 @@ def notify(
 
     The recipients are resolved lazily: the emitter reads them only after the capability
     check, so a hook in a dark workspace runs no resolver query.
+
+    ``emitter`` is the one to write through: :func:`emit_notifications` unless a caller that
+    takes it by injection passes its own (the export route's ``get_notification_emitter``,
+    bound to this same emitter at I-5E). The recipients are always this module's resolver's.
     """
 
     def _recipients() -> Iterator[str]:
         yield from resolve_recipients(db, event_code, subject, actor_user_id=actor_user_id)
 
-    return emit_notifications(
+    return emitter(
         db,
         organization_id=subject.organization_id,
         workspace_id=subject.workspace_id,
