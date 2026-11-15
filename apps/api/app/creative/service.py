@@ -45,8 +45,9 @@ required disclaimers — never caller free text. Every model attempt's usage row
 when no draft results (the worker re-writes them after a rollback).
 
 **Screened, then reviewed.** The output is put in its persisted form and screened
-(:func:`app.llm.screening.screen_creative`): a link, contact detail, markup or instruction
-echo withholds it and nothing is stored. Otherwise the output-side content review runs on
+(:func:`app.llm.screening.screen_creative`): a link, contact detail, markup, instruction
+echo, blank character or mixed-script word (D-N4 item 39) withholds it and nothing is
+stored. Otherwise the output-side content review runs on
 exactly the persisted text (:func:`app.claims.engine.review_against_library`): claim-safety
 findings, the workspace's active blocking claims it contains (``blocked`` or ``prohibited``,
 kinds in canonical form), and whether every required
