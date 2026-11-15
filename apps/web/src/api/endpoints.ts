@@ -61,6 +61,11 @@ import type {
   LocationOut,
   LoginRequest,
   MemberRoleUpdate,
+  NotificationFeedOut,
+  NotificationOut,
+  NotificationPreferencesOut,
+  NotificationPreferencesUpdate,
+  NotificationsAnalyticsCapability,
   OfferIn,
   OnboardingRequest,
   OnboardingResult,
@@ -806,3 +811,45 @@ export const getWorkspaceAnalytics = (
     signal,
   });
 // ---- Project Phase 5E: status analytics (W21 lane 5E-W2; I-5E share) — end -------------
+
+// --- Project Phase 5E: in-app notifications (W21 lane 5E-W3, I-5E share) — BEGIN ---
+// The four notification routes are gated by the O-12(B) capability: while
+// `notifications_analytics` resolves disabled for the workspace they answer 503
+// (capability_unavailable). Every one acts for the session user only; no user id is ever
+// sent. The reflection answers 200 {enabled} even while dark (the feedback-capability
+// precedent) and serves the analytics surfaces too.
+export const getNotificationsAnalyticsCapability = (workspaceId: string, signal?: AbortSignal) =>
+  apiRequest<NotificationsAnalyticsCapability>(
+    `/workspaces/${workspaceId}/notifications-analytics-capability`,
+    { signal },
+  );
+
+export const listNotifications = (
+  workspaceId: string,
+  params: { limit?: number; offset?: number } = {},
+  signal?: AbortSignal,
+) =>
+  apiRequest<NotificationFeedOut>(`/workspaces/${workspaceId}/notifications`, {
+    query: { ...params },
+    signal,
+  });
+
+export const markNotificationRead = (workspaceId: string, notificationId: string) =>
+  apiRequest<NotificationOut>(`/workspaces/${workspaceId}/notifications/${notificationId}/read`, {
+    method: 'POST',
+  });
+
+export const getNotificationPreferences = (workspaceId: string, signal?: AbortSignal) =>
+  apiRequest<NotificationPreferencesOut>(`/workspaces/${workspaceId}/notification-preferences`, {
+    signal,
+  });
+
+export const updateNotificationPreferences = (
+  workspaceId: string,
+  body: NotificationPreferencesUpdate,
+) =>
+  apiRequest<NotificationPreferencesOut>(`/workspaces/${workspaceId}/notification-preferences`, {
+    method: 'PUT',
+    body,
+  });
+// --- Project Phase 5E: in-app notifications (W21 lane 5E-W3, I-5E share) — END -----

@@ -6066,6 +6066,167 @@
         "title": "MembershipOut",
         "type": "object"
       },
+      "NotificationEventCode": {
+        "description": "The closed vocabulary of in-app notification events (Phase 5E).\n\nExactly the five events the 5E plan names. Each event's ``subject_id`` names one row:\n``brief.created`` a ``recommendation_briefs`` row, ``approval.decided`` an ``approvals``\nrow, ``draft.generated`` a ``creative_drafts`` row, ``review.blocked`` a\n``content_reviews`` row and ``export.completed`` an ``exports`` row\n(:data:`NOTIFICATION_SUBJECT_TABLES`). In-app only: no event is ever mailed or texted.",
+        "enum": [
+          "brief.created",
+          "approval.decided",
+          "draft.generated",
+          "review.blocked",
+          "export.completed"
+        ],
+        "title": "NotificationEventCode",
+        "type": "string"
+      },
+      "NotificationFeedOut": {
+        "description": "One page of the session user's feed in this workspace, newest first.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/NotificationOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "unread": {
+            "title": "Unread",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "unread",
+          "limit",
+          "offset"
+        ],
+        "title": "NotificationFeedOut",
+        "type": "object"
+      },
+      "NotificationOut": {
+        "description": "One of the session user's notifications.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "event_code": {
+            "$ref": "#/components/schemas/NotificationEventCode"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "read_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Read At"
+          },
+          "subject_id": {
+            "title": "Subject Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "event_code",
+          "subject_id",
+          "created_at",
+          "read_at"
+        ],
+        "title": "NotificationOut",
+        "type": "object"
+      },
+      "NotificationPreferenceItem": {
+        "additionalProperties": false,
+        "description": "Whether one event code is delivered to the session user in this workspace.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "event_code": {
+            "$ref": "#/components/schemas/NotificationEventCode"
+          }
+        },
+        "required": [
+          "event_code",
+          "enabled"
+        ],
+        "title": "NotificationPreferenceItem",
+        "type": "object"
+      },
+      "NotificationPreferencesOut": {
+        "description": "Every event code, in the vocabulary's order (no stored choice: delivered).",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/NotificationPreferenceItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "NotificationPreferencesOut",
+        "type": "object"
+      },
+      "NotificationPreferencesUpdate": {
+        "additionalProperties": false,
+        "description": "The event codes to set for the session user in this workspace; others are unchanged.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/NotificationPreferenceItem"
+            },
+            "maxItems": 5,
+            "minItems": 1,
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "NotificationPreferencesUpdate",
+        "type": "object"
+      },
+      "NotificationsAnalyticsCapabilityOut": {
+        "description": "Customer-visible availability of notifications and analytics for one workspace.\n\nExactly one field (the ``FeedbackCapabilityOut`` precedent): no governance metadata\n(deciding rule, global flag, override) reaches a customer. Returned by\n``GET /workspaces/{workspace_id}/notifications-analytics-capability`` (O-12(B)).",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "NotificationsAnalyticsCapabilityOut",
+        "type": "object"
+      },
       "OfferIn": {
         "properties": {
           "cta": {
@@ -17400,6 +17561,341 @@
         "summary": "Reactivate Location",
         "tags": [
           "locations"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/notification-preferences": {
+      "get": {
+        "description": "Every event code with whether it is delivered to the caller here (default: delivered).",
+        "operationId": "read_notification_preferences_api_v1_workspaces__workspace_id__notification_preferences_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationPreferencesOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "The session user's notification preferences in this workspace",
+        "tags": [
+          "notifications"
+        ]
+      },
+      "put": {
+        "description": "Set the given event codes for the caller; the others are unchanged. Answers every code.",
+        "operationId": "update_notification_preferences_api_v1_workspaces__workspace_id__notification_preferences_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationPreferencesUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationPreferencesOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set the session user's notification preferences in this workspace",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/notifications": {
+      "get": {
+        "description": "A bounded page of the caller's own feed, with its total and unread counts.",
+        "operationId": "list_notifications_api_v1_workspaces__workspace_id__notifications_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationFeedOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "The session user's notifications in this workspace, newest first",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/notifications-analytics-capability": {
+      "get": {
+        "description": "Customer-facing, workspace-effective availability of notifications and analytics.\n\nAny member may read it. Advisory only: every notification and analytics endpoint\nre-decides and answers 503 while it is off. It answers 200 while dark, by design.",
+        "operationId": "read_notifications_analytics_capability_api_v1_workspaces__workspace_id__notifications_analytics_capability_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationsAnalyticsCapabilityOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Whether notifications and analytics are available for this workspace",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/notifications/{notification_id}/read": {
+      "post": {
+        "description": "Mark the caller's own notification read; the first ``read_at`` is kept.\n\nAny miss (unknown id, another workspace's, another user's, deleted) is the same 404.",
+        "operationId": "mark_notification_read_api_v1_workspaces__workspace_id__notifications__notification_id__read_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "notification_id",
+            "required": true,
+            "schema": {
+              "title": "Notification Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mark one of the session user's notifications read (idempotent)",
+        "tags": [
+          "notifications"
         ]
       }
     },

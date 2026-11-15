@@ -178,6 +178,18 @@ export type AnalyticsLocationTotals = S['LocationTotalsOut'];
 export type AnalyticsLocationRow = S['LocationComparisonOut'];
 // ---- Project Phase 5E: status analytics (W21 lane 5E-W2; I-5E share) — end -------------
 
+// --- Project Phase 5E: in-app notifications (W21 lane 5E-W3, I-5E share) — BEGIN ---
+// Generated contract types only. A notification carries no text and names no user: the
+// feed is the session user's own, and the client renders a fixed message per event code.
+export type NotificationEventCode = S['NotificationEventCode'];
+export type NotificationOut = S['NotificationOut'];
+export type NotificationFeedOut = S['NotificationFeedOut'];
+export type NotificationPreferenceItem = S['NotificationPreferenceItem'];
+export type NotificationPreferencesOut = S['NotificationPreferencesOut'];
+export type NotificationPreferencesUpdate = S['NotificationPreferencesUpdate'];
+export type NotificationsAnalyticsCapability = S['NotificationsAnalyticsCapabilityOut'];
+// --- Project Phase 5E: in-app notifications (W21 lane 5E-W3, I-5E share) — END -----
+
 export type RuntimeSummary = S['RuntimeSummaryOut'];
 export type RuntimeCapability = S['CapabilityOut'];
 export type RuntimeCapabilities = S['CapabilitiesOut'];

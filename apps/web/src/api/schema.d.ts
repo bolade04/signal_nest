@@ -1869,6 +1869,95 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/notification-preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The session user's notification preferences in this workspace
+         * @description Every event code with whether it is delivered to the caller here (default: delivered).
+         */
+        get: operations["read_notification_preferences_api_v1_workspaces__workspace_id__notification_preferences_get"];
+        /**
+         * Set the session user's notification preferences in this workspace
+         * @description Set the given event codes for the caller; the others are unchanged. Answers every code.
+         */
+        put: operations["update_notification_preferences_api_v1_workspaces__workspace_id__notification_preferences_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The session user's notifications in this workspace, newest first
+         * @description A bounded page of the caller's own feed, with its total and unread counts.
+         */
+        get: operations["list_notifications_api_v1_workspaces__workspace_id__notifications_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/notifications-analytics-capability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether notifications and analytics are available for this workspace
+         * @description Customer-facing, workspace-effective availability of notifications and analytics.
+         *
+         *     Any member may read it. Advisory only: every notification and analytics endpoint
+         *     re-decides and answers 503 while it is off. It answers 200 while dark, by design.
+         */
+        get: operations["read_notifications_analytics_capability_api_v1_workspaces__workspace_id__notifications_analytics_capability_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/notifications/{notification_id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mark one of the session user's notifications read (idempotent)
+         * @description Mark the caller's own notification read; the first ``read_at`` is kept.
+         *
+         *     Any miss (unknown id, another workspace's, another user's, deleted) is the same 404.
+         */
+        post: operations["mark_notification_read_api_v1_workspaces__workspace_id__notifications__notification_id__read_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/offers": {
         parameters: {
             query?: never;
@@ -4763,6 +4852,89 @@ export interface components {
             organization_name: string;
             /** Role */
             role: string;
+        };
+        /**
+         * NotificationEventCode
+         * @description The closed vocabulary of in-app notification events (Phase 5E).
+         *
+         *     Exactly the five events the 5E plan names. Each event's ``subject_id`` names one row:
+         *     ``brief.created`` a ``recommendation_briefs`` row, ``approval.decided`` an ``approvals``
+         *     row, ``draft.generated`` a ``creative_drafts`` row, ``review.blocked`` a
+         *     ``content_reviews`` row and ``export.completed`` an ``exports`` row
+         *     (:data:`NOTIFICATION_SUBJECT_TABLES`). In-app only: no event is ever mailed or texted.
+         * @enum {string}
+         */
+        NotificationEventCode: "brief.created" | "approval.decided" | "draft.generated" | "review.blocked" | "export.completed";
+        /**
+         * NotificationFeedOut
+         * @description One page of the session user's feed in this workspace, newest first.
+         */
+        NotificationFeedOut: {
+            /** Items */
+            items: components["schemas"]["NotificationOut"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+            /** Unread */
+            unread: number;
+        };
+        /**
+         * NotificationOut
+         * @description One of the session user's notifications.
+         */
+        NotificationOut: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            event_code: components["schemas"]["NotificationEventCode"];
+            /** Id */
+            id: string;
+            /** Read At */
+            read_at: string | null;
+            /** Subject Id */
+            subject_id: string;
+        };
+        /**
+         * NotificationPreferenceItem
+         * @description Whether one event code is delivered to the session user in this workspace.
+         */
+        NotificationPreferenceItem: {
+            /** Enabled */
+            enabled: boolean;
+            event_code: components["schemas"]["NotificationEventCode"];
+        };
+        /**
+         * NotificationPreferencesOut
+         * @description Every event code, in the vocabulary's order (no stored choice: delivered).
+         */
+        NotificationPreferencesOut: {
+            /** Items */
+            items: components["schemas"]["NotificationPreferenceItem"][];
+        };
+        /**
+         * NotificationPreferencesUpdate
+         * @description The event codes to set for the session user in this workspace; others are unchanged.
+         */
+        NotificationPreferencesUpdate: {
+            /** Items */
+            items: components["schemas"]["NotificationPreferenceItem"][];
+        };
+        /**
+         * NotificationsAnalyticsCapabilityOut
+         * @description Customer-visible availability of notifications and analytics for one workspace.
+         *
+         *     Exactly one field (the ``FeedbackCapabilityOut`` precedent): no governance metadata
+         *     (deciding rule, global flag, override) reaches a customer. Returned by
+         *     ``GET /workspaces/{workspace_id}/notifications-analytics-capability`` (O-12(B)).
+         */
+        NotificationsAnalyticsCapabilityOut: {
+            /** Enabled */
+            enabled: boolean;
         };
         /** OfferIn */
         OfferIn: {
@@ -10000,6 +10172,179 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LocationOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_notification_preferences_api_v1_workspaces__workspace_id__notification_preferences_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationPreferencesOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_notification_preferences_api_v1_workspaces__workspace_id__notification_preferences_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationPreferencesUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationPreferencesOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_notifications_api_v1_workspaces__workspace_id__notifications_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationFeedOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_notifications_analytics_capability_api_v1_workspaces__workspace_id__notifications_analytics_capability_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationsAnalyticsCapabilityOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mark_notification_read_api_v1_workspaces__workspace_id__notifications__notification_id__read_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                notification_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationOut"];
                 };
             };
             /** @description Validation Error */

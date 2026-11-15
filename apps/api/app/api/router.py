@@ -20,6 +20,7 @@ from app.creative.routes import router as creative_router
 from app.feedback.routes import router as feedback_router
 from app.jobs.routes import router as jobs_router
 from app.locations.routes import router as locations_router
+from app.notifications.routes import router as notifications_router
 from app.opportunities.routes import router as opportunities_router
 from app.organizations.routes import router as organizations_router
 from app.privacy.routes import router as privacy_router
@@ -53,6 +54,7 @@ for _r in (
     approvals_router,
     creative_router,
     analytics_router,
+    notifications_router,
     jobs_router,
     audit_router,
     privacy_router,
