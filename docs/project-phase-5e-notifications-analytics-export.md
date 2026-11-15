@@ -301,8 +301,11 @@ decision O-11, resolved 2026-09-01).
    member for it.
 7. Combined whole-round integration suite green; all governance pins
    (value-set/order, dark-by-default, `future_activation_phase="5E"` for the
-   export capability, secret-inventory **94→95+N at the consolidated CF-3**,
-   counted from the actual `Settings` field list at the freeze) green.
+   export capability and, since operator ruling O-12(B), the notifications-and-analytics
+   capability, and the secret-inventory count taken from the actual `Settings` field list)
+   green. *(Corrected at I-5E: the count read "secret-inventory **94→95+N at the
+   consolidated CF-3**". It was 151 → 152 at CF-3 and is 153 → 155 at 5E-CF
+   (`docs/operations/aws-staging-secret-inventory.md`).)*
 8. Phase 5 closeout checklist complete with artifacts (every 5A–5E exit
    criterion TRUE with a cited artifact); **R-final** verdict recorded
    verbatim. This is the only closeout; no intermediate record qualifies.
