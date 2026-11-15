@@ -79,6 +79,9 @@ from app.tests._auth2_support import pg_database, require_postgres, sqlite_file_
 
 ORG, WS, BRIEF, DRAFT = "org-rr", "ws-rr", "brief-rr", "draft-rr"
 AUTHOR, DECIDER, ADMIN, OTHER = "rr-author", "rr-decider", "rr-admin", "rr-other"
+#: The brief's own approval, seeded so the draft is approvable (D-N4 item 38: a draft is
+#: approvable only while its brief is approved). Every count below leaves it out.
+BRIEF_APPROVAL = "appr-rr-brief"
 OWNER = "rr-owner"
 PASSWORD = "role-reread-pass-1"
 JOIN_SECONDS = 60.0
@@ -104,6 +107,16 @@ def _seed(s: Session) -> None:
         s.flush()
     evidence = add_evidence(s, org_id=ORG, ws_id=WS, key="rr")
     brief = add_brief(s, evidence, brief_id=BRIEF, author=author)
+    s.add(
+        Approval(
+            id=BRIEF_APPROVAL, organization_id=ORG, workspace_id=WS,
+            subject_type="recommendation_brief", subject_id=BRIEF, subject_version=1,
+            brief_id=BRIEF, decision="approved", decision_seq=1, decided_by=OTHER,
+            decided_by_snapshot=f"{OTHER} Name {OTHER} <{OTHER}@example.test>",
+            decided_role="reviewer", is_simulated=True,
+        )
+    )
+    s.flush()
     s.add(
         CreativeDraft(
             id=DRAFT, organization_id=ORG, workspace_id=WS, brief_id=brief.id,
@@ -151,7 +164,11 @@ def _approvals(factory: sessionmaker) -> list[tuple]:
     with factory() as s:
         return [
             (a.subject_type, a.decision, a.decided_by, a.decided_role)
-            for a in s.scalars(select(Approval).order_by(Approval.created_at, Approval.id))
+            for a in s.scalars(
+                select(Approval)
+                .where(Approval.id != BRIEF_APPROVAL)
+                .order_by(Approval.created_at, Approval.id)
+            )
         ]
 
 
@@ -686,7 +703,7 @@ def test_a_decision_first_the_organization_deletion_waits_then_erases(pg: PgWorl
     kind = "recommendation_brief" if subject == "brief" else "creative_draft"
     assert _approvals(pg.factory) == [(kind, "approved", None, "reviewer")]  # anonymised
     with pg.factory() as s:
-        [approval] = s.scalars(select(Approval)).all()
+        [approval] = s.scalars(select(Approval).where(Approval.id != BRIEF_APPROVAL)).all()
         assert (approval.brief_id, approval.draft_id, approval.organization_id) == (
             None, None, ORG
         )
