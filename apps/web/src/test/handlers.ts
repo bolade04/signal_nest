@@ -6,6 +6,7 @@ import type {
   LocationOut,
   OpportunityDetail,
   OpportunitySort,
+  WorkspaceAnalytics,
 } from '@/api/types';
 import type { ContextKind, ContextPatchByKind } from '@/api/endpoints';
 
@@ -1476,6 +1477,58 @@ const CREATIVE_DARK = () =>
     { status: 503 },
   );
 
+/**
+ * Project Phase 5E (I-5E): a complete, closed `AnalyticsOut` for tests that switch analytics
+ * on (`server.use(...)`). The shipped default answers 503 (below). Counts are small and
+ * consistent; two latency figures and both rates are `null` (no basis), never 0.
+ */
+export function analyticsFixture(workspaceId: string): WorkspaceAnalytics {
+  return {
+    workspace_id: workspaceId,
+    location_id: null,
+    generated_at: '2026-11-14T12:00:00Z',
+    opportunities: { total: 7, new: 3, saved: 1, monitoring: 1, ignored: 1, actioned: 1 },
+    briefs: { total: 5, awaiting_decision: 2, approved: 1, rejected: 1, superseded: 1 },
+    approvals: { total: 4, approved: 3, rejected: 1, revoked: 0, on_briefs: 3, on_drafts: 1 },
+    drafts: { total: 2, awaiting_decision: 1, approved: 1, rejected: 0, superseded: 0 },
+    reviews: { total: 2, passed: 1, blocked: 1, not_passed: 0 },
+    exports: { total: 1, plain_text: 1, markdown: 0, json_document: 0 },
+    approval_latency: {
+      briefs: { decided: 3, mean_seconds: 5400, median_seconds: 3600 },
+      drafts: { decided: 0, mean_seconds: null, median_seconds: null },
+    },
+    outcomes: {
+      drafts_generated: 2,
+      revisions: 0,
+      simulated: 2,
+      review_pass_rate: null,
+      review_block_rate: null,
+    },
+    locations: [
+      {
+        location_id: 'loc-dallas',
+        name: 'Dallas',
+        is_active: true,
+        opportunities: 4,
+        briefs: 3,
+        drafts: 2,
+        approvals: 4,
+        exports: 1,
+      },
+    ],
+    unassigned: { opportunities: 3, briefs: 2, drafts: 0, approvals: 0, exports: 0 },
+  };
+}
+
+// Project Phase 5E (I-5E): the dark answers of the export routes (content_export,
+// app/exports/service.py) and of the notification and analytics routes (O-12(B)'s
+// notifications_analytics; app/notifications/routes.py, app/analytics/routes.py).
+const dark503 = (message: string) => () =>
+  HttpResponse.json({ error: { code: 'capability_unavailable', message } }, { status: 503 });
+const EXPORT_DARK = dark503('Export is not available yet.');
+const NOTIFICATIONS_DARK = dark503('Notifications are not available yet.');
+const ANALYTICS_DARK = dark503('Status analytics is not available yet.');
+
 export const handlers = [
   // ---- Tenant gate for every workspace-scoped route (runs first, then falls through) ----
   http.all(P('/workspaces/:ws'), tenantGate),
@@ -2324,6 +2377,26 @@ export const handlers = [
     http.get(P('/workspaces/:ws/drafts/:draftId'), () => CREATIVE_DARK()),
     http.get(P('/workspaces/:ws/drafts/:draftId/approvals'), () => CREATIVE_DARK()),
     http.post(P('/workspaces/:ws/drafts/:draftId/approvals'), () => CREATIVE_DARK()),
+  ],
+
+  // ---- Project Phase 5E (I-5E) — dark by default ----
+  // The two reflections answer 200 {enabled:false} even while dark (interface sheet A.3, P7);
+  // every export, notification and analytics route answers 503 with the server's message.
+  // The shell's bell asks the O-12(B) reflection on every authenticated page, so its default
+  // must exist (onUnhandledRequest: 'error'). Tests opt in with server.use(...). All of these
+  // precede the greedy campaign-context `/workspaces/:ws/:kind` match.
+  ...[
+    http.get(P('/workspaces/:ws/notifications-analytics-capability'), () =>
+      HttpResponse.json({ enabled: false }),
+    ),
+    http.get(P('/workspaces/:ws/notifications'), NOTIFICATIONS_DARK),
+    http.post(P('/workspaces/:ws/notifications/:notificationId/read'), NOTIFICATIONS_DARK),
+    http.get(P('/workspaces/:ws/notification-preferences'), NOTIFICATIONS_DARK),
+    http.put(P('/workspaces/:ws/notification-preferences'), NOTIFICATIONS_DARK),
+    http.get(P('/workspaces/:ws/analytics'), ANALYTICS_DARK),
+    http.get(P('/workspaces/:ws/export-capability'), () => HttpResponse.json({ enabled: false })),
+    http.get(P('/workspaces/:ws/drafts/:draftId/exports'), EXPORT_DARK),
+    http.post(P('/workspaces/:ws/drafts/:draftId/exports'), EXPORT_DARK),
   ],
 
   // ---- Approval decisions (Phase 5B; same dark switch as the briefs; I-5A/I-5B) ----
