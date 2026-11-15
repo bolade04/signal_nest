@@ -80,6 +80,7 @@ from functools import lru_cache
 
 from app.claims.unicode_guard import (
     blanks_as_spaces,
+    i_capitals_as_i,
     skeleton,
     small_capitals_as_letters,
     word_continues,
@@ -245,17 +246,30 @@ def claim_forms(text: str) -> tuple[str, ...]:
     3. the skeleton of the case-folded skeleton: a capital look-alike before folding ("NO TAX" in
        Greek capitals), which folding alone would turn into Greek small letters;
     4. and 5. the same two with every blank read as a space
-       (:func:`app.claims.unicode_guard.blanks_as_spaces`), for a text that keeps one.
+       (:func:`app.claims.unicode_guard.blanks_as_spaces`), for a text that keeps one;
+    6. and 7. form 3 of each reading with every capital-I look-alike read as "i" first
+       (:func:`app.claims.unicode_guard.i_capitals_as_i`; review W21-REV-DN439 r1 C-1): the
+       skeleton maps capital I to "l" but small "i" to itself, so a capital look-alike of a
+       claim containing "i" ("TOP PICK" in Cyrillic capitals, "NO RISK" with Greek "NO", "FREE
+       PARKING F0REVER" with a zero) matches neither form 2 nor form 3.
 
     The normalised text is :func:`app.llm.untrusted.normalise` with the full stops mapped, as in
     :func:`fold`, and every Latin small capital read as its letter
     (:func:`app.claims.unicode_guard.small_capitals_as_letters`); each skeleton form has its
-    whitespace runs collapsed and is trimmed."""
+    whitespace runs collapsed and is trimmed. The skeleton is taken of that NFKC form, which is
+    what the review receives (the screening copy), so a confusable that NFKC rewrites to another
+    letter reads as that letter (U+017F long s as "s"), not as its prototype."""
     forms = [fold(text)]
-    for reading in (text, blanks_as_spaces(text)):
-        base = small_capitals_as_letters(normalise(reading).translate(_FULL_STOPS))
+    bases = [
+        small_capitals_as_letters(normalise(reading).translate(_FULL_STOPS))
+        for reading in (text, blanks_as_spaces(text))
+    ]
+    for base in bases:
         for form in (skeleton(base.casefold()), skeleton(skeleton(base).casefold())):
             forms.append(_WHITESPACE.sub(" ", form).strip())
+    for base in bases:
+        form = skeleton(skeleton(i_capitals_as_i(base)).casefold())
+        forms.append(_WHITESPACE.sub(" ", form).strip())
     return tuple(forms)
 
 

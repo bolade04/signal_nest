@@ -88,6 +88,8 @@ BRAILLE_IN_CLAIM = "Try free\u2800parking forever today."
 WHOLE_CYRILLIC = "Get \u0435\u0430\u0455\u0443 \u0441\u0430\u0455\u04bb today."
 GREEK_CAPITALS = "Shop now: \u039d\u039f \u03a4\u0391\u03a7 this weekend."
 AVOID = "Spaces are limited. Avoid where prohibited."
+#: "TOP PICK" in Cyrillic capitals (review W21-REV-DN439 r1 C-1: a claim containing "i").
+CYRILLIC_CAPITALS_WITH_I = "Shop the \u0422\u041e\u0420 \u0420\u0406\u0421\u041a today."
 
 
 # --------------------------------------------------------------------------- #
@@ -194,6 +196,7 @@ RECHECK = [
     # (draft body, kind of the entry added after the review, its text, the re-check's answer)
     (WHOLE_CYRILLIC, "blocked", "easy cash", "blocked_claim"),
     (GREEK_CAPITALS, "blocked", "no tax", "blocked_claim"),
+    (CYRILLIC_CAPITALS_WITH_I, "blocked", "top pick", "blocked_claim"),
     (AVOID, "required_disclaimer", "Void where prohibited.", "disclaimer_missing"),
     ("Spaces are limited. Offer void where prohibited.", "required_disclaimer",
      "Void where prohibited.", None),
@@ -202,8 +205,8 @@ RECHECK = [
 
 @pytest.mark.parametrize(
     "body, kind, text, refusal", RECHECK,
-    ids=["whole_script_cyrillic", "whole_script_greek_capitals", "disclaimer_in_longer_word",
-         "disclaimer_carried"],
+    ids=["whole_script_cyrillic", "whole_script_greek_capitals", "capitals_with_i",
+         "disclaimer_in_longer_word", "disclaimer_carried"],
 )
 def test_the_recheck_of_entries_added_after_the_review_uses_the_item_39_rules(
     world, body, kind, text, refusal
@@ -212,9 +215,10 @@ def test_the_recheck_of_entries_added_after_the_review_uses_the_item_39_rules(
     library *as it is now*, for an entry added or changed after the draft was reviewed, with
     the review's rules (D-N4 item 39) on the draft's text as written: a whole-script look-alike
     of a blocked claim added later refuses approval (in Greek capitals too, which folding the
-    text first would lose), a disclaimer added later is not carried by "Avoid where
-    prohibited.", and one carried as whole words still is. On ``e4fb42fa`` the re-check used
-    the rule before item 39 and approved the first three."""
+    text first would lose, and in Cyrillic capitals for a claim containing "i"), a disclaimer
+    added later is not carried by "Avoid where prohibited.", and one carried as whole words
+    still is. On ``e4fb42fa`` the re-check used the rule before item 39 and approved the first
+    four; on ``588d4086`` it still approved the capitals with "i" (review r1 C-1)."""
     ws = world.workspace(f"recheck {kind} {text} {refusal}")
     job, brief_id = _run(world, ws, body)
     [draft] = world.rows(CreativeDraft, brief_id=brief_id)

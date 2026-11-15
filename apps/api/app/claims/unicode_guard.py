@@ -53,6 +53,11 @@ function returns a verdict or a new string that is used for matching only.
   shaped like a lower-case letter (U+1D04 C, U+1D0F O, U+1D20 V, ...) and NFKC none, yet a word
   written wholly in small capitals is a single-script word that reads as the plain word, as
   NFKC already makes a mathematical, full-width or circled letter read.
+* **Capital-I look-alikes** (:func:`i_capitals_as_i`), for detection only: the skeleton maps a
+  capital I (and its look-alikes) to "l" but leaves a small "i" as "i", so a claim containing
+  "i" written in capitals with any other look-alike ("TOP PICK" in Cyrillic capitals) needs a
+  reading in which each of the seven characters whose skeleton is "l" and whose case-folded
+  skeleton is "i" reads as "i" (review W21-REV-DN439 r1 C-1).
 
 **Data.** Unmodified copies of four Unicode 15.0.0 data files are in ``unicode_data/``
 (:data:`DATA_FILES`: name, source URL and SHA-256 of each). Every load checks the SHA-256 and
@@ -61,8 +66,8 @@ instead of matching less. They are © 2022 Unicode, Inc., used under the Unicode
 whose text is ``unicode_data/LICENSE-UNICODE.txt`` (:data:`LICENCE_FILE`). Version 15.0.0 is the
 Unicode version of the runtime's own ``unicodedata`` (Python 3.12, in CI and in the image), so
 NFD, NFKC, General_Category, the scripts and the confusables all come from one version, as
-UTS #39 defines the skeleton. A runtime with a newer Unicode database fails
-``test_dn4_39_unicode_data`` until the data is pinned again.
+UTS #39 defines the skeleton. A runtime with any other Unicode database (newer, or Python
+3.11's 14.0.0) fails ``test_dn4_39_unicode_data`` until the data is pinned again.
 """
 
 from __future__ import annotations
@@ -273,6 +278,19 @@ def small_capitals_as_letters(text: str) -> str:
     return text.translate(_small_capitals())
 
 
+@cache
+def _i_capitals_table() -> dict[int, str]:
+    """Every character whose skeleton is "l" and whose case-folded skeleton is "i" (capital I
+    and its look-alikes: U+0049, U+0196, U+0399, U+0406, U+04C0, U+2160, U+FF29) -> "i"."""
+    return {ord(src): "i" for src in _confusables()
+            if skeleton(src) == "l" and skeleton(src.casefold()) == "i"}
+
+
+def i_capitals_as_i(text: str) -> str:
+    """``text`` with each capital-I look-alike read as "i". For matching only."""
+    return text.translate(_i_capitals_table())
+
+
 def withheld_blank(text: str) -> str | None:
     """The first character of ``text`` in :data:`WITHHELD_BLANKS`, or None."""
     return next((ch for ch in text if ch in WITHHELD_BLANKS), None)
@@ -356,6 +374,7 @@ __all__ = [
     "DataFile",
     "UnicodeDataError",
     "blanks_as_spaces",
+    "i_capitals_as_i",
     "is_highly_restrictive",
     "is_word_character",
     "load",

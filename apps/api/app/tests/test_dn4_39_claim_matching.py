@@ -197,6 +197,31 @@ def test_upper_case_text_with_a_lower_case_l_for_i_is_caught_only_by_a_capital_e
     assert not contains_claim("Totally RlSK FREE trial.", "risk free")
 
 
+#: Capital look-alikes of a claim containing "i" (review W21-REV-DN439 r1 C-1): the skeleton
+#: maps capital I to "l" and small "i" to itself, so these needed forms 6 and 7.
+CAPITAL_I = [
+    ("cyrillic_capitals", "\u0422\u041e\u0420 \u0420\u0406\u0421\u041a", "top pick"),
+    ("greek_word_then_latin", "\u039d\u039f RISK", "no risk"),
+    ("cyrillic_word_then_latin", "\u0422\u041e\u0420 PICK", "top pick"),
+    ("greek_capitals", "\u039a\u0399\u03a4", "kit"),
+    ("digit_zero_in_capitals", "FREE PARKING F0REVER", "free parking forever"),
+]
+
+
+@pytest.mark.parametrize("attacked, claim", [c[1:] for c in CAPITAL_I],
+                         ids=[c[0] for c in CAPITAL_I])
+def test_capital_look_alikes_of_a_claim_with_i_are_detected_on_either_side(attacked, claim):
+    text, plain = f"Shop the {attacked} today.", f"Shop the {claim} today."
+    assert not contains_phrase(fold(text), fold(claim))  # missed before item 39
+    assert contains_claim(text, claim)  # the draft carries the look-alike
+    assert contains_claim(plain, attacked)  # the library holds it
+    forms_t, forms_c = claim_forms(text), claim_forms(claim)
+    assert not any(c in t for c, t in zip(forms_c[:5], forms_t[:5], strict=True))
+    assert forms_c[5] in forms_t[5]  # form 6: capital-I look-alikes read as "i"
+    review = review_against_library(text, None, [LibraryEntry("b1", claim, "blocked")])
+    assert review.blocked_claim_ids == ["b1"]
+
+
 def test_blanks_read_as_spaces_and_invisibles_removed_are_both_matched():
     """A text that keeps a blank (a library entry, or a draft stored before the screen withheld
     blanks) is matched as it reads; one whose filler the matching form removes is still matched
@@ -262,9 +287,26 @@ _ALPHABET = list("abcdeimnoprstuvxyzABCEHIKMNOPTXY01 ") + [
 ]
 
 
+#: Pairs only the canonical form matches: NFD reorders the combining marks at the claim's edge
+#: (review W21-REV-DN439 r1 C-5; a small capital R and e with circumflex and dot below).
+CANONICAL_ONLY = [("\u0280\u1ec7\u1ec7\u0323", "\u0280\u1ec7\u1ec7")]
+
+
+@pytest.mark.parametrize("text", ["Free parking FOREVER", "\u0280\u1ec7\u1ec7\u0323",
+                                  "Try fr\u0435\u0435\u2800parking", "  Terms\u00a0apply\u3002 "])
+def test_the_first_form_is_the_canonical_form(text):
+    assert claim_forms(text)[0] == fold(text)
+
+
 def test_detection_is_never_weaker_than_the_rule_before_item_39():
     """Property, seeded: whenever the old rule (the canonical-form substring) finds a claim,
-    :func:`contains_claim` does, for claims cut from the text and for random ones."""
+    :func:`contains_claim` does, for claims cut from the text and for random ones, and for the
+    pairs that only the canonical form matches."""
+    for text, claim in CANONICAL_ONLY:
+        assert contains_phrase(fold(text), fold(claim))
+        assert not any(c in t for c, t in zip(claim_forms(claim)[1:], claim_forms(text)[1:],
+                                               strict=True))
+        assert contains_claim(text, claim)
     rng = random.Random(39)
     checked = 0
     for _ in range(3000):

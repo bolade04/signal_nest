@@ -31,7 +31,16 @@ def _screen(body: str, headline: str = "", cta: str = ""):
 # --------------------------------------------------------------------------- #
 # Blank characters
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("blank", sorted(WITHHELD_BLANKS), ids=lambda c: f"U+{ord(c):04X}")
+#: The withheld blanks, written out (review W21-REV-DN439 r1 C-5): the set is pinned here, so
+#: dropping one from ``WITHHELD_BLANKS`` fails these tests instead of shrinking them.
+BLANKS = ("\u2800", "\U00013441", "\U00013442", "\U0001d159", "\U00016fe4")
+
+
+def test_the_withheld_blanks_are_exactly_the_five():
+    assert WITHHELD_BLANKS == frozenset(BLANKS)
+
+
+@pytest.mark.parametrize("blank", BLANKS, ids=lambda c: f"U+{ord(c):04X}")
 @pytest.mark.parametrize("field", ["headline", "body", "cta"])
 def test_a_draft_with_a_blank_character_is_withheld(blank, field):
     texts = {"headline": "Weekend news", "body": "Plenty of room.", "cta": "Visit"}

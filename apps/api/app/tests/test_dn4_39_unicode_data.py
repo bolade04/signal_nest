@@ -28,6 +28,7 @@ from app.claims.unicode_guard import (
     LICENCE_FILE,
     UNICODE_VERSION,
     UnicodeDataError,
+    i_capitals_as_i,
     is_highly_restrictive,
     mixed_script_word,
     script_extensions,
@@ -43,6 +44,7 @@ _CACHED = (
     guard._script_codes,
     guard._script_ranges,
     guard._script_extensions,
+    guard._i_capitals_table,
     guard.script_of,
     guard.script_extensions,
 )
@@ -51,10 +53,6 @@ _CACHED = (
 def _clear_caches() -> None:
     for fn in _CACHED:
         fn.cache_clear()
-
-
-def _version(text: str) -> tuple[int, ...]:
-    return tuple(int(part) for part in text.split("."))
 
 
 # --------------------------------------------------------------------------- #
@@ -97,11 +95,13 @@ def test_the_licence_notice_ships_with_the_data():
     )
 
 
-def test_the_runtime_unicode_database_is_not_newer_than_the_data():
-    """NFD/NFKC come from the runtime; the confusables and scripts from the data. A runtime
-    newer than the data would know characters the data cannot map: re-pin the data first."""
-    assert _version(unicodedata.unidata_version) <= _version(UNICODE_VERSION), (
-        f"runtime Unicode {unicodedata.unidata_version} is newer than the vendored "
+def test_the_runtime_unicode_database_is_the_data_version():
+    """NFD/NFKC and General_Category come from the runtime; the confusables and scripts from the
+    data. Both must be one Unicode version (review W21-REV-DN439 r1 C-3): a newer runtime knows
+    characters the data cannot map, and an older one (Python 3.11's 14.0.0) normalises
+    differently from the data's. Re-pin the data first."""
+    assert unicodedata.unidata_version == UNICODE_VERSION, (
+        f"runtime Unicode {unicodedata.unidata_version} is different from the vendored "
         f"{UNICODE_VERSION} data: pin the matching confusables.txt and UCD files"
     )
 
@@ -163,6 +163,14 @@ def test_every_script_name_and_every_confusable_parses():
 )
 def test_the_skeleton_maps_through_confusables(text, expected):
     assert skeleton(text) == unicodedata.normalize("NFD", expected)
+
+
+def test_capital_i_look_alikes_read_as_i():
+    """The seven characters whose skeleton is "l" and whose case-folded skeleton is "i"."""
+    assert sorted(guard._i_capitals_table()) == [
+        0x0049, 0x0196, 0x0399, 0x0406, 0x04C0, 0x2160, 0xFF29
+    ]
+    assert i_capitals_as_i("RISK \u0399\u0406 il1|") == "RiSK ii il1|"
 
 
 def test_latin_small_capitals_read_as_their_letters():
