@@ -222,6 +222,15 @@ def test_capital_look_alikes_of_a_claim_with_i_are_detected_on_either_side(attac
     assert review.blocked_claim_ids == ["b1"]
 
 
+def test_a_capital_look_alike_split_by_a_blank_needs_form_7():
+    """Review W21-REV-DN439 r2 FU-R2-1: form 7 (the capital-I reading of the text with its
+    blanks read as spaces) is the only form that matches "TOP PICK" in Cyrillic capitals with a
+    Braille blank (U+2800) between the words, as a library entry or a draft stored before the
+    screen withheld blanks can hold it."""
+    assert contains_claim("Shop the \u0422\u041e\u0420\u2800\u0420\u0406\u0421\u041a today.",
+                          "top pick")
+
+
 def test_blanks_read_as_spaces_and_invisibles_removed_are_both_matched():
     """A text that keeps a blank (a library entry, or a draft stored before the screen withheld
     blanks) is matched as it reads; one whose filler the matching form removes is still matched

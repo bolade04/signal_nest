@@ -49,10 +49,11 @@ function returns a verdict or a new string that is used for matching only.
   ``Default_Ignorable_Code_Point`` has already been removed.
 * **Latin small capitals** (:func:`small_capitals_as_letters`), for detection only: each code
   point named "LATIN LETTER SMALL CAPITAL" and one letter (25 in Unicode 15.0, from the
-  runtime's own character names) reads as that letter. ``confusables.txt`` maps only the ten
-  shaped like a lower-case letter (U+1D04 C, U+1D0F O, U+1D20 V, ...) and NFKC none, yet a word
-  written wholly in small capitals is a single-script word that reads as the plain word, as
-  NFKC already makes a mathematical, full-width or circled letter read.
+  runtime's own character names) reads as that letter. ``confusables.txt`` maps eleven of them
+  (nine to their own letter, such as U+1D04 C, U+1D0F O and U+1D20 V; U+1D0B K to kra and
+  U+1D0D M to turned w) and NFKC none, yet a word written wholly in small capitals is a
+  single-script word that reads as the plain word, as NFKC already makes a mathematical,
+  full-width or circled letter read.
 * **Capital-I look-alikes** (:func:`i_capitals_as_i`), for detection only: the skeleton maps a
   capital I (and its look-alikes) to "l" but leaves a small "i" as "i", so a claim containing
   "i" written in capitals with any other look-alike ("TOP PICK" in Cyrillic capitals) needs a
