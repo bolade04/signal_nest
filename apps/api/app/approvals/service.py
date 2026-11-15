@@ -61,6 +61,24 @@ step    row                                 mode              why
                                                               the approval for that decision
 6       inserts: ``approvals``,             FK ``KEY SHARE``  only on rows 1 and 4, already held
         ``audit_logs``
+7       ``notifications`` inserts (5E-W3's  FK ``KEY SHARE``  the organization: row 2's, already
+        ``notify``, the decision's last                       held. The author's ``users`` row:
+        write, after its audit row); only                     taken first ``KEY SHARE SKIP
+        while ``notifications_analytics``                     LOCKED``
+        resolves enabled for the                              (``app.notifications.service``),
+        workspace; while off it only reads                    so a row held ``FOR UPDATE``
+                                                              (account erasure, a credential
+                                                              flow) skips that recipient and is
+                                                              never waited for. The workspace:
+                                                              new, and it conflicts only with
+                                                              ``FOR UPDATE`` or a delete of that
+                                                              row: an override set or clear and
+                                                              a schedule-cap mutation, neither
+                                                              of which waits on a row a decision
+                                                              holds; organization deletion locks
+                                                              the organization ``FOR UPDATE``
+                                                              first and so meets the decision at
+                                                              step 2, never here
 ======  ==================================  ================  ==================================
 
 Every other path that locks one of those rows, and where it first meets the decision:
