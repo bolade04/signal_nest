@@ -85,8 +85,10 @@ const EXPORT_REFUSAL: Readonly<Record<string, string>> = {
     "This draft's jurisdiction doesn't match its brief's, so it can't be exported.",
   export_not_approved:
     "This version isn't approved. Only a version whose current decision is an approval can be exported.",
+  // Every draft_approval_refusal reason shares this code, D-N4 item 38's brief_not_approved
+  // included (the draft-approval sentence names the brief the same way since DN4-38).
   export_review_blocked:
-    "This draft's content review doesn't allow export, or the claims library changed since it was reviewed.",
+    "This draft can't be exported: its content review doesn't allow it, the claims library changed since it was reviewed, or its brief is no longer approved.",
 };
 
 /**

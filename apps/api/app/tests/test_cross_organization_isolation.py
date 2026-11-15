@@ -1639,6 +1639,14 @@ def five_e_rows(world: World, creative_rows) -> dict[str, FiveERows]:
                 risk_notes=[], evidence_refs=[], jurisdiction_code="US-TX", **scoped,
             ))
             s.flush()
+            # D-N4 item 38 (DN4-38, merged at I-5E stage 1b): a draft is exportable only while
+            # its brief version is approved, as for a new draft approval.
+            s.add(Approval(
+                subject_type="recommendation_brief", subject_id=brief_id,
+                subject_version=EXPORT_BRIEF_VERSION, brief_id=brief_id, decision="approved",
+                decision_seq=1, decided_by=t.owner_id, decided_by_snapshot=snapshot,
+                decided_role="reviewer", is_simulated=False, **scoped,
+            ))
             s.add(CreativeDraft(
                 id=f"{k}draft", brief_id=brief_id, opportunity_id=t.opportunity_id,
                 draft_version=EXPORT_DRAFT_VERSION, channel="email", body=f"Export {t.key}",
