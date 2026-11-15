@@ -1,6 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
-import { ApiError, apiRequest } from '@/api/client';
+import { ApiError } from '@/api/client';
+import * as api from '@/api/endpoints';
 import { queryKeys } from '@/api/queryKeys';
+import type { ExportFormat } from '@/api/types';
+import { exportFormatLabels } from '@/lib/labels';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -19,55 +22,16 @@ import { snapshotName } from '@/pages/approvals/approvalVocabulary';
  * Both export routes answer 503 while `content_export` is off for the workspace, 403 for a
  * role outside the route's set, and the uniform 404 for an unknown or foreign draft.
  *
- * Their generated types and `endpoints.ts` wrappers arrive with 5E-W1's routes at I-5E. Until
- * then the shapes below are declared from the 5E package §3.1 field list, with only the
- * fields this UI reads, and the requests go through the shared client. At I-5E they are
- * replaced by the generated aliases and wrappers; the components do not change.
+ * The types are the generated contract's (`@/api/types`: `ExportFormat`, `DraftExport`,
+ * `DraftExportSummary`, `DraftExportHistory`) and the requests are `@/api/endpoints`'s
+ * wrappers, both adopted at I-5E in place of the lane's local declarations.
  *
- * Each file exports only components and types (the react-refresh lint rule), so the two keep
- * their few small helpers (the path, the format labels) privately.
+ * Each file exports only components (the react-refresh lint rule), so the two keep their few
+ * small helpers (the format labels) privately.
  */
 
-/** The closed export formats (`app.core.enums.ExportFormat`). */
-export type ExportFormat = 'text/plain' | 'text/markdown' | 'json';
-
-/** One export as the history lists it: no content. */
-export interface DraftExportSummary {
-  id: string;
-  draft_id: string | null;
-  draft_version: number;
-  approval_id: string | null;
-  format: ExportFormat;
-  jurisdiction_code: string;
-  /** The exporter's immutable identity at export time (`[erased]` after account erasure). */
-  exported_by_snapshot: string;
-  is_simulated: boolean;
-  created_at: string;
-}
-
-/** One export as the POST answers it: the summary plus the rendered text. */
-export interface DraftExport extends DraftExportSummary {
-  content: string;
-}
-
-/** A page of a draft's export history, newest first. */
-export interface DraftExportHistory {
-  items: DraftExportSummary[];
-  total?: number;
-}
-
-const draftExportsPath = (workspaceId: string, draftId: string) =>
-  `/workspaces/${workspaceId}/drafts/${draftId}/exports`;
-
-const listDraftExports = (workspaceId: string, draftId: string, signal?: AbortSignal) =>
-  apiRequest<DraftExportHistory>(draftExportsPath(workspaceId, draftId), { signal });
-
-/** The label of each export format (`ExportDialog.tsx` keeps the same map). */
-const EXPORT_FORMAT_LABEL: Readonly<Record<ExportFormat, string>> = {
-  'text/plain': 'Plain text',
-  'text/markdown': 'Markdown',
-  json: 'JSON',
-};
+/** The label of each export format (`lib/labels.ts`, I-5E). */
+const EXPORT_FORMAT_LABEL: Readonly<Record<ExportFormat, string>> = exportFormatLabels;
 
 /** 4xx answers and the 503 gate are deterministic: never retried. */
 function deterministic(error: unknown): boolean {
@@ -80,7 +44,7 @@ function deterministic(error: unknown): boolean {
 function useDraftExports(workspaceId: string, draftId: string, enabled: boolean) {
   return useQuery({
     queryKey: queryKeys.draftExports(workspaceId, draftId),
-    queryFn: ({ signal }) => listDraftExports(workspaceId, draftId, signal),
+    queryFn: ({ signal }) => api.listDraftExports(workspaceId, draftId, {}, signal),
     enabled: enabled && Boolean(workspaceId && draftId),
     retry: (failureCount, error) => !deterministic(error) && failureCount < 2,
   });

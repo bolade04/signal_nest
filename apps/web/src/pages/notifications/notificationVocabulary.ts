@@ -1,12 +1,14 @@
 import type { NotificationEventCode } from '@/api/types';
+import { notificationEventLabels } from '@/lib/labels';
 
 /**
  * Presentation of the closed notification vocabulary (Project Phase 5E, 5E-W3).
  *
  * A notification carries no text from the server: only its event code and subject id. Every
  * word the feed shows comes from these static maps, keyed by the generated contract type, so a
- * code added to or removed from the API is a compile error here. The I-5E integration owner
- * may move these labels into `lib/labels.ts` (freeze-owned).
+ * code added to or removed from the API is a compile error here. The event names live in
+ * `lib/labels.ts` (`notificationEventLabels`, moved there at I-5E); the feed's sentences and
+ * sections stay here.
  */
 
 /** The message a notification shows in the feed. */
@@ -19,13 +21,8 @@ export const EVENT_MESSAGE: Readonly<Record<NotificationEventCode, string>> = {
 };
 
 /** The name of each event in the preferences view. */
-export const EVENT_PREFERENCE_LABEL: Readonly<Record<NotificationEventCode, string>> = {
-  'brief.created': 'New briefs to review',
-  'approval.decided': 'Decisions on your briefs and drafts',
-  'draft.generated': 'Your drafts are ready',
-  'review.blocked': 'Your drafts are blocked by review',
-  'export.completed': 'Exports of your drafts',
-};
+export const EVENT_PREFERENCE_LABEL: Readonly<Record<NotificationEventCode, string>> =
+  notificationEventLabels;
 
 /**
  * The section a notification opens, or `null` when the feed cannot name a page for it. The

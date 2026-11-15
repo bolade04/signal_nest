@@ -1,8 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
-import { ApiError, apiRequest } from '@/api/client';
+import { ApiError } from '@/api/client';
 import * as api from '@/api/endpoints';
 import { queryKeys } from '@/api/queryKeys';
-import { canDecideApprovals, canEditWorkspace, useActorRole, type RoleInput } from '@/lib/roles';
+import { canReadAnalytics, useActorRole } from '@/lib/roles';
+import { useNotificationsAnalyticsCapability } from '@/pages/notifications/useNotifications';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
 
 /**
@@ -12,71 +13,19 @@ import { useWorkspace } from '@/workspace/WorkspaceContext';
  */
 
 /**
- * Reading status analytics — exactly owner, admin, marketer or reviewer
- * (`require_analytics_reader`, `ANALYTICS_READER_ROLES` in `apps/api/app/analytics/policy.py`):
- * viewer and compliance_reviewer are refused by name.
- *
- * I-5E: this predicate belongs in `lib/roles.ts` (the single role-policy module, which this
- * lane does not own). Until the integration owner adds `canReadAnalytics` there, it is composed
- * from that module's own predicates, which today cover exactly the reader set: the editors
- * (`canEditWorkspace`: owner, admin, marketer) plus the approver (`canDecideApprovals`:
- * reviewer). No role string is compared here.
+ * Reading status analytics — exactly owner, admin, marketer or reviewer — and the O-12(B)
+ * reflection now live in their shared places (I-5E): `canReadAnalytics` in `lib/roles.ts`
+ * (the single role-policy module) and `useNotificationsAnalyticsCapability` in
+ * `pages/notifications/useNotifications.ts` (one hook, one key,
+ * `queryKeys.notificationsAnalyticsCapability`, one wrapper,
+ * `api.getNotificationsAnalyticsCapability`; `enabled === true` only). Re-exported here so
+ * this module's surface is unchanged.
  */
-export function canReadAnalytics(role: RoleInput): boolean {
-  return canEditWorkspace(role) || canDecideApprovals(role);
-}
-
-/** The workspace-effective reflection of the notifications-and-analytics capability. */
-const capabilityPath = (workspaceId: string) =>
-  `/workspaces/${workspaceId}/notifications-analytics-capability`;
-
-/**
- * The reflection's cache key: per workspace, like every other capability reflection
- * (`queryKeys.creativeCapability`, `queryKeys.briefCapability`), so one workspace's answer is
- * never served to another.
- *
- * I-5E: the reflection route is lane 5E-W3's (`notifications/routes.py`) and its key and
- * wrapper are the integration owner's to add to `queryKeys.ts` / `endpoints.ts`. Replace this
- * key and `readCapability` below with those when they land; the shape of the key is the same.
- */
-export const notificationsAnalyticsCapabilityKey = (workspaceId: string) =>
-  ['workspaces', workspaceId, 'notifications-analytics-capability'] as const;
-
-/** `{ enabled }`, read defensively: anything but a literal `true` is "off". */
-async function readCapability(workspaceId: string, signal?: AbortSignal): Promise<boolean> {
-  const answer = await apiRequest<unknown>(capabilityPath(workspaceId), { signal });
-  return (
-    typeof answer === 'object' &&
-    answer !== null &&
-    (answer as { enabled?: unknown }).enabled === true
-  );
-}
-
-/**
- * Whether notifications and analytics resolve enabled for this workspace (operator ruling
- * O-12(B): one flag for both surfaces, off by default). A TRI-STATE, `true` only on a literal
- * `{ enabled: true }`, never retried; a failed lookup is "disabled" (fail closed).
- */
-export type AnalyticsCapabilityStatus = 'loading' | 'enabled' | 'disabled';
-
-export function useNotificationsAnalyticsCapability(
-  workspaceId: string,
-  { enabled = true }: { enabled?: boolean } = {},
-) {
-  const query = useQuery({
-    queryKey: notificationsAnalyticsCapabilityKey(workspaceId),
-    queryFn: ({ signal }) => readCapability(workspaceId, signal),
-    enabled: enabled && Boolean(workspaceId),
-    staleTime: 60_000,
-    retry: false,
-  });
-  const status: AnalyticsCapabilityStatus = query.isPending
-    ? 'loading'
-    : query.data === true
-      ? 'enabled'
-      : 'disabled';
-  return { status, isEnabled: status === 'enabled' };
-}
+export { canReadAnalytics } from '@/lib/roles';
+export {
+  type NotificationsCapabilityStatus as AnalyticsCapabilityStatus,
+  useNotificationsAnalyticsCapability,
+} from '@/pages/notifications/useNotifications';
 
 /**
  * The signed-in member's access to status analytics in the active workspace:

@@ -66,6 +66,10 @@ import type {
   NotificationPreferencesOut,
   NotificationPreferencesUpdate,
   NotificationsAnalyticsCapability,
+  DraftExport,
+  DraftExportHistory,
+  ExportCapability,
+  ExportFormat,
   OfferIn,
   OnboardingRequest,
   OnboardingResult,
@@ -853,3 +857,35 @@ export const updateNotificationPreferences = (
     body,
   });
 // --- Project Phase 5E: in-app notifications (W21 lane 5E-W3, I-5E share) — END -----
+
+// --- Project Phase 5E: audited manual export (5E-W1's routes; added at I-5E) — BEGIN ---
+// Both export routes answer 503 (capability_unavailable) while `content_export` resolves
+// disabled for the workspace, 403 for a role outside the route's set (export: owner, admin,
+// marketer; history: those plus reviewer and compliance_reviewer, item 32) and the uniform
+// 404 for an unknown, foreign or deleted draft. The POST answers 409 with one of four codes
+// when a precondition refuses (export_jurisdiction_missing, jurisdiction_mismatch,
+// export_not_approved, export_review_blocked). The reflection answers 200 {enabled} even
+// while dark (interface sheet P7).
+const draftExportsPath = (workspaceId: string, draftId: string) =>
+  `/workspaces/${workspaceId}/drafts/${draftId}/exports`;
+
+export const getExportCapability = (workspaceId: string, signal?: AbortSignal) =>
+  apiRequest<ExportCapability>(`/workspaces/${workspaceId}/export-capability`, { signal });
+
+export const createDraftExport = (workspaceId: string, draftId: string, format: ExportFormat) =>
+  apiRequest<DraftExport>(draftExportsPath(workspaceId, draftId), {
+    method: 'POST',
+    body: { format },
+  });
+
+export const listDraftExports = (
+  workspaceId: string,
+  draftId: string,
+  params: { limit?: number; offset?: number } = {},
+  signal?: AbortSignal,
+) =>
+  apiRequest<DraftExportHistory>(draftExportsPath(workspaceId, draftId), {
+    query: { ...params },
+    signal,
+  });
+// --- Project Phase 5E: audited manual export (5E-W1's routes; added at I-5E) — END -----

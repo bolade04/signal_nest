@@ -147,6 +147,11 @@ export const queryKeys = {
     ['workspaces', workspaceId, 'drafts', draftId, 'exports'] as const,
   exportCapability: (workspaceId: string) =>
     ['workspaces', workspaceId, 'export-capability'] as const,
+  // 5E (I-5E): workspace-effective availability of notifications AND analytics (operator
+  // ruling O-12(B): one flag for both). One key, shared by the shell's bell, the analytics
+  // page, its nav entry and the Overview summary, so they always agree and ask once.
+  notificationsAnalyticsCapability: (workspaceId: string) =>
+    ['workspaces', workspaceId, 'notifications-analytics-capability'] as const,
   // 5E status analytics: workspace- AND location-scoped (null = the whole workspace), so a
   // per-location view never shares an entry with the workspace view or another location.
   analytics: (workspaceId: string, locationId: string | null) =>

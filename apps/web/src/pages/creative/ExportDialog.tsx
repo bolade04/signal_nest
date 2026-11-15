@@ -1,8 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Copy, Download } from 'lucide-react';
 import { useState } from 'react';
-import { ApiError, apiRequest } from '@/api/client';
+import { ApiError } from '@/api/client';
+import * as api from '@/api/endpoints';
 import { queryKeys } from '@/api/queryKeys';
+import type { ExportFormat } from '@/api/types';
+import { exportFormatLabels } from '@/lib/labels';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -14,7 +17,9 @@ import {
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { type DraftExport, type ExportFormat, ExportHistory } from './ExportHistory';
+import { canExportDrafts, canReadExportHistory, useActorRole } from '@/lib/roles';
+import { useWorkspace } from '@/workspace/WorkspaceContext';
+import { ExportHistory } from './ExportHistory';
 
 /*
  * The export dialog of one approved draft version, and the controls that open it (Project
@@ -23,29 +28,8 @@ import { type DraftExport, type ExportFormat, ExportHistory } from './ExportHist
  * rule); the helpers below are private.
  */
 
-const draftExportsPath = (workspaceId: string, draftId: string) =>
-  `/workspaces/${workspaceId}/drafts/${draftId}/exports`;
-
-/** The label of each export format (`ExportHistory.tsx` keeps the same map). */
-const EXPORT_FORMAT_LABEL: Readonly<Record<ExportFormat, string>> = {
-  'text/plain': 'Plain text',
-  'text/markdown': 'Markdown',
-  json: 'JSON',
-};
-
-/** The export capability reflection (`GET /workspaces/{ws}/export-capability`): `{enabled}`. */
-interface ExportCapabilityOut {
-  enabled: boolean;
-}
-
-const getExportCapability = (workspaceId: string, signal?: AbortSignal) =>
-  apiRequest<ExportCapabilityOut>(`/workspaces/${workspaceId}/export-capability`, { signal });
-
-const createDraftExport = (workspaceId: string, draftId: string, format: ExportFormat) =>
-  apiRequest<DraftExport>(draftExportsPath(workspaceId, draftId), {
-    method: 'POST',
-    body: { format },
-  });
+/** The label of each export format (`lib/labels.ts`, I-5E). */
+const EXPORT_FORMAT_LABEL: Readonly<Record<ExportFormat, string>> = exportFormatLabels;
 
 type ExportCapabilityStatus = 'loading' | 'enabled' | 'disabled';
 
@@ -60,7 +44,7 @@ function useExportCapability(
 ) {
   const query = useQuery({
     queryKey: queryKeys.exportCapability(workspaceId),
-    queryFn: ({ signal }) => getExportCapability(workspaceId, signal),
+    queryFn: ({ signal }) => api.getExportCapability(workspaceId, signal),
     enabled: enabled && Boolean(workspaceId),
     staleTime: 60_000,
     retry: false,
@@ -82,23 +66,36 @@ const FILE_TYPE: Readonly<Record<ExportFormat, { extension: string; mime: string
   json: { extension: 'json', mime: 'application/json;charset=utf-8' },
 };
 
-function errorCodes(error: ApiError): string[] {
-  const body = (error.detail as { error?: { code?: unknown; details?: { reason?: unknown } } } | null)
-    ?.error;
-  return [body?.code, body?.details?.reason].filter(
-    (value): value is string => typeof value === 'string',
-  );
+/** The refusal code of a 409 answer (`error.code`), or null. */
+function refusalCode(error: ApiError): string | null {
+  const code = (error.detail as { error?: { code?: unknown } } | null)?.error?.code;
+  return typeof code === 'string' ? code : null;
 }
+
+/**
+ * The static line for each 409 refusal code 5E-W1's export service answers
+ * (`apps/api/app/exports/service.py`; interface sheet P5, P6, P12), never the server's text.
+ * The order of the checks is the service's: jurisdiction, then mismatch, then the decision,
+ * then the review.
+ */
+const EXPORT_REFUSAL: Readonly<Record<string, string>> = {
+  export_jurisdiction_missing:
+    "This draft or its brief has no recorded jurisdiction, so it can't be exported.",
+  jurisdiction_mismatch:
+    "This draft's jurisdiction doesn't match its brief's, so it can't be exported.",
+  export_not_approved:
+    "This version isn't approved. Only a version whose current decision is an approval can be exported.",
+  export_review_blocked:
+    "This draft's content review doesn't allow export, or the claims library changed since it was reviewed.",
+};
 
 /**
  * The static message for a refused export (never the server's text).
  *
  * 503: export is off for the workspace. 403: the role may not export (OWNER, ADMIN and MARKETER
  * may). 404: the draft is unknown, another workspace's, or deleted (the uniform answer). 409: a
- * precondition refused (interface sheet P5). The refusal's code and reason are matched against
- * closed families: jurisdiction mismatch (P12), jurisdiction missing or not a code (item 31),
- * the content review (P6: the draft-approval checks), a stale version, and an approval that is
- * not the controlling decision. Anything else gets the generic refusal line.
+ * precondition refused, by its exact code (`EXPORT_REFUSAL`); an unknown code gets the generic
+ * refusal line.
  */
 function exportFailureMessage(error: unknown): string {
   if (!(error instanceof ApiError)) return 'The export could not be created. Try again.';
@@ -110,23 +107,10 @@ function exportFailureMessage(error: unknown): string {
     case 404:
       return "This draft isn't available in this workspace.";
     case 409: {
-      const codes = errorCodes(error).join(' ');
-      if (codes.includes('jurisdiction_mismatch')) {
-        return "This draft's jurisdiction doesn't match its brief's, so it can't be exported.";
-      }
-      if (codes.includes('jurisdiction')) {
-        return "This draft or its brief has no recorded jurisdiction, so it can't be exported.";
-      }
-      if (/review|claim|disclaimer/.test(codes)) {
-        return "This draft's content review doesn't allow export, or the claims library changed since it was reviewed.";
-      }
-      if (codes.includes('version')) {
-        return 'This version changed. Reload the drafts and export again.';
-      }
-      if (codes.includes('approv')) {
-        return "This version isn't approved. Only a version whose current decision is an approval can be exported.";
-      }
-      return "This draft can't be exported in its current state.";
+      const code = refusalCode(error);
+      return (code !== null && Object.prototype.hasOwnProperty.call(EXPORT_REFUSAL, code)
+        ? EXPORT_REFUSAL[code]
+        : null) ?? "This draft can't be exported in its current state.";
     }
     default:
       return 'The export could not be created. Try again.';
@@ -169,7 +153,7 @@ export function ExportDialog({ target, onClose }: { target: ExportTarget; onClos
   const [copied, setCopied] = useState<'idle' | 'copied' | 'failed'>('idle');
   const create = useMutation({
     mutationFn: (chosen: ExportFormat) =>
-      createDraftExport(target.workspaceId, target.draftId, chosen),
+      api.createDraftExport(target.workspaceId, target.draftId, chosen),
     retry: false,
     onSuccess: async () => {
       await queryClient.invalidateQueries({
@@ -296,7 +280,10 @@ export function ExportDialog({ target, onClose }: { target: ExportTarget; onClos
  *
  * Gated by the workspace-effective export reflection: while it is not `enabled === true`
  * (off, loading, failed) this renders nothing and sends no export or history request. The
- * routes re-decide every request and answer 503 while dark, 403 for a role outside their set.
+ * Export button is offered only to the exporting roles (`canExportDrafts`) and the history
+ * only to its readers (`canReadExportHistory`, item 32), from the member's role in the active
+ * organization; an unknown role is offered neither. UX only: the routes re-decide every
+ * request and answer 503 while dark, 403 for a role outside their set.
  */
 export function DraftExportControls({
   workspaceId,
@@ -307,16 +294,22 @@ export function DraftExportControls({
   draftId: string;
   draftVersion: number;
 }) {
-  const capability = useExportCapability(workspaceId);
+  const { organizationId } = useWorkspace();
+  const actor = useActorRole(organizationId);
+  const exporter = actor.status === 'known' && canExportDrafts(actor.role);
+  const historyReader = actor.status === 'known' && canReadExportHistory(actor.role);
+  const capability = useExportCapability(workspaceId, { enabled: exporter || historyReader });
   const [open, setOpen] = useState(false);
-  if (!capability.isEnabled) return null;
+  if (!capability.isEnabled || !(exporter || historyReader)) return null;
   return (
     <div className="space-y-2">
-      <Button type="button" size="sm" variant="outline" onClick={() => setOpen(true)}>
-        <Download className="size-4" /> Export
-      </Button>
-      <ExportHistory workspaceId={workspaceId} draftId={draftId} />
-      {open ? (
+      {exporter ? (
+        <Button type="button" size="sm" variant="outline" onClick={() => setOpen(true)}>
+          <Download className="size-4" /> Export
+        </Button>
+      ) : null}
+      {historyReader ? <ExportHistory workspaceId={workspaceId} draftId={draftId} /> : null}
+      {open && exporter ? (
         <ExportDialog
           key={draftId}
           target={{ workspaceId, draftId, draftVersion }}

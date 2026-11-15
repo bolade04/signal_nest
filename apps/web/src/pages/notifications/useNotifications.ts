@@ -27,26 +27,22 @@ import { useWorkspace } from '@/workspace/WorkspaceContext';
 /** The page size of the bell's feed. */
 export const FEED_LIMIT = 20;
 
-/**
- * The reflection's cache key. `queryKeys.ts` (freeze-owned) has no entry for it yet; this is
- * the shape the other reflections use (`['workspaces', ws, '<path segment>']`), proposed for
- * `queryKeys.notificationsAnalyticsCapability` at I-5E.
- */
-export const notificationsAnalyticsCapabilityKey = (workspaceId: string) =>
-  ['workspaces', workspaceId, 'notifications-analytics-capability'] as const;
-
 export type NotificationsCapabilityStatus = 'loading' | 'enabled' | 'disabled';
 
 /**
  * Workspace-effective availability of notifications and analytics (O-12(B)): a tri-state,
  * `=== true` only, never retried. Advisory: every notification route re-decides.
+ *
+ * The one reflection hook of the codebase (I-5E): keyed `queryKeys.notificationsAnalyticsCapability`
+ * and read through `api.getNotificationsAnalyticsCapability`, and used by the shell's bell and
+ * by the analytics page, its nav entry and the Overview summary (`useAnalytics.ts`).
  */
 export function useNotificationsAnalyticsCapability(
   workspaceId: string,
   { enabled = true }: { enabled?: boolean } = {},
 ) {
   const query = useQuery({
-    queryKey: notificationsAnalyticsCapabilityKey(workspaceId),
+    queryKey: queryKeys.notificationsAnalyticsCapability(workspaceId),
     queryFn: ({ signal }) => api.getNotificationsAnalyticsCapability(workspaceId, signal),
     enabled: enabled && Boolean(workspaceId),
     staleTime: 60_000,

@@ -190,6 +190,16 @@ export type NotificationPreferencesUpdate = S['NotificationPreferencesUpdate'];
 export type NotificationsAnalyticsCapability = S['NotificationsAnalyticsCapabilityOut'];
 // --- Project Phase 5E: in-app notifications (W21 lane 5E-W3, I-5E share) — END -----
 
+// --- Project Phase 5E: audited manual export (5E-W1's routes; added at I-5E) — BEGIN ---
+// Generated contract types only. The history lists records without their text; only the
+// POST answers the rendered `content`.
+export type ExportFormat = S['ExportFormat'];
+export type DraftExport = S['ExportOut'];
+export type DraftExportSummary = S['ExportHistoryItemOut'];
+export type DraftExportHistory = S['ExportHistoryOut'];
+export type ExportCapability = S['ExportCapabilityOut'];
+// --- Project Phase 5E: audited manual export (5E-W1's routes; added at I-5E) — END -----
+
 export type RuntimeSummary = S['RuntimeSummaryOut'];
 export type RuntimeCapability = S['CapabilityOut'];
 export type RuntimeCapabilities = S['CapabilitiesOut'];
