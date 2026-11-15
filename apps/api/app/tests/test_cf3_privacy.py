@@ -41,7 +41,7 @@ from app.creative.models import CreativeDraft
 from app.exports.models import Export
 from app.notifications.models import Notification, NotificationPreference
 from app.privacy import retention
-from app.privacy.inventory import TABLES, Category, RetentionClass
+from app.privacy.inventory import TABLES, WORKSPACE_CLASSES, Category, RetentionClass
 from app.privacy.retention import _ROOTS
 from app.privacy.verification import verify_organization_erased, verify_subject_erased
 from app.tests._privacy_support import (
@@ -351,10 +351,18 @@ def test_inventory_of_the_cf3_tables():
     for name in ("notifications", "notification_preferences"):
         assert TABLES[name].category is Category.ACCOUNT
         assert TABLES[name].exported is False
-        assert TABLES[name].retention_class is None  # undecided (O-5): no class, no duration
+    # D-N4 item 30 (2026-11-12): "accept the retention-class structure. Implement
+    # notifications retention with its duration unset and fail closed." The feed is rooted in
+    # its own class (5E-W1), a sweep-only class with no workspace job; the preferences have
+    # none (they live as long as the membership).
+    assert TABLES["notifications"].retention_class is RetentionClass.NOTIFICATIONS
+    assert Notification in {model for model, _ in _ROOTS[RetentionClass.NOTIFICATIONS]}
+    assert RetentionClass.NOTIFICATIONS not in WORKSPACE_CLASSES
+    assert TABLES["notification_preferences"].retention_class is None
     assert TABLES["campaign_locations"].category is Category.TENANT_CONTENT
     assert TABLES["campaign_locations"].retention_class is None
-    # No new retention class and no duration was decided: still seven unset settings.
-    assert len(RetentionClass) == 7
+    # CF-3 decided no duration; the one class added since (notifications, item 30) is unset:
+    # eight unset settings.
+    assert len(RetentionClass) == 8
     settings = Settings(_env_file=None)
     assert all(getattr(settings, c.setting_name) is None for c in RetentionClass)

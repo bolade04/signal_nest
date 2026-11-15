@@ -7,7 +7,8 @@
 * Every exported table can be scoped to one organization; every excluded column exists; every
   retention root of a workspace class has a ``workspace_id``.
 * Retention durations: unset by default everywhere; bounded when set; ``production`` refuses to
-  start until all seven are set; the migration actor is exempt.
+  start until all eight are set (``notifications`` since D-N4 item 30); the migration actor is
+  exempt.
 """
 
 from __future__ import annotations
@@ -185,8 +186,9 @@ def test_purge_bounds(field, value, message):
 # --------------------------------------------------------------------------- #
 # D-N4 item 30 (W21 5E-CF): the notifications duration
 # --------------------------------------------------------------------------- #
-#: Every retention duration the settings declare: the classes' and, until 5E-W1 registers
-#: ``RetentionClass.NOTIFICATIONS``, the notifications duration declared ahead of it.
+#: Every retention duration the settings declare: the classes' (``notifications`` among them
+#: since 5E-W1 registered ``RetentionClass.NOTIFICATIONS``; the union keeps the pin true either
+#: way).
 DURATIONS = sorted({c.setting_name for c in RetentionClass} | {"retention_notifications_days"})
 
 

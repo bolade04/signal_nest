@@ -294,8 +294,10 @@ def test_inventory_and_retention_of_the_two_tables():
     assert TABLES["recommendation_briefs"].category is Category.COLLECTED
     assert TABLES["recommendation_briefs"].retention_class is None  # dependent rows
     assert Approval in {model for model, _ in _ROOTS[RetentionClass.AUDIT_LOGS]}
-    # No new retention class and no duration was decided: still seven unset settings.
-    assert len(RetentionClass) == 7
+    # CF-1 added no retention class and decided no duration. The only class added since is
+    # Project Phase 5E's ``notifications`` (D-N4 item 30, 5E-W1), itself unset: eight, all
+    # unset.
+    assert len(RetentionClass) == 8
     settings = Settings(_env_file=None)
     assert all(getattr(settings, c.setting_name) is None for c in RetentionClass)
 

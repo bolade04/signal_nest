@@ -1284,10 +1284,10 @@ class Settings(BaseSettings):
         from app.privacy.inventory import RetentionClass
 
         errors: list[str] = []
-        # Every class the purge knows (``RetentionClass``) needs its duration in production.
-        # Every ``retention_<class>_days`` setting is bounded, also one declared before its
-        # class is registered (W21 5E-CF's ``retention_notifications_days``, whose class
-        # ``RetentionClass.NOTIFICATIONS`` 5E-W1 adds; from then on it is required too).
+        # Every class the purge knows (``RetentionClass``, eight since Project Phase 5E's
+        # ``notifications``, D-N4 item 30) needs its duration in production. Every
+        # ``retention_<class>_days`` setting is bounded, also one declared before its class is
+        # registered.
         required = [data_class.setting_name for data_class in RetentionClass]
         durations = required + [
             name
