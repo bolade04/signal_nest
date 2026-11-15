@@ -1354,6 +1354,18 @@ _APPROVALS_GATE_REL = "approvals/routes.py"
 #: decision call site (``creative.service.creative_capability``), which the route gate, the
 #: reflection and the ``creative.generate`` job all call. Relative to ``app/``.
 _CREATIVE_GATE_RELS = ("creative/service.py",)
+#: The Project Phase 5E gates (I-5E) — resolver only. Export (``content_export``): one
+#: decision call site, ``exports.service.export_capability``, shared by both export routes
+#: and the reflection. O-12(B) (``notifications_analytics``): ``analytics.routes`` (the
+#: analytics gate) and ``notifications.service.notifications_analytics_capability`` (the
+#: notification routes, the reflection and the emitter); ``notifications.routes`` imports
+#: only the resolver's result type (``CapabilityResolution``), as the schedule routes do.
+_5E_GATE_RELS = (
+    "exports/service.py",
+    "analytics/routes.py",
+    "notifications/service.py",
+    "notifications/routes.py",
+)
 #: Sanctioned production consumers of the capability control plane, each mapped to the
 #: exact control-plane modules it may import. The operator router (4A-C.4) may consume
 #: both the service and the resolver; the opportunity-feedback gate (4B-A), the
@@ -1366,7 +1378,7 @@ _SANCTIONED_CONSUMERS = {
     **{
         rel: frozenset({_RESOLVER_MODULE})
         for rel in _SCHEDULING_GATE_RELS + _RSS_GATE_RELS + _BRIEFS_GATE_RELS
-        + _CREATIVE_GATE_RELS
+        + _CREATIVE_GATE_RELS + _5E_GATE_RELS
     },
     _APPROVALS_GATE_REL: frozenset({_RESOLVER_MODULE}),
 }
@@ -1478,6 +1490,7 @@ def test_consumer_allow_list_covers_live_gates_and_the_operator_router() -> None
         "connectors/registry.py",
         *_BRIEFS_GATE_RELS,
         *_CREATIVE_GATE_RELS,
+        *_5E_GATE_RELS,
         _ALLOWED_CONSUMER_REL,  # the allow-listed consumers must actually be in scope
     ):
         assert expected in scanned, expected

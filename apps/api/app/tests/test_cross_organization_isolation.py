@@ -1603,8 +1603,10 @@ class FiveERows:
     notification_id: str  # one unread notification of the tenant's owner
 
 
-#: The export probes' draft takes a version of its own on the creative probes' brief.
-EXPORT_DRAFT_VERSION = 9
+#: The export probes' brief and draft take versions of their own, so neither appears in the
+#: creative probes' brief listing or collides with another probe's brief.
+EXPORT_BRIEF_VERSION = 9
+EXPORT_DRAFT_VERSION = 1
 
 
 @pytest.fixture(scope="module")
@@ -1613,6 +1615,7 @@ def five_e_rows(world: World, creative_rows) -> dict[str, FiveERows]:
     the draft, a passed review, the controlling decision approved) and one unread
     notification addressed to the owner. Export and the feed themselves are proven in the 5E
     suites; this module proves their tenant isolation."""
+    from app.briefs.models import RecommendationBrief
     from app.creative.models import ContentReview, CreativeDraft
     from app.notifications.models import Notification
 
@@ -1623,7 +1626,19 @@ def five_e_rows(world: World, creative_rows) -> dict[str, FiveERows]:
             k = f"e5{t.key}"
             scoped = {"organization_id": t.org_id, "workspace_id": t.ws_id}
             snapshot = f"{t.owner_id} {t.key} owner <ci3-{t.key}-owner@example.com>"
-            brief_id = creative_rows[t.key].brief_id
+            # A brief of its own on the creative probes' evidence chain, with the jurisdiction
+            # the export copies (5D-W3 captures it at brief creation).
+            brief_id = f"{k}brief"
+            s.add(RecommendationBrief(
+                id=brief_id, opportunity_id=t.opportunity_id,
+                intelligence_record_id=f"c5{t.key}intel", brief_version=EXPORT_BRIEF_VERSION,
+                analysis_version="1", scoring_version="1", prompt_name="explain_opportunity",
+                prompt_version="1.2.0", model_identifier="mock-1", input_hash="0" * 64,
+                is_simulated=True, created_by=t.marketer_id, created_by_snapshot=snapshot,
+                summary="s", rationale="r", recommended_actions=[], suggested_angles=[],
+                risk_notes=[], evidence_refs=[], jurisdiction_code="US-TX", **scoped,
+            ))
+            s.flush()
             s.add(CreativeDraft(
                 id=f"{k}draft", brief_id=brief_id, opportunity_id=t.opportunity_id,
                 draft_version=EXPORT_DRAFT_VERSION, channel="email", body=f"Export {t.key}",
@@ -1743,8 +1758,11 @@ class TestStatusAnalytics:
         assert own.status_code == 200, own.text
         body = own.json()
         assert body["workspace_id"] == a.ws_id and body["location_id"] is None
-        assert {row["location_id"] for row in body["locations"]} <= {a.location_id}
-        assert b.location_id not in {row["location_id"] for row in body["locations"]}
+        listed = {row["location_id"] for row in body["locations"]}
+        locations = _rows(world, BusinessLocation)
+        assert listed == {r["id"] for r in locations if r["workspace_id"] == a.ws_id}
+        assert a.location_id in listed
+        assert not listed & {r["id"] for r in locations if r["workspace_id"] == b.ws_id}
         located = pov.send("GET", _ws_path(world, a, "/analytics"),
                            params={"location_id": a.location_id})  # fmt: skip
         assert located.status_code == 200 and located.json()["location_id"] == a.location_id
