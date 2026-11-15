@@ -10,7 +10,7 @@ import { API_PREFIX } from '@/api/config';
 import type { CampaignOut } from '@/api/types';
 import * as api from '@/api/endpoints';
 import { useAuth } from '@/auth/AuthContext';
-import { CONTEXT_ROW_DEFAULTS, orgModel, type ModelRole } from '@/test/handlers';
+import { CONTEXT_ROW_DEFAULTS, analyticsFixture, orgModel, type ModelRole } from '@/test/handlers';
 import { server } from '@/test/server';
 import { emulateExitAnimations, renderApp, renderProductionApp } from '@/test/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
@@ -51,6 +51,9 @@ const ROLES: ModelRole[] = ['owner', 'admin', 'marketer', 'reviewer', 'complianc
 const EDITOR = new Set<ModelRole>(['owner', 'admin', 'marketer']);
 const ORG_ADMIN = new Set<ModelRole>(['owner', 'admin']);
 const CLAIMS_STEWARD = new Set<ModelRole>(['owner', 'admin', 'compliance_reviewer']);
+//   ANALYTICS_READER = require_exact_roles(OWNER, ADMIN, MARKETER, REVIEWER)
+//               (apps/api/app/analytics/policy.py, ANALYTICS_READER_ROLES; Project Phase 5E)
+const ANALYTICS_READER = new Set<ModelRole>(['owner', 'admin', 'marketer', 'reviewer']);
 
 type Screen = RenderResult & { user: ReturnType<typeof userEvent.setup> };
 
@@ -1530,5 +1533,41 @@ describe('an API denial stays safe when a hidden action is invoked anyway (§54)
     expect(screen.getByText("Role 'viewer' is not permitted for this action.")).toBeInTheDocument();
     expect(screen.getByText('Dallas demand scan')).toBeInTheDocument();
     expect(localStorage.getItem('signalnest-token')).toBe('test-token');
+  });
+});
+
+/**
+ * I-5E: status analytics (5E-W2) across the six roles, with O-12(B)'s capability on. The
+ * oracle is the backend's `ANALYTICS_READER_ROLES`, written out above. A reader gets the nav
+ * entry and the figures; viewer and compliance_reviewer get neither the entry nor any
+ * analytics request, and the page shows the refused state. No mutation control exists on
+ * this surface; the export controls are mounted by 5E-W3's phase B.
+ */
+describe('status analytics across six roles (I-5E)', () => {
+  it.each(ROLES)('%s', async (role) => {
+    const seen = { analytics: 0 };
+    server.use(
+      http.get(P('/workspaces/:ws/notifications-analytics-capability'), () =>
+        HttpResponse.json({ enabled: true }),
+      ),
+      http.get(P('/workspaces/:ws/analytics'), ({ params }) => {
+        seen.analytics += 1;
+        return HttpResponse.json(analyticsFixture(String(params.ws)));
+      }),
+    );
+    const screen = await renderAs(role, '/analytics');
+    await screen.findByRole('heading', { level: 1, name: 'Status analytics' });
+    const nav = screen.getByRole('navigation', { name: 'Primary' });
+    if (ANALYTICS_READER.has(role)) {
+      expect(await screen.findByRole('heading', { level: 2, name: 'Counts by state' })).toBeInTheDocument();
+      expect(within(nav).getByRole('link', { name: 'Analytics' })).toBeInTheDocument();
+      expect(seen.analytics).toBeGreaterThan(0);
+    } else {
+      expect(
+        await screen.findByText('Status analytics is not available to your role'),
+      ).toBeInTheDocument();
+      expect(within(nav).queryByRole('link', { name: 'Analytics' })).not.toBeInTheDocument();
+      expect(seen.analytics).toBe(0);
+    }
   });
 });

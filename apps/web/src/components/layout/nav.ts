@@ -1,5 +1,6 @@
 import {
   Activity,
+  BarChart3,
   ClipboardCheck,
   Compass,
   LayoutDashboard,
@@ -39,6 +40,13 @@ export interface NavItem {
    * every member, so no role is filtered. The entry stays in this array for the breadcrumb.
    */
   creativeOnly?: boolean;
+  /**
+   * Status analytics (Project Phase 5E, mounted at I-5E): shown only to an analytics reader
+   * (owner, admin, marketer, reviewer) while O-12(B)'s `notifications_analytics` resolves
+   * enabled for the active workspace (`useAnalyticsVisible`). The entry stays in this array
+   * for the breadcrumb; the sidebar filters at render time.
+   */
+  analyticsOnly?: boolean;
 }
 
 export const navItems: NavItem[] = [
@@ -93,6 +101,13 @@ export const navItems: NavItem[] = [
     icon: PenLine,
     description: 'Generated marketing text, reviewed and approved',
     creativeOnly: true,
+  },
+  {
+    to: '/analytics',
+    label: 'Analytics',
+    icon: BarChart3,
+    description: 'Where work stands: counts, approval latency and outcomes',
+    analyticsOnly: true,
   },
   {
     to: '/locations',
