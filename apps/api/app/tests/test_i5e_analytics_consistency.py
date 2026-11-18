@@ -1,6 +1,6 @@
 """Project Phase 5E, I-5E fold of the R-5E r1 reviews: the analytics comparison is one reading.
 
-A property of ``GET /workspaces/{ws}/analytics`` (``app.analytics.service``), on SQLite
+Two properties of ``GET /workspaces/{ws}/analytics`` (``app.analytics.service``), each on SQLite
 and, with ``TEST_POSTGRES_URL``, on PostgreSQL migrated to head (READ COMMITTED):
 
 * **The read never answers 500 because a located row was committed between its statements**
@@ -12,6 +12,11 @@ and, with ``TEST_POSTGRES_URL``, on PostgreSQL migrated to head (READ COMMITTED)
   the statement boundary itself (a cursor hook on the request's engine that fires when the
   locations are listed), once per compared family: opportunities, briefs, drafts, approvals
   and exports, in a workspace whose rows of that family are all at one location.
+* **The comparison counts only this tenant's decision and export rows** (review R-5E-B r1,
+  F-B-3). ``approvals`` and ``exports`` carry FK-less scope columns (operator decision O-6), so
+  a row of another workspace or organization can name this workspace's brief or draft. Such
+  rows, hand-written here (the application writes none), change no figure of the workspace
+  view or of the location view: not the location row, not ``unassigned``.
 
 Both capabilities stay dark globally; the workspace is opened by an override.
 """
@@ -26,7 +31,9 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import event
 
+from app.approvals.models import Approval
 from app.core.config import get_settings
+from app.exports.models import Export
 from app.tests._creative_support import CreativeWorld
 from app.tests.fixtures.analytics import T0, Rows, creative_world_on, set_capability
 
@@ -245,3 +252,49 @@ def test_the_comparison_still_adds_up_to_the_cards_in_a_quiet_workspace(world: C
     assert one["unassigned"] is None
     [row] = one["locations"]
     assert row == by_location[alpha]
+
+
+# --------------------------------------------------------------------------- #
+# F-B-3: rows of another scope that name this workspace's subjects
+# --------------------------------------------------------------------------- #
+def test_the_comparison_ignores_foreign_scope_rows_naming_this_workspaces_subjects(
+    world: CreativeWorld,
+):
+    ws = world.workspace("i5eac foreign")
+    set_capability(world, ws, "notifications_analytics")
+    with world.session() as s:
+        location_id = _rows(world, s, ws).location("Alpha Market", code="US-TX")
+    chain = _located_chain(world, ws, location_id)
+    before, before_at = _figures(world, ws), _figures(world, ws, location_id)
+    [row] = before["locations"]
+    assert (row["drafts"], row["exports"], row["approvals"]) == (1, 1, 2), row
+    assert before["unassigned"] == {
+        "opportunities": 0, "briefs": 0, "drafts": 0, "approvals": 0, "exports": 0
+    }
+
+    # The sibling workspace and the other organization each hold an export of this
+    # workspace's draft, a decision on that draft and a decision on its brief. Only the scope
+    # columns are foreign; the draft and brief links are real foreign keys to this workspace.
+    for index, other in enumerate((world.ws2, world.ws_b)):
+        scoped = {"organization_id": world.org_of(other), "workspace_id": other}
+        with world.session() as s:
+            s.add(Export(draft_id=chain["draft"], draft_version=1, approval_id=None,
+                         format="json", jurisdiction_code="US-TX", exported_by=None,
+                         exported_by_snapshot="[erased]", is_simulated=True, **scoped))
+            s.add(Approval(subject_type="creative_draft", subject_id=chain["draft"],
+                           subject_version=1, draft_id=chain["draft"], decision="rejected",
+                           decision_seq=50 + index, decided_by=None,
+                           decided_by_snapshot="[erased]", decided_role="reviewer",
+                           is_simulated=False, **scoped))
+            s.add(Approval(subject_type="recommendation_brief", subject_id=chain["brief"],
+                           subject_version=1, brief_id=chain["brief"], decision="revoked",
+                           decision_seq=60 + index, decided_by=None,
+                           decided_by_snapshot="[erased]", decided_role="reviewer",
+                           is_simulated=False, **scoped))
+    assert world.count(Export, draft_id=chain["draft"]) == 3
+    assert world.count(Approval, draft_id=chain["draft"]) == 3
+    assert world.count(Approval, brief_id=chain["brief"]) == 3
+
+    after, after_at = _figures(world, ws), _figures(world, ws, location_id)
+    assert after == before
+    assert after_at == before_at
