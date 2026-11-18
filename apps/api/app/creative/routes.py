@@ -42,7 +42,10 @@ capability decision; the feedback- and brief-capability precedent):
   decision's rules — reviewer only (exact), never the draft's author, the exact
   ``draft_version`` (stale 409), revoke only while approved — plus the 5C precondition: an
   approval is refused 409 ``approval_review_blocked`` while the draft's content review does not
-  allow it. The history is readable by every role but viewer (the brief history's set).
+  allow it, or while the controlling decision on the brief version the draft was generated from
+  is not ``approved`` (D-N4 item 38; an approval already recorded stands, and rejecting or
+  revoking is not refused). The history is readable by every role but viewer (the brief
+  history's set).
 
 Transaction ownership follows the house rule (the request-scoped ``get_db`` commits), with
 one exception: the two ``POST`` routes commit before answering (the generation job before its
@@ -259,7 +262,8 @@ def decide_on_draft(
     version. Reviewer only; never the draft's author; ``subject_version`` must be the draft's
     version (409 otherwise); ``revoked`` only withdraws a controlling approval; an approval
     is refused (409 ``approval_review_blocked``) while the draft's content review does not
-    allow it."""
+    allow it, or while the controlling decision on the brief version the draft was generated
+    from is not ``approved``. A decision already recorded is not affected."""
     _require_creative_feature(db, ctx)
     draft = get_scoped_draft(db, workspace_id, draft_id)
     approval = record_draft_decision(
