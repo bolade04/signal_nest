@@ -141,12 +141,20 @@ def test_override_page_empty_defaults_are_coherent() -> None:
 # --------------------------------------------------------------------------- #
 # Decision-source guard: every live gate decides through the resolver (P6-CAP-1)
 # --------------------------------------------------------------------------- #
-#: The modules holding each capability's decision call sites (one per module).
+#: The modules holding each capability's decision call sites (one per module): every
+#: production module that calls ``resolve_capability`` to gate a customer surface.
 _DECISION_SITES: tuple[tuple[str, Path], ...] = (
     ("opportunity_feedback", Path("app/feedback/routes.py")),  # Phase 4B-A
     ("scout_scheduling", Path("app/scouting_requests/schedules.py")),  # P6-CAP-1
     ("connector_rss", Path("app/scouting_requests/connectors.py")),  # P6-CAP-1
     ("recommendation_briefs", Path("app/briefs/routes.py")),  # Project Phase 5A
+    # Project Phase 5B: the approval routes decide brief decisions through their own call
+    # (the same capability as 5A). Project Phase 5C: the creative package's single call,
+    # shared by its routes, its reflection, the draft decision routes and the worker's
+    # re-check. Both rows added at the I-5E fold (review R-final RF-A r1 INFO-4, RF-B INFO-5):
+    # the sites existed and were not listed.
+    ("recommendation_briefs", Path("app/approvals/routes.py")),
+    ("creative_generation", Path("app/creative/service.py")),
     # Project Phase 5E (I-5E): the export gate (5E-W1), and O-12(B)'s two sites: the
     # analytics route's gate (5E-W2) and the notifications package's single call, shared by
     # its routes, its reflection and the emitter (5E-W3).
