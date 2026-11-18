@@ -12,7 +12,11 @@ added to it, reworded or translated.
   action, one block each. Every character of the text that Markdown would read as syntax is
   backslash-escaped (CommonMark), so the rendered document shows the approved words and
   nothing else: no emphasis, link, image, list, heading, table, autolink, entity or raw HTML
-  can come from the text. A line break inside a block is kept as a hard line break.
+  can come from the text. That is CommonMark's reading, where an autolink needs the angle
+  brackets this escapes. A bare URL in the approved text (``https://…`` or ``www.…``) is left
+  as written, and a renderer with GitHub Flavored Markdown's autolink extension links it, to
+  the address the approved text itself shows. A line break inside a block is kept as a hard
+  line break.
   Indentation at the start of a line is not carried over (four spaces would turn a line
   into a code block, which shows backslash escapes literally); a headline is one line.
 * ``json``: one object, keys sorted, indented by two spaces, non-ASCII kept as written:

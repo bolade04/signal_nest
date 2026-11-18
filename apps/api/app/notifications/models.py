@@ -23,8 +23,12 @@ workspace (unique on ``(workspace_id, user_id, event_code)``). No row means the 
 delivered (in-app); a row with ``enabled = False`` suppresses it. Same three cascading scope
 keys.
 
-Nothing writes or reads these tables yet. The emission seam the 5A/5B/5C/5E services will call
-is :mod:`app.notifications.interface`.
+Written by the emitter (:func:`app.notifications.service.emit_notifications`, the one
+implementation of the seam in :mod:`app.notifications.interface`, which the brief, approval,
+creative and export services call) and by the mark-read and preferences routes; read by the
+feed and preferences routes (:mod:`app.notifications.routes`). All of it only while the
+``notifications_analytics`` capability resolves enabled for the workspace. *(This paragraph
+read "Nothing writes or reads these tables yet" at the CF-3 freeze.)*
 """
 
 from __future__ import annotations

@@ -78,18 +78,18 @@ class FeatureFlagsOut(BaseModel):
 
     #: The RAW global recommendation-briefs flag (Project Phase 5A, CF-1), reflected
     #: per operator decision O-4 (``ALT_expose_all``). Like the others it does NOT
-    #: decide availability for a workspace: the briefs/approvals gate will decide
+    #: decide availability for a workspace: the briefs and approvals gates decide
     #: through the capability resolver, where a workspace override outranks it.
     recommendation_briefs_enabled: bool
 
     #: The RAW global creative-generation flag (Project Phase 5C, CF-2), reflected per
     #: operator decision O-4 (``ALT_expose_all``). It does not decide availability for a
-    #: workspace: the 5C gate will decide through the capability resolver.
+    #: workspace: the 5C gate decides through the capability resolver.
     creative_generation_enabled: bool
 
     #: The RAW global content-export flag (Project Phase 5E, CF-3), reflected per operator
     #: decision O-4 (``ALT_expose_all``). It does not decide availability for a workspace:
-    #: the 5E export gate will decide through the capability resolver.
+    #: the 5E export gate decides through the capability resolver.
     content_export_enabled: bool
 
     #: The RAW global notifications-and-analytics flag (Project Phase 5E, 5E-CF), the

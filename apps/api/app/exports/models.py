@@ -5,8 +5,10 @@ creative draft version** (Phase 5E plan §2): the draft (``draft_id`` + ``draft_
 the approval that authorized it (``approval_id``), the render ``format`` (closed:
 :class:`~app.core.enums.ExportFormat`), who exported it and the jurisdiction it was exported
 under. Export is manual by definition: the service returns the rendered text inline and
-nothing is published, stored as a file or sent anywhere. Nothing writes this table yet (the
-export service is lane 5E-W1's, behind ``content_export_enabled``, default ``False``).
+nothing is published, stored as a file or sent anywhere. Its one writer is
+:func:`app.exports.service.create_export` (lane 5E-W1), only while the ``content_export``
+capability resolves enabled for the workspace (flag ``content_export_enabled``, default
+``False``). *(This sentence read "Nothing writes this table yet" at the CF-3 freeze.)*
 
 * **Append-only** (:func:`app.db.append_only.append_only`; ``created_at`` only — the 5A
   convention). Every ORM update/delete path raises; only :mod:`app.privacy` (erasure,

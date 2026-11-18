@@ -45,7 +45,10 @@ SignalIntelligenceRecord` discipline (Phase 5A plan §2):
   marker of the 5E retention mechanism (plan 5E §2; durations are operator decision O-5).
   It is the one post-insert write the contract foresees, and it is made only through Core
   by the retention code in :mod:`app.privacy` (the sanctioned writer above): the ORM guard
-  refuses it like any other update. Nothing writes it and nothing filters on it yet.
+  refuses it like any other update. Nothing writes it yet. The 5E reads filter on it: the
+  export refuses a soft-deleted brief or draft (the uniform 404), analytics excludes one from
+  every figure, and the notification emitter refuses one as a subject. *(At the CF-3 freeze
+  this read "nothing filters on it yet".)*
 
 Tenancy: ``organization_id`` / ``workspace_id`` / ``opportunity_id`` /
 ``intelligence_record_id`` cascade, so a brief is deleted with its workspace and is a
