@@ -21,6 +21,8 @@ must be propagated here in the same edit.
 
 **Status update (2026-11-07, W21 tracking pass, at `main` `3564c6d0`; the status above is kept as written):** contracts only, under the operator's W21 programme instruction of 2026-11-01 (see the status update in `docs/project-phase-5-plan.md`). Merged: the 5E contracts within the CF-3 freeze (#298 `285f3672`: the notifications, notification-preferences and exports tables, the `content_export_enabled` flag and its capability, the export and analytics role policies, the notification emitter Protocol and the query keys). Not built: 5E-W1 (audited manual export and the retention design), 5E-W2 (status analytics), 5E-W3 (in-app notifications and the shell replacement), 5E-W4 (the adversarial battery), I-5E, R-5E, R-final and the Phase 5 closeout. No export, notification or analytics service, route or page exists, and the notification bell is still the placeholder. `content_export_enabled` defaults to false (`apps/api/app/core/config.py:557`). 5E's entry gate, I-5D and R-5D, is not met. Merged does not mean activated, deployed or closed out.
 
+**Status update (2026-11-18, I-5E, at `main` `3e5f99f2`; the status and the 2026-11-07 update above are kept as written):** 5E's entry gate is met (I-5D merged as #313 `6a3afe3a`; the R-5D record is held outside this repository), and 5E is **implemented** in the change that adds this paragraph: a candidate checked by its owner. This paragraph does not record its review, merge or milestone validation. Implemented: 5E-W1 (audited manual export in three formats with its history, and the notifications retention class of D-N4 item 30, duration unset, which purges nothing and cannot be enqueued); 5E-W2 (status analytics: the read, the page and the Overview summary); 5E-W3 (in-app notifications: the emitter, feed, mark-read and preferences, the emission hooks in the brief, approval and creative services, the shell bell, and the export controls under an approved draft version); the lanes' tests of each other's code and the 5E-W4 adversarial battery; and the I-5E integration. Operator ruling O-12(B) adds a fourth flag: the notifications and analytics routes, their pages and every emission are gated by `Capability.NOTIFICATIONS_ANALYTICS` (`notifications_analytics_enabled`, default false), and export by `Capability.CONTENT_EXPORT` (`content_export_enabled`, default false); so the "live, not dark" wording of the superseded exit criterion 2 does not describe this implementation. One Alembic revision, `53fdde95354a`, widens the capability-override CHECK to admit the new capability. Not done: R-5E, R-final and the Phase 5 closeout. `retention_notifications_days` is unset, as the operator's retention durations are unruled. Not on `main` at `3e5f99f2`, each in its own pull request and each an activation blocker: the RI-2 geography repair (#324; to be merged before recommendation briefs are activated) and D-N4 item 39 (#325; protected-claim matching, before a real provider is used). Merged does not mean activated, deployed or closed out.
+
 ## 1. Objective
 
 Close the Guided Action loop's tail: in-app notifications, derived read-only status
@@ -43,7 +45,8 @@ capability resolver** (the `_require_feedback_feature` pattern) — never a raw
 operator safety-ceiling kill switch both apply. Secret-inventory reconciliation
 94→95+N in the same change (corrected baseline, master plan §14) — the export flag plus any notification/retention
 `Settings` fields, counted from the actual field list at the freeze (master
-plan §14).
+plan §14). *(Noted at I-5E: the "94→95+N" figure is the authoring-time baseline; the counts as
+measured are in exit criterion 7.)*
 
 **Notifications (in-app only):**
 

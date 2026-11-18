@@ -15,6 +15,8 @@ itself** — nothing can activate before the round completes (master plan §10).
 
 **Status update (2026-11-07, W21 tracking pass, at `main` `3564c6d0`; the status above is kept as written):** partly built, under the operator's W21 programme instruction of 2026-11-01 (see the status update in `docs/project-phase-5-plan.md`). Merged: the 5D contracts within the CF-3 freeze (#298 `285f3672`: the `campaign_locations` table, the `jurisdiction_code` columns, and closed campaign mode and status vocabularies, which are live) and the 5D-W2 seam, the fail-closed jurisdiction resolver and the coverage exclusion order (#299 `fe06b228`; the exclusion order is live). Not built: 5D-W1 (the dedicated campaigns router and `campaign_locations` writes; campaigns are still served by the generic context factory), 5D-W3 (jurisdiction capture on briefs, drafts and reviews, and the campaign UI), 5D-W4 (the adversarial battery), I-5D and R-5D. Nothing writes `jurisdiction_code`, and the resolver has no production caller. 5D adds no flag; the Phase 5 flags it feeds stay off. Merged does not mean activated, deployed or closed out.
 
+**Status update (2026-11-18, I-5E, at `main` `3e5f99f2`; the status and the 2026-11-07 update above are kept as written):** every 5D package is merged, so "partly built", the "Not built" list and "Nothing writes `jurisdiction_code`, and the resolver has no production caller" above no longer describe `main`: 5D-W1 (#311 `24ef334e`); the 5D-W2 seam (#299) with the exclusion fix (#312 `5f4131d8`); 5D-W3, 5D-W4 and I-5D (#313 `6a3afe3a`); and the business-address and geography repairs the resolver relies on (#307, #310, #314, #315, #316, #319, #321). Brief creation resolves and stores the code or refuses before any model call, and drafts and reviews carry it, all dark behind the briefs and creative-generation capabilities. The 5D review wave (R-5D) and the milestone validation of `6a3afe3a` are recorded outside this repository. Not on `main` at `3e5f99f2`, each in its own pull request and each an activation blocker: the RI-2 geography repair (#324; to be merged before recommendation briefs are activated) and D-N4 item 39 (#325; protected-claim matching, before a real provider is used). The jurisdiction-restricted claims report on a deployment database also remains an activation step. 5D adds no flag; the Phase 5 flags it feeds stay off. Merged does not mean activated, deployed or closed out.
+
 ## 1. Objective
 
 Harden the campaign contract so campaign scoping is safe to be load-bearing, and
@@ -97,8 +99,11 @@ test matrix, **not** a launch-market assertion.
   any model call, and is never stored as `NULL`; so is a location reference outside the
   opportunity's workspace and organization. Item 31 (ruled 31-A) refuses generation from
   every `NULL` brief, so no draft is written with `NULL` after 5D-W3; the 5E export
-  service, not built yet, must refuse every `NULL` row (export precondition 5). Nothing is
-  inferred, defaulted or back-filled.
+  service must refuse every `NULL` row (export precondition 5). *(Updated at I-5E: this read
+  "the 5E export service, not built yet, must refuse". The service now refuses a draft or
+  brief whose code is `NULL` or not a jurisdiction code with 409
+  `export_jurisdiction_missing`, and two codes that differ with 409 `jurisdiction_mismatch`.)*
+  Nothing is inferred, defaulted or back-filled.
 
   **An earlier draft proposed `NOT NULL` + an `UNRESOLVED` sentinel on these populated
   tables. That is REFUTED and must not be reinstated.** 5E §2 states export precondition
