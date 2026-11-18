@@ -30,8 +30,10 @@ exports            its live draft (``draft_id``) is at L
 
 In the workspace view, approvals and exports count every row of the workspace (they are
 compliance records that outlive their subject). A row attributed to none of the workspace's
-locations is ``unassigned``, so for every compared family the location rows plus
-``unassigned`` add up to the workspace total exactly.
+locations is ``unassigned``. For each compared family the location rows and ``unassigned``
+are read by one grouped statement (:func:`location_breakdown`), so they add up to the family's
+workspace total as that statement read it, and ``unassigned`` is a count of rows, never a
+difference of two readings.
 
 **Null, never a fabricated zero.** Counts are measurements and an empty scope measures 0.
 Rates without a denominator, latencies without a decided version, and the ``unassigned`` row
@@ -39,7 +41,10 @@ of a location view are ``None`` (:mod:`app.analytics.schemas`).
 
 Consistency: the figures are read in one request transaction, by several statements; on
 PostgreSQL (READ COMMITTED) a write landing between two statements can make two figures
-disagree by that write. Nothing is cached, so the next read is current.
+disagree by that write: a family card and the comparison's sum for that family, for example.
+No figure is derived by subtracting one statement's reading from another's, so such a write
+never produces a value outside a field's bound (review R-5E-A r1, A-F2). Nothing is cached, so
+the next read is current.
 """
 
 from __future__ import annotations
@@ -470,103 +475,143 @@ def outcomes(db: Session, scope: AnalyticsScope, reviews: ReviewStateCounts) -> 
 # --------------------------------------------------------------------------- #
 # Per-location comparison
 # --------------------------------------------------------------------------- #
-def _grouped(db: Session, stmt) -> dict[str, int]:
+@dataclass(frozen=True)
+class LocationBreakdown:
+    """One consistent reading of the comparison: the listed locations' rows and the rest."""
+
+    #: Per-family totals of each listed location (0 where nothing is attributed to it).
+    rows: dict[str, LocationTotalsOut]
+    #: Per family, every workspace row attributed to none of the listed locations.
+    unassigned: LocationTotalsOut
+
+
+def _attribution(db: Session, stmt) -> dict[str | None, int]:
+    """``(attributed location id or NULL, count)`` groups of one family, from one statement."""
     return {location_id: int(n) for location_id, n in db.execute(stmt).all()}
+
+
+def _split(groups: dict[str | None, int], location_ids: list[str]) -> tuple[dict[str, int], int]:
+    """A family's groups as (count per listed location, count attributed to none of them).
+
+    Both come from the same statement, so the second is a count of rows and never a
+    difference of two readings: it cannot be negative, whatever is written meanwhile."""
+    listed = {location_id: groups.get(location_id, 0) for location_id in location_ids}
+    rest = sum(n for location_id, n in groups.items() if location_id not in listed)
+    return listed, rest
+
+
+def location_breakdown(
+    db: Session, scope: AnalyticsScope, location_ids: list[str]
+) -> LocationBreakdown:
+    """The workspace's rows of each compared family, grouped by attributed location.
+
+    One grouped statement per family over the family's whole-workspace scope (the rules of
+    the module docstring): a row is attributed to its own location (opportunities, briefs,
+    drafts) or to its live subject's (approvals, exports), and to none (NULL) otherwise. The
+    rows of a listed location and ``unassigned`` (every other group: no location, a subject
+    that is gone or soft-deleted, a location that is not listed) are derived from that one
+    result, so within a family they are consistent with each other by construction (review
+    R-5E-A r1, A-F2: as two statements, a located row committed between them made
+    ``unassigned`` negative and the read fail).
+    """
+    workspace = scope.whole_workspace()
+    brief = aliased(RecommendationBrief)
+    draft = aliased(CreativeDraft)
+    export_draft = aliased(CreativeDraft)
+    opportunities, opportunities_rest = _split(
+        _attribution(
+            db,
+            select(Opportunity.location_id, func.count())
+            .where(opportunity_scope(workspace))
+            .group_by(Opportunity.location_id),
+        ),
+        location_ids,
+    )
+    briefs, briefs_rest = _split(
+        _attribution(
+            db,
+            select(RecommendationBrief.location_id, func.count())
+            .where(brief_scope(workspace))
+            .group_by(RecommendationBrief.location_id),
+        ),
+        location_ids,
+    )
+    drafts, drafts_rest = _split(
+        _attribution(
+            db,
+            select(CreativeDraft.location_id, func.count())
+            .where(draft_scope(workspace))
+            .group_by(CreativeDraft.location_id),
+        ),
+        location_ids,
+    )
+    # A decision is attributed to its live subject's location: the brief's for a brief
+    # decision, the draft's for a draft decision. The subject must be this workspace's own
+    # (``brief_scope`` / ``draft_scope``) AND the decision row must be (``_tenant``): the
+    # scope columns of ``approvals`` are FK-less, so a row of another scope can name this
+    # workspace's subject.
+    decided = (
+        select(
+            case(
+                (Approval.subject_type == BRIEF_SUBJECT, brief.location_id),
+                (Approval.subject_type == DRAFT_SUBJECT, draft.location_id),
+                else_=None,
+            ).label("location_id")
+        )
+        .select_from(Approval)
+        .outerjoin(brief, and_(brief.id == Approval.brief_id, brief_scope(workspace, brief)))
+        .outerjoin(draft, and_(draft.id == Approval.draft_id, draft_scope(workspace, draft)))
+        .where(*_tenant(Approval, workspace))
+        .subquery()
+    )
+    approvals, approvals_rest = _split(
+        _attribution(
+            db, select(decided.c.location_id, func.count()).group_by(decided.c.location_id)
+        ),
+        location_ids,
+    )
+    # An export is attributed to its live draft's location; its own scope columns are
+    # FK-less too, so the same two predicates apply.
+    exports, exports_rest = _split(
+        _attribution(
+            db,
+            select(export_draft.location_id, func.count())
+            .select_from(Export)
+            .outerjoin(
+                export_draft,
+                and_(export_draft.id == Export.draft_id, draft_scope(workspace, export_draft)),
+            )
+            .where(*_tenant(Export, workspace))
+            .group_by(export_draft.location_id),
+        ),
+        location_ids,
+    )
+    return LocationBreakdown(
+        rows={
+            location_id: LocationTotalsOut(
+                opportunities=opportunities[location_id],
+                briefs=briefs[location_id],
+                drafts=drafts[location_id],
+                approvals=approvals[location_id],
+                exports=exports[location_id],
+            )
+            for location_id in location_ids
+        },
+        unassigned=LocationTotalsOut(
+            opportunities=opportunities_rest,
+            briefs=briefs_rest,
+            drafts=drafts_rest,
+            approvals=approvals_rest,
+            exports=exports_rest,
+        ),
+    )
 
 
 def location_totals(
     db: Session, scope: AnalyticsScope, location_ids: list[str]
 ) -> dict[str, LocationTotalsOut]:
     """Per-family totals for each listed location of the workspace (same rules as above)."""
-    if not location_ids:
-        return {}
-    workspace = scope.whole_workspace()
-    opportunities = _grouped(
-        db,
-        select(Opportunity.location_id, func.count())
-        .where(opportunity_scope(workspace), Opportunity.location_id.in_(location_ids))
-        .group_by(Opportunity.location_id),
-    )
-    briefs = _grouped(
-        db,
-        select(RecommendationBrief.location_id, func.count())
-        .where(brief_scope(workspace), RecommendationBrief.location_id.in_(location_ids))
-        .group_by(RecommendationBrief.location_id),
-    )
-    drafts = _grouped(
-        db,
-        select(CreativeDraft.location_id, func.count())
-        .where(draft_scope(workspace), CreativeDraft.location_id.in_(location_ids))
-        .group_by(CreativeDraft.location_id),
-    )
-    brief_decisions = _grouped(
-        db,
-        select(RecommendationBrief.location_id, func.count())
-        .select_from(Approval)
-        .join(RecommendationBrief, RecommendationBrief.id == Approval.brief_id)
-        .where(
-            *_tenant(Approval, workspace),
-            Approval.subject_type == BRIEF_SUBJECT,
-            brief_scope(workspace),
-            RecommendationBrief.location_id.in_(location_ids),
-        )
-        .group_by(RecommendationBrief.location_id),
-    )
-    draft_decisions = _grouped(
-        db,
-        select(CreativeDraft.location_id, func.count())
-        .select_from(Approval)
-        .join(CreativeDraft, CreativeDraft.id == Approval.draft_id)
-        .where(
-            *_tenant(Approval, workspace),
-            Approval.subject_type == DRAFT_SUBJECT,
-            draft_scope(workspace),
-            CreativeDraft.location_id.in_(location_ids),
-        )
-        .group_by(CreativeDraft.location_id),
-    )
-    exports = _grouped(
-        db,
-        select(CreativeDraft.location_id, func.count())
-        .select_from(Export)
-        .join(CreativeDraft, CreativeDraft.id == Export.draft_id)
-        .where(
-            *_tenant(Export, workspace),
-            draft_scope(workspace),
-            CreativeDraft.location_id.in_(location_ids),
-        )
-        .group_by(CreativeDraft.location_id),
-    )
-    return {
-        location_id: LocationTotalsOut(
-            opportunities=opportunities.get(location_id, 0),
-            briefs=briefs.get(location_id, 0),
-            drafts=drafts.get(location_id, 0),
-            approvals=brief_decisions.get(location_id, 0) + draft_decisions.get(location_id, 0),
-            exports=exports.get(location_id, 0),
-        )
-        for location_id in location_ids
-    }
-
-
-def _unassigned(
-    *,
-    opportunities: int,
-    briefs: int,
-    drafts: int,
-    approvals: int,
-    exports: int,
-    rows: Iterable[LocationTotalsOut],
-) -> LocationTotalsOut:
-    """The workspace totals minus what the location rows account for (never negative)."""
-    rows = list(rows)
-    return LocationTotalsOut(
-        opportunities=opportunities - sum(r.opportunities for r in rows),
-        briefs=briefs - sum(r.briefs for r in rows),
-        drafts=drafts - sum(r.drafts for r in rows),
-        approvals=approvals - sum(r.approvals for r in rows),
-        exports=exports - sum(r.exports for r in rows),
-    )
+    return location_breakdown(db, scope, location_ids).rows
 
 
 # --------------------------------------------------------------------------- #
@@ -606,28 +651,18 @@ def workspace_analytics(
     exports = export_counts(db, scope)
 
     listed = db.execute(locations_select.order_by(BusinessLocation.name, BusinessLocation.id)).all()
-    totals = location_totals(db, scope, [row.id for row in listed])
+    breakdown = location_breakdown(db, scope, [row.id for row in listed])
     comparison = [
         LocationComparisonOut(
             location_id=row.id,
             name=row.name,
             is_active=bool(row.is_active),
-            **totals[row.id].model_dump(),
+            **breakdown.rows[row.id].model_dump(),
         )
         for row in listed
     ]
-    unassigned = (
-        None
-        if location_id is not None
-        else _unassigned(
-            opportunities=opportunities.total,
-            briefs=briefs.total,
-            drafts=drafts.total,
-            approvals=approvals.total,
-            exports=exports.total,
-            rows=comparison,
-        )
-    )
+    # A count read with the location rows, never the family cards minus them (A-F2).
+    unassigned = None if location_id is not None else breakdown.unassigned
 
     return AnalyticsOut(
         workspace_id=workspace_id,
@@ -649,6 +684,7 @@ def workspace_analytics(
 __all__ = [
     "LOCATION_NOT_FOUND",
     "AnalyticsScope",
+    "LocationBreakdown",
     "approval_counts",
     "approval_latency",
     "approval_scope",
@@ -659,6 +695,7 @@ __all__ = [
     "export_counts",
     "export_scope",
     "latency_stats",
+    "location_breakdown",
     "location_totals",
     "opportunity_counts",
     "opportunity_scope",
