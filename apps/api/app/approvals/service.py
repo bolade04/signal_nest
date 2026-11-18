@@ -140,6 +140,16 @@ a decision on the draft's brief         the brief (``FOR UPDATE`` vs step 5)   n
 (user → organization → membership →                                            draft)
 brief ``FOR UPDATE``)
 another decision                        the same order                         no
+a 5E export (``app.exports.service``:   the user (step 1) and the              no (a decision's
+the exporter's user ``KEY SHARE`` →     organization (step 2): compatible.     rows in a
+organization ``KEY SHARE`` → the        A draft decision at the draft          decision's order;
+draft ``SHARE`` → the draft's brief     (``SHARE`` against step 4's ``NO KEY   it holds nothing
+``KEY SHARE``; then its inserts and,    UPDATE``): one waits for the other.    stronger than
+while notifications are on, the rows    A decision on the brief at the brief   ``SHARE``, so it
+of step 7)                              (``KEY SHARE`` against its ``FOR       meets every other
+                                        UPDATE``): likewise                    path where a
+                                                                               draft approval
+                                                                               does, or earlier)
 ======================================  =====================================  =================
 
 So each path either takes, as its first contested lock, a row the decision takes earlier in the
@@ -163,6 +173,23 @@ on the ``NO KEY UPDATE`` that account erasure (brief, then draft) and the purge'
 ``UPDATE`` would cycle with generation of its revision (brief ``FOR UPDATE``, then the parent's
 ``KEY SHARE``). Each of these is exercised on PostgreSQL in
 ``test_dn4_38_brief_approved_parent.py``.
+
+**The 5E export takes the same rows in the same order** (reviews R-5E r1, A-F1 and F-B-1; the
+row above; :func:`app.exports.service._lock_for_export`). It is a reader of two decisions, so it
+takes what excludes their writers and no more: the user and the organization as a decision does
+(steps 1 and 2); the draft ``FOR SHARE``, the weakest mode a draft decision's ``NO KEY UPDATE``
+conflicts with; the brief ``FOR KEY SHARE``, step 5's lock. Against the other paths of the table:
+organization deletion and a member's account deletion meet it at the user or the organization,
+before either side holds a row the other needs, exactly as they meet a decision; an account
+deletion of a former member holds ``NO KEY UPDATE`` on the brief while it waits for the draft,
+and the export's brief ``KEY SHARE`` is admitted by that (``SHARE`` on the brief would cycle);
+generation holds the brief ``FOR UPDATE`` and its only later draft lock is the parent's
+foreign-key ``KEY SHARE``, which ``SHARE`` admits; the retention purge deletes a draft before its
+brief, so it waits for the export at the draft holding no brief lock; an override or schedule-cap
+write holds the workspace ``FOR UPDATE`` and waits on nothing an export holds, so the export's
+notification rows (step 7's locks, with the organization already held) can only wait for it.
+Two exports hold ``SHARE`` and ``KEY SHARE`` together and never wait for each other. Each order
+is exercised on PostgreSQL in ``test_i5e_export_serialization.py``.
 
 **The latest decision controls.** Decisions are append-only; a change of mind is a new
 row. The controlling decision of a subject version is the row with the highest

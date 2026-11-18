@@ -37,13 +37,18 @@ references. The emitter takes no other lock and never waits on a ``users`` row:
   the organization in ``KEY SHARE`` would wait on that user, while an erasure of that user
   (user ``FOR UPDATE``, then its organizations ``FOR UPDATE``) waits on the organization: a
   cycle. The cost is that such a recipient misses that one in-app notification.
-* The **organization** row is always already held by the triggering transaction (a decision's
-  step 2; a brief's or draft's own foreign key).
+* The **organization** row is always already held by the triggering transaction: a decision's
+  step 2; a brief's or draft's own foreign key; for ``export.completed``, the ``KEY SHARE`` the
+  export takes on it before its checks (:func:`app.exports.service._lock_for_export`; an
+  export's own rows are FK-less on the organization, so without that lock the insert here
+  would be the export's first touch of the row, and it could wait on an organization deletion
+  that waits on the export's draft).
 * The **workspace** row is already held by a brief's or a draft's own foreign key, or by
-  generation's ``NO KEY UPDATE``. For a decision (whose rows are FK-less) it is new: it can
-  wait only for a capability-override or schedule-cap mutation (``FOR UPDATE`` on the
-  workspace). Neither waits on any row a decision holds, so no cycle forms. Organization
-  deletion locks the organization first, which the decision already holds.
+  generation's ``NO KEY UPDATE``. For a decision and for an export (whose rows are FK-less on
+  the workspace) it is new: it can wait only for a capability-override or schedule-cap
+  mutation (``FOR UPDATE`` on the workspace). Neither waits on any row a decision or an export
+  holds, so no cycle forms. Organization deletion locks the organization first, which the
+  decision or the export already holds.
 On SQLite every lock compiles to nothing; the single writer serializes.
 
 Steps 1-3 are the caller's contract. A breach raises :class:`NotificationContractError`

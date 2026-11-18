@@ -51,11 +51,41 @@ whatever its decision. A refusal writes nothing.
   :func:`app.notifications.recipients.notify`: the emitter writes and flushes at most, never
   commits; if it raises, nothing is written.
 
-**No lock is taken.** The checks read the decision, the review and the library, then insert;
-a decision recorded concurrently (which locks the draft row) can commit between the read and
-the insert. The export then serializes before that decision: it rested on the decision that
-controlled when it was read, and records that decision's id. Nothing the export writes is
-read by a decision, so the interleaving is equivalent to export-then-decision.
+**Locks, held until the export's transaction ends** (the fold of reviews R-5E r1, findings
+A-F1 and F-B-1; "Lock order" in :mod:`app.approvals.service` has the export's row). After the
+role and the capability (a dark workspace takes no lock) and before any other check,
+:func:`_lock_for_export` takes, in a decision's own order:
+
+1. the exporter's ``users`` row, ``KEY SHARE`` (a decision's step 1). The export's own foreign
+   keys (``exports.exported_by``, ``audit_logs.actor_user_id``) take it at the insert anyway;
+   taken first, an erasure of the exporter's account (user ``FOR UPDATE``, then its
+   organizations) meets the export here, before either holds anything the other needs. A row
+   that is gone answers the session's own 401;
+2. the ``organizations`` row, ``KEY SHARE`` (step 2). Organization deletion and every
+   membership writer lock it ``FOR UPDATE`` first, so a deletion either waits for the export
+   and then anonymises its row and its audit row, or commits first, after which the row is
+   gone and the export answers the uniform 404. The notification rows' organization key is
+   then already held, so the insert cannot wait on a deletion;
+3. the draft row, ``SHARE`` (where a draft decision takes ``NO KEY UPDATE``, step 4). The two
+   conflict, so a rejection or revocation either commits first and is read below, or waits
+   until the export commits. ``SHARE`` and not ``KEY SHARE``: only ``FOR UPDATE`` excludes
+   ``KEY SHARE``, so it would not exclude a decision. Not ``NO KEY UPDATE`` or stronger: two
+   exports of one draft need not exclude each other, and a revision's foreign-key ``KEY
+   SHARE`` on its parent draft is admitted either way;
+4. the draft's brief row, ``KEY SHARE`` (step 5, the lock a draft approval takes). A decision
+   on the brief locks it ``FOR UPDATE``, so it commits first and is read below
+   (``brief_not_approved``), or waits. ``KEY SHARE`` after the draft, never ``SHARE`` and
+   never before it, for the reasons step 5 gives: account erasure of a former member and the
+   retention purge hold ``NO KEY UPDATE`` on a brief while they wait for its draft.
+
+Every check after that is its own statement under READ COMMITTED, so it reads what committed
+before the lock it follows: the controlling decision under the draft lock, the brief's
+controlling decision under the brief lock. An export therefore never commits after a
+committed rejection or revocation of its draft, or after a committed decision that withdrew
+its brief's approval. The row locks exist on PostgreSQL; on SQLite each compiles to a plain
+read, as for a decision, and a refusal still writes nothing. The claims library is read as it
+stands at that statement; a library write is not serialized with an export (nor with a draft
+approval).
 
 The export history (:func:`list_exports`) is gated the same way (capability, the history's
 role set, the same scoped 404) and never returns rendered text.
@@ -66,11 +96,17 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
 from app.approvals.models import Approval
-from app.approvals.service import DRAFT_SUBJECT, controlling_decision
+from app.approvals.service import (
+    DRAFT_SUBJECT,
+    approver_organization_lock_select,
+    approver_user_lock_select,
+    controlling_decision,
+    draft_brief_lock_select,
+)
 from app.audit.actions import AuditAction
 from app.audit.service import record_audit
 from app.auth.dependencies import TenantContext
@@ -81,6 +117,7 @@ from app.core.actor_snapshot import actor_snapshot
 from app.core.config import Settings, get_settings
 from app.core.enums import ApprovalDecision, ExportFormat, NotificationEventCode, Role
 from app.core.errors import (
+    AuthError,
     CapabilityUnavailableError,
     ConflictError,
     NotFoundError,
@@ -258,6 +295,46 @@ def scoped_subject(
 
 
 # --------------------------------------------------------------------------- #
+# The export's locks (module docstring, "Locks"; "Lock order" in app.approvals.service)
+# --------------------------------------------------------------------------- #
+#: The session's own answer for an account that no longer exists (``app.auth.dependencies``).
+ACCOUNT_GONE = "Invalid or expired token."
+
+
+def export_draft_lock_select(draft_id: str) -> Select:
+    """``SELECT id FROM creative_drafts … FOR SHARE``: the export's lock on the draft row.
+
+    It conflicts with the ``NO KEY UPDATE`` a decision on the draft takes
+    (:func:`app.approvals.service.draft_lock_select`) and admits another export's ``SHARE``
+    and a revision's foreign-key ``KEY SHARE``. Factored out so a test can compile it against
+    the PostgreSQL dialect."""
+    return select(CreativeDraft.id).where(CreativeDraft.id == draft_id).with_for_update(read=True)
+
+
+def _lock_for_export(
+    db: Session, ctx: TenantContext, draft_id: str
+) -> tuple[CreativeDraft, RecommendationBrief]:
+    """Take the export's four row locks in a decision's order and return the scoped subject.
+
+    The exporter's ``users`` row and the organization (``KEY SHARE``), then the tenant-scoped
+    read of the draft and its brief (404; a foreign or unknown draft is never locked), then the
+    draft (``SHARE``) and its brief (``KEY SHARE``). Each lock is held until the caller's
+    transaction ends. A row that vanished while the export waited for it gets the answer its
+    absence has: 401 for the account, the uniform 404 for the organization, the draft or the
+    brief. Nothing is written before any of these."""
+    if db.execute(approver_user_lock_select(ctx.user.id)).first() is None:
+        raise AuthError(ACCOUNT_GONE)
+    if db.execute(approver_organization_lock_select(ctx.organization.id)).first() is None:
+        raise NotFoundError(DRAFT_NOT_FOUND)
+    draft, brief = scoped_subject(db, ctx, draft_id)
+    if db.execute(export_draft_lock_select(draft.id)).first() is None:
+        raise NotFoundError(DRAFT_NOT_FOUND)
+    if db.execute(draft_brief_lock_select(brief.id)).first() is None:
+        raise NotFoundError(DRAFT_NOT_FOUND)
+    return draft, brief
+
+
+# --------------------------------------------------------------------------- #
 # Preconditions 5, P12, 3 and 2
 # --------------------------------------------------------------------------- #
 def _refuse(code: str, message: str, *, ctx: TenantContext, reason: str) -> ConflictError:
@@ -354,12 +431,14 @@ def create_export(
 ) -> ExportResult:
     """Check the six preconditions, then record and render one export. Flushes only.
 
-    Raises (writing nothing) 403, 503, 404 or 409 in the order of the module docstring.
+    Raises (writing nothing) 403, 503, 404 or 409 in the order of the module docstring. After
+    the capability and before every other check it takes the export's row locks
+    (:func:`_lock_for_export`), which the caller's transaction holds until it ends.
     """
     export_format = ExportFormat(export_format)
     _require_role(ctx, EXPORTER_ROLES)
     require_export_feature(db, ctx, settings)
-    draft, brief = scoped_subject(db, ctx, draft_id)
+    draft, brief = _lock_for_export(db, ctx, draft_id)
     jurisdiction_code = _require_jurisdiction(draft, brief, ctx)
     approval = _require_approved(db, draft, ctx)
     _require_review(db, draft, ctx)
@@ -478,6 +557,7 @@ __all__ = [
     "ExportResult",
     "create_export",
     "export_capability",
+    "export_draft_lock_select",
     "list_exports",
     "require_export_feature",
     "scoped_subject",
