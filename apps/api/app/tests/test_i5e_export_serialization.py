@@ -29,8 +29,9 @@ notifications off and on for the workspace:
   answers 401; the export first, the erasure waits and then anonymises;
 * no cycle with the paths that hold a row the export wants without waiting for it: an override
   write holding the workspace (the export's notification rows wait, then commit), an erasure
-  holding the brief ``NO KEY UPDATE`` (the export's ``KEY SHARE`` is admitted), and a second
-  export of the same draft (``SHARE`` admits ``SHARE``).
+  holding the brief ``NO KEY UPDATE`` (the export's ``KEY SHARE`` is admitted), the retention
+  purge holding a deleted draft (the export waits on the draft holding no brief lock, then
+  answers 404), and a second export of the same draft (``SHARE`` admits ``SHARE``).
 
 **Both engines:** the statement order of an export (the four locks, in order, before the
 decision is read), no lock statement while export is dark, and the lock statements' modes as
@@ -43,6 +44,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import event, text
@@ -60,6 +62,8 @@ from app.exports.models import Export
 from app.notifications.models import Notification
 from app.organizations.models import Organization, User
 from app.privacy import erasure
+from app.privacy.inventory import RetentionClass
+from app.privacy.retention import purge_batch
 from app.privacy.writer import mark_privacy_writer
 from app.tests._creative_support import CreativeWorld, creative_world, postgres_creative_world
 from app.tests.test_campaign_context_integrity import PASSWORD, _post
@@ -686,6 +690,55 @@ def test_an_erasure_holding_the_brief_never_makes_the_export_wait(pg: CreativeWo
     assert exporting.outcome().status_code == 201
     assert erasing.outcome() == {"recommendation_briefs": 1, "creative_drafts": 1}
     assert len(pg.rows(Export, organization_id=org.org)) == 1
+
+
+def test_the_opportunity_purge_first_the_export_waits_on_the_draft_and_answers_404(
+    pg: CreativeWorld, monkeypatch
+):
+    """The retention purge's foreign-key walk deletes a brief's drafts before the brief. Held
+    right after the drafts are deleted, it holds the draft: the export waits on the draft row
+    (its third lock) holding no brief lock, so the purge deletes the brief and commits, and the
+    export finds no draft: the uniform 404, nothing written. (A brief lock taken before the
+    draft would make a cycle.)"""
+    ws = pg.workspace("i5e purge", enabled=False)
+    made, _approval = _exportable(pg, ws, notifications=False)
+    deleted, resume = threading.Event(), threading.Event()
+    real = erasure.delete_rows
+
+    def delete_rows(db, table, ids):
+        counts = real(db, table, ids)
+        if table.name == "creative_drafts" and not deleted.is_set():
+            deleted.set()
+            assert resume.wait(JOIN_SECONDS)
+        return counts
+
+    monkeypatch.setattr(erasure, "delete_rows", delete_rows)
+
+    def purge() -> dict:
+        with pg.factory() as s:
+            batch = purge_batch(s, RetentionClass.OPPORTUNITIES,
+                                datetime.now(UTC) + timedelta(days=1), batch_size=10,
+                                workspace_id=ws)
+            s.commit()
+            return dict(batch.counts.deleted)
+
+    purging = _Runner(purge)
+    purging.start()
+    try:
+        assert deleted.wait(JOIN_SECONDS), "the purge never deleted the drafts"
+        exporting = _Runner(lambda: _export(pg, ws, made))
+        exporting.start()
+        waiting = _wait_for_lock_wait(
+            pg, exporting, "the export to wait on the draft the purge deleted",
+            "FROM creative_drafts", "FOR SHARE",
+        )
+        _still_waiting(pg, waiting)
+    finally:
+        resume.set()
+    counts = purging.outcome()  # re-raises a deadlock (40P01) or a lock timeout
+    assert (counts["recommendation_briefs"], counts["creative_drafts"]) == (1, 1)
+    assert _error(exporting.outcome()) == (404, "not_found", DRAFT_NOT_FOUND)
+    assert _export_records(pg, workspace_id=ws) == ([], [])
 
 
 def test_two_exports_of_one_draft_do_not_wait_for_each_other(pg: CreativeWorld, monkeypatch):
