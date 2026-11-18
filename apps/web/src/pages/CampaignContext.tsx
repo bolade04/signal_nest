@@ -93,9 +93,10 @@ const claimKindOptions = {
   required_disclaimer: 'Required disclaimer',
 };
 // A stored kind outside the set is shown with its stored text, quoted, and marked as unsupported,
-// so it never reads as one of the four labels: the 5C review gives such a kind no meaning, so a
-// stored "blocked_" or "Required disclaimer" must not look like "Blocked" or "Required disclaimer"
-// (review W21-REV-DN4-36 r1 C-2).
+// so it never reads as one of the four labels. The 5C review reads every stored kind in canonical
+// form (case, spacing and invisible characters ignored): a stored "Blocked" still blocks, while
+// "blocked_" or "Required disclaimer" means nothing to it, so neither may look like "Blocked" or
+// "Required disclaimer" (review W21-REV-DN4-36 r1 C-2).
 const unsupportedKindLabel = (kind: string): string => `"${kind}" (unsupported kind)`;
 const riskOptions = { low: 'Low', medium: 'Medium', high: 'High' };
 const campaignModeOptions = {
