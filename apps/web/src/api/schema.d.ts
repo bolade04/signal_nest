@@ -1590,7 +1590,8 @@ export interface paths {
          *     version. Reviewer only; never the draft's author; ``subject_version`` must be the draft's
          *     version (409 otherwise); ``revoked`` only withdraws a controlling approval; an approval
          *     is refused (409 ``approval_review_blocked``) while the draft's content review does not
-         *     allow it.
+         *     allow it, or while the controlling decision on the brief version the draft was generated
+         *     from is not ``approved``. A decision already recorded is not affected.
          */
         post: operations["decide_on_draft_api_v1_workspaces__workspace_id__drafts__draft_id__approvals_post"];
         delete?: never;

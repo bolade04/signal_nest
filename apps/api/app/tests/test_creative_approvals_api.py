@@ -312,7 +312,9 @@ def test_brief_and_draft_histories_never_mix_even_when_their_ids_collide(world):
     ws = world.workspace("ids collide")
     brief_id = world.seed_brief(ws)  # the brief's decision 1: approved
     source = _draft(world, ws)
-    host = world.seed_brief(ws, approved=False)
+    # The twin's own brief. Approved: a draft is approvable only while the brief it was
+    # generated from is (D-N4 item 38). Its decision is on its own id, so nothing collides.
+    host = world.seed_brief(ws)
     twin = {**{k: v for k, v in source.items() if k not in ("id", "created_at")},
             "id": brief_id, "brief_id": host, "draft_version": 1}
     [review] = world.rows(ContentReview, draft_id=source["id"])
