@@ -1,6 +1,6 @@
 """I-5E integration fold: the checks no lane's module exercised (Project Phase 5E).
 
-Each on SQLite and on PostgreSQL migrated to head.
+Two groups, each on SQLite and on PostgreSQL migrated to head.
 
 **The notification emitter's caller contract and the preferences body** (lane 5E-W3's code).
 The 5E mutant run at the integrated head found five recorded mutants that every committed
@@ -14,6 +14,13 @@ test survived, because each test lane listed them as the other's:
 
 The emitter's refusals are :class:`~app.notifications.service.NotificationContractError`: a
 programming error, raised whatever the capability says, before anything is written.
+
+**A negative approval latency** (lane 5E-W2's code; found by lane 5E-W4, its finding F-1).
+``latency_stats`` documents that a negative value (a decision stamped before its subject:
+a clock fault or a hand-written row) "is reported as measured, not hidden". The response
+schema bounded a latency at zero or more, so one such row made the whole analytics read fail.
+The bound is removed; these tests pin the documented behaviour in the function and through the
+route.
 """
 
 from __future__ import annotations
@@ -22,10 +29,12 @@ from collections.abc import Iterator
 
 import pytest
 
+from app.analytics.schemas import LatencyOut
+from app.analytics.service import latency_stats
 from app.core.enums import NotificationEventCode
 from app.notifications.models import Notification, NotificationPreference
 from app.notifications.service import NotificationContractError, emit_notifications
-from app.tests.fixtures.analytics import T0, Rows, creative_world_on, set_capability
+from app.tests.fixtures.analytics import T0, Rows, at, creative_world_on, set_capability
 
 NOTIFICATIONS_ANALYTICS = "notifications_analytics"
 BRIEF_CREATED = NotificationEventCode.BRIEF_CREATED
@@ -136,3 +145,47 @@ def test_a_preferences_update_naming_a_code_twice_is_refused_and_stores_nothing(
     assert ok.status_code == 200, ok.text
     assert len(world.rows(NotificationPreference, workspace_id=ws)) == 1
 
+
+# --------------------------------------------------------------------------- #
+# A negative approval latency is reported as measured
+# --------------------------------------------------------------------------- #
+def test_latency_stats_reports_a_negative_value_as_measured():
+    assert latency_stats([-5.0]) == LatencyOut(decided=1, mean_seconds=-5.0, median_seconds=-5.0)
+    # Not clamped to zero and not dropped: it weighs in the mean and orders in the median.
+    assert latency_stats([-30.0, 10.0, 50.0]) == LatencyOut(
+        decided=3, mean_seconds=10.0, median_seconds=10.0
+    )
+    assert latency_stats([-30.0, 10.0]) == LatencyOut(
+        decided=2, mean_seconds=-10.0, median_seconds=-10.0
+    )
+
+
+def test_the_schema_admits_a_negative_latency_and_keeps_its_other_rules():
+    assert LatencyOut(decided=1, mean_seconds=-0.001, median_seconds=-86400.0).mean_seconds < 0
+    with pytest.raises(ValueError):
+        LatencyOut(decided=-1, mean_seconds=None, median_seconds=None)  # a count is never < 0
+    with pytest.raises(ValueError):
+        LatencyOut(decided=1, mean_seconds=1.0, median_seconds=1.0, extra=1)  # closed model
+
+
+def test_the_analytics_read_answers_with_a_decision_stamped_before_its_subject(world):
+    """One brief decided 30 s *before* it was created, one draft decided 12 s after: the read
+    answers 200 and reports both as measured (it answered 500 while the schema had a floor)."""
+    ws = _workspace(world, "fold negative latency")
+    users = world.users
+    with world.session() as s:
+        rows = Rows(s, organization_id=world.org, workspace_id=ws)
+        opp = rows.opportunity(location_id=None)
+        brief = rows.brief(opportunity_id=opp, author=users["marketer"], location_id=None,
+                           code="GB", created_at=T0)
+        rows.decision(subject=brief, kind="brief", decision="approved", seq=1,
+                      reviewer=users["reviewer"], decided_at=at(T0, -30))
+        draft = rows.draft(brief_id=brief, author=users["marketer"], created_at=T0)
+        rows.decision(subject=draft, kind="draft", decision="approved", seq=1,
+                      reviewer=users["reviewer"], decided_at=at(T0, 12))
+    r = world.send("GET", f"/workspaces/{ws}/analytics", "owner")
+    assert r.status_code == 200, r.text
+    assert r.json()["approval_latency"] == {
+        "briefs": {"decided": 1, "mean_seconds": -30.0, "median_seconds": -30.0},
+        "drafts": {"decided": 1, "mean_seconds": 12.0, "median_seconds": 12.0},
+    }

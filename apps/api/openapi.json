@@ -5656,7 +5656,6 @@
           "mean_seconds": {
             "anyOf": [
               {
-                "minimum": 0.0,
                 "type": "number"
               },
               {
@@ -5668,7 +5667,6 @@
           "median_seconds": {
             "anyOf": [
               {
-                "minimum": 0.0,
                 "type": "number"
               },
               {

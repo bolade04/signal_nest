@@ -39,8 +39,11 @@ class _Closed(BaseModel):
 Count = Annotated[int, Field(ge=0)]
 #: A share in [0, 1]; ``None`` where it has no denominator.
 Rate = Annotated[float, Field(ge=0, le=1)]
-#: A duration in seconds; ``None`` where nothing was measured.
-Seconds = Annotated[float, Field(ge=0)]
+#: A duration in seconds; ``None`` where nothing was measured. No lower bound: a negative
+#: latency (a decision stamped before its subject, which only a clock fault or a hand-written
+#: row produces) is reported as measured (``service.latency_stats``), so one such row never
+#: fails the read.
+Seconds = float
 
 
 class OpportunityStateCounts(_Closed):
