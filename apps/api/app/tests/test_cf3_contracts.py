@@ -294,10 +294,12 @@ def test_the_account_export_schema_carries_the_cf3_fields() -> None:
     )
 
 
-def test_the_analytics_fixture_module_is_registered_and_empty() -> None:
+def test_the_analytics_fixture_module_is_registered_and_exports_only_its_fixture() -> None:
+    # CF-3 registered the module empty. Lane 5E-W1 filled it (5E plan §5): the root conftest
+    # star-imports it, so ``__all__`` is exactly what it adds to every test module's fixtures.
     module = sys.modules.get("app.tests.fixtures.analytics")
     assert module is not None  # imported by the root conftest.py
-    assert module.__all__ == []
+    assert module.__all__ == ["analytics_world"]
 
 
 # --------------------------------------------------------------------------- #
