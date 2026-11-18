@@ -505,8 +505,8 @@ def town_part_readings(text: str | None, towns: frozenset[str]) -> tuple[MarketI
 def _written_and_read_parts(text: str) -> list[tuple[str, str]]:
     """Each part of ``text`` as written and as the reader reads it (the listed aliases written as
     the tables read them, part for part: "Wash." is read as "Washington"); ``[]`` when they do not
-    pair up."""
-    written = _PART_SEPARATORS.split(_other_separators("\n".join(text.splitlines())))
+    pair up. GEO-P5 (RI-2): a state's name and a country in one part are two parts on both sides."""
+    written = _PART_SEPARATORS.split(_separated_text(text))
     parts = _PART_SEPARATORS.split(_address_text(text))
     if len(written) != len(parts):
         return []
@@ -1019,11 +1019,123 @@ def _without_territory_names(text: str) -> str:
     return "".join(pieces)
 
 
+#: GEO-P5 (register RI-2): a word of a part as written, with where it starts.
+_WRITTEN_WORD: Final = re.compile(r"\S+")
+
+
+def _state_countries(folded: str) -> frozenset[str]:
+    """GEO-P5 (register RI-2): the countries in which ``folded`` (the words of one part before a
+    country, folded, without a postcode) names a listed state, province or region, read alone as the
+    reader reads one: a name or code of ``places_data.SUBDIVISIONS``, or a Nigerian state's name,
+    alias or code, with or without "State", "Province" or "Region" after it or "State of" or
+    "Province of" before it ("alabama", "alabama state", "al state", "ontario province", "state of
+    alabama", "lagos state", "federal capital territory"); empty otherwise. A name with "Territory"
+    that the tables do not list whole names none ("alabama territory": GEO-P4 reads it as no
+    area)."""
+    if _AREA_PREFIX.match(folded):
+        folded = _AREA_PREFIX.sub("", folded)
+    if not folded:
+        return frozenset()
+    names = [folded] + [
+        folded[: -len(suffix)]
+        for suffix in _REGION_SUFFIXES
+        if folded.endswith(suffix) and len(folded) > len(suffix)
+    ]
+    return frozenset(country for country, _ in _region_entries(folded)) | frozenset(
+        country
+        for country, tokens in _JURISDICTION_REGION_TOKENS.items()
+        if any(name in tokens for name in names)
+    )
+
+
+def _state_and_country(piece: str) -> int | None:
+    """GEO-P5 (register RI-2; operator instruction of 2026-11-14): where the country starts in
+    ``piece`` (one part as written) when the part is a state's name or code
+    (:func:`_state_countries`), with or without "State", or another "<Name> State", followed by a
+    country's name or code, each with any postcode after it ("Alabama State United States",
+    "Alabama United States", "Alabama State US", "AL United States", "Lagos State Nigeria",
+    "Alabama 36104 United States", "Dakota State United States"); ``None`` otherwise. The longest
+    country is taken, so "Western Australia Australia" is "Western Australia" and "Australia", while
+    "Western Australia", "New Jersey" and "State of New Jersey" stay whole.
+
+    A two-letter word counts only as the code of a country the state is in ("Alabama State US",
+    "Alabama US", "AL US", "Lagos State NG", "Alberta CA"; the operator's answer of 2026-11-15,
+    "Drop only the 'CA' clause", so "Ontario CA" for Ontario, California asks as "Ontario, CA"
+    does). After a "<Name> State" that names no listed state, only a country's name counts
+    ("Dakota State United States", not "Dakota State US"). Any other two-letter word is read as
+    before: it may be a state's code after a town of that name, the form the clarification messages
+    ask for ("Nevada MO", "Abia AD", "Kano KN", whose codes are also Macao's, Andorra's and Saint
+    Kitts and Nevis'), a company's legal form or an abbreviation ("Texas Co", "Victoria SA",
+    "Georgia TV", "Empire State AG"). A part that holds a code form with a hyphen ("US-AL",
+    "GA-400") is read as before too."""
+    words = list(_WRITTEN_WORD.finditer(piece))
+    folded = [fold(word.group(0)) for word in words]
+    for index in range(1, len(words)):
+        country = _strip_postcode(" ".join(f for f in folded[index:] if f))
+        code = _country_code(country) if country else None
+        if code is None:
+            continue
+        head = _strip_postcode(" ".join(f for f in folded[:index] if f))
+        countries = _state_countries(head) if head else frozenset()
+        if not countries and not head.endswith(" state"):
+            continue
+        if len(country) == 2 and code not in countries:
+            continue
+        return None if _CODE_TOKEN.search(piece) else words[index].start()
+    return None
+
+
+def _with_state_country_parts(text: str) -> str:
+    """GEO-P5 (register RI-2; operator instruction of 2026-11-14, "Implement the minimum correction
+    that reads this explicit geographic evidence and applies the existing contradiction rules"):
+    ``text`` with each part that is a state's name followed by a country's name or code
+    (:func:`_state_and_country`) read as two parts, the state and then the country, as if a comma
+    stood between them ("Alabama State United States, 1 Main St" reads as "Alabama State, United
+    States, 1 Main St"). Every existing rule then reads both: the state is compared with the
+    location, and so is the country. Separators and every other part are kept as written. What
+    D1's reader read explicitly from such a later part stays read (:func:`_kept_readings`)."""
+    pieces = re.split(f"({_PART_SEPARATORS.pattern})", text)
+    for index in range(0, len(pieces), 2):
+        piece = pieces[index]
+        at = _state_and_country(piece)
+        if at is not None:
+            pieces[index] = piece[:at].rstrip() + ", " + piece[at:]
+    return "".join(pieces)
+
+
+def _kept_readings(
+    text: str,
+) -> tuple[tuple[MarketIdentity, ...], tuple[tuple[MarketIdentity, ...], ...]]:
+    """GEO-P5 (register RI-2): ``(readings, groups)``: D1's explicit readings
+    (:func:`_part_reading`) and explicit groups (:func:`_part_groups`, C-8) of each later part, as
+    written, that :func:`_with_state_country_parts` reads as two parts ("Alabama US" is US-AL,
+    "Lagos State NG" is Nigeria, "New York US" the United States, "Alberta State CA" Canada or
+    California). They stay explicit beside the two parts, so reading a part as two never turns D1's
+    refusal into a clarification ("1 Main St, Alabama US, Kenya" for Nairobi is refused, as on
+    main, where its comma twin "..., Alabama, US, Kenya" asks). The first part has no explicit
+    reading (W21-REV-GEO r1 C-1), so none is kept."""
+    plain = _with_listed_aliases(_other_separators("\n".join(text.splitlines())))
+    readings: list[MarketIdentity] = []
+    groups: list[tuple[MarketIdentity, ...]] = []
+    for part in _written_parts(plain)[1:]:
+        if _state_and_country(part) is not None:
+            readings += _part_reading(part)[0]
+            groups += _part_groups(part)[0]
+    return tuple(readings), tuple(groups)
+
+
+def _separated_text(text: str) -> str:
+    """The business address with every line break one (W21-REV-GEO r1 C-4), the other separators
+    read as line breaks (GEO-P3, I-2), and a state's name and a country in one part read as two
+    parts (GEO-P5, register RI-2: :func:`_with_state_country_parts`)."""
+    return _with_state_country_parts(_other_separators("\n".join(text.splitlines())))
+
+
 def _aliased_text(text: str) -> str:
     """The business address with every line break one (W21-REV-GEO r1 C-4), the other separators
-    read as line breaks (GEO-P3, I-2) and the listed aliases written as the tables read them
-    (GEO-P3, G-10)."""
-    return _with_listed_aliases(_other_separators("\n".join(text.splitlines())))
+    read as line breaks (GEO-P3, I-2), a state's name and a country in one part read as two parts
+    (GEO-P5, RI-2) and the listed aliases written as the tables read them (GEO-P3, G-10)."""
+    return _with_listed_aliases(_separated_text(text))
 
 
 def _address_text(text: str) -> str:
@@ -1116,6 +1228,8 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
         return BusinessAddressReading(None)
     # GEO-P4 (register RI-1): the parts that name a territory the tables do not list, as written.
     territories = _territory_parts(text)
+    # GEO-P5 (register RI-2): what D1 read explicitly from a later part that is now read as two.
+    kept, kept_groups = _kept_readings(text)
     # W21-REV-GEO r1 C-4: every line break is one; GEO-P3 (register G-10): the other separators
     # (review I-2) and the listed aliases (operator ruling, option (a)); GEO-P4: each such
     # territory part read as its territory word alone.
@@ -1124,9 +1238,9 @@ def read_business_address(text: str | None) -> BusinessAddressReading:
     reading = _read_business_address(text)
     return BusinessAddressReading(
         reading.stated,
-        reading.parts,
+        reading.parts + kept,
         reading.ambiguous,
-        reading.alternatives,
+        reading.alternatives + kept_groups,
         reading.ambiguous_alternatives,
         _part_places(text),
         reading.routes,
