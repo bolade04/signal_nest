@@ -7,9 +7,11 @@ routes, customer UI and applicable notification emission consistently." 5E-CF ad
 ``notifications_analytics_enabled`` (default ``False``). The capability is enableable and
 disableable per workspace, so the override plane must be able to store a row naming it.
 
-**PENDING the operator's migration-freeze exception (open question Q-1).** The CF-3 migration
-freeze admits item-specific exceptions only, and none covers this revision. It is built and
-measured locally; it is not published until the operator answers.
+**Covered by the operator's narrow CF-3 migration-freeze exception of 2026-11-15 (question Q-1).**
+The CF-3 migration freeze admits item-specific exceptions only; this one covers this one CHECK
+widening and grants no other schema change, no staging or production migration and no activation.
+The option the operator chose, verbatim (one line, so it is byte-equal to the record):
+"A migration-freeze exception for this one CHECK widening (53fdde95354a), inside the 5E PR. It grants no other schema change, no staging/production migration and no activation. The flag works like the other Phase 5 flags: off by default, per-workspace override, safety ceiling, no raw reads."
 
 * ``workspace_capability_overrides`` - ``ck_workspace_capability_override_capability`` admits
   ``notifications_analytics``. Nothing else changes: no table, column, index, row or other

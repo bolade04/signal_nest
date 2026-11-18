@@ -311,8 +311,8 @@ def test_postgres_workspace_deletion_cascades_override() -> None:  # pragma: no 
 
 # --------------------------------------------------------------------------- #
 # Project Phase 5E 5E-CF (operator ruling O-12(B)): the CHECK admits
-# notifications_analytics (revision 53fdde95354a, PENDING the operator's
-# migration-freeze answer, Q-1)
+# notifications_analytics (revision 53fdde95354a, under the operator's narrow
+# migration-freeze exception of 2026-11-15, Q-1)
 # --------------------------------------------------------------------------- #
 #: The revision below the 5E-CF widening (D-N4 item 36's closed claim kinds).
 CLAIM_KINDS = "1574637e56d3"
