@@ -699,7 +699,7 @@ def test_sqlite_an_export_first_the_exporters_account_erasure_waits_and_anonymis
     rows, audits = _export_records(lite, organization_id=org.org)
     observed = {
         "the account existed while the export was held": existed_while_the_export_was_held,
-        "the erasure waited in a write": _is_write(waiting),
+        "the erasure waited for the writer lock": waiting,
         "export": _answer(exported),
         "erasure": _answer(erased),
         "the exporter's account exists": _exists(lite, User, exporter[0]),
@@ -716,7 +716,7 @@ def test_sqlite_an_export_first_the_exporters_account_erasure_waits_and_anonymis
     }
     _report("export first, account erasure", observed, {
         "the account existed while the export was held": True,
-        "the erasure waited in a write": True,
+        "the erasure waited for the writer lock": SERIALIZE,  # before any of its reads
         "export": (201,),
         "erasure": (200,),
         "the exporter's account exists": False,
