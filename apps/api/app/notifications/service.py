@@ -57,7 +57,10 @@ references. The emitter takes no other lock and never waits on a ``users`` row:
   emitting a notification (the organization ``KEY SHARE``, then the workspace ``KEY SHARE``
   here). PostgreSQL then aborts at least one of the three with a deadlock error. This is open:
   nothing here prevents it.
-On SQLite every lock compiles to nothing; the single writer serializes.
+On SQLite every lock here compiles to nothing, the skip included. SQLite's single writer lock
+serializes two transactions only from the first write of each: a decision emits after its own
+row is inserted, and an export after it has taken the writer lock before its checks
+(:func:`app.db.sqlite_writer.hold_sqlite_writer_lock`), so both already hold it here.
 
 Steps 1-3 are the caller's contract. A breach raises :class:`NotificationContractError`
 whatever the capability says, so a hook passing the wrong ids fails in the dark state too,

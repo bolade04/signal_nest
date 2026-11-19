@@ -160,8 +160,11 @@ after the user because account deletion locks the user, then its organizations: 
 order would cycle with it. The membership ``FOR SHARE`` is still taken and held to commit, as
 ruled; with step 2 before it, a membership writer that takes the organization first never
 reaches it during a decision, and one that did not (none exists) would wait on it. On SQLite
-every lock compiles to a plain read; the re-read still reads the persisted role, and the single
-writer serializes.
+every lock compiles to a plain read and holds nothing. The re-read still reads the persisted
+role, but SQLite's single writer lock serializes two transactions only from the first write of
+each, so what a decision read before its own first write (the role, and for a draft approval the
+brief's approval) is not held to its commit there. An export does not rest on that: on SQLite it
+takes the writer lock before its reads (:func:`app.db.sqlite_writer.hold_sqlite_writer_lock`).
 
 **Why step 5 is ``KEY SHARE`` after the draft, not ``SHARE`` before it** (D-N4 item 38). Only
 ``FOR UPDATE`` excludes ``KEY SHARE``, and every path that holds a brief ``FOR UPDATE`` waits on
@@ -190,7 +193,11 @@ brief, so it waits for the export at the draft holding no brief lock; an overrid
 write holds the workspace ``FOR UPDATE`` and waits on nothing an export holds, so the export's
 notification rows (step 7's locks, with the organization already held) can only wait for it.
 Two exports hold ``SHARE`` and ``KEY SHARE`` together and never wait for each other. Each order
-is exercised on PostgreSQL in ``test_i5e_export_serialization.py``.
+is exercised on PostgreSQL in ``test_i5e_export_serialization.py``. On SQLite none of these row
+locks exists; the export takes the database's writer lock before the same statements instead
+(:mod:`app.exports.service`, "On SQLite"), so there two exports do wait for each other, and the
+orders against a decision, organization deletion and account erasure are exercised in
+``test_i5e_export_serialization_sqlite.py``.
 
 **Known limit: a ring of three transactions (AD-NOTIF-LOCK-01).** Every "no" of the table, and
 "can only wait for it" above, is an argument about two transactions. While notifications are

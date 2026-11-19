@@ -582,6 +582,13 @@ def test_sqlite_an_export_first_the_organization_deletion_waits_and_anonymises_i
     observed = {
         "the organization existed while the export was held": existed_while_the_export_was_held,
         "the deletion waited in a write": _is_write(waiting),
+        # Its first write is the set-wide update of the organization's audit records; nothing
+        # it read before that selects the rows it erases.
+        "the write it waited in": (waiting or "")[:21],
+        "its reads of exports, audit or notification rows before it waited": [
+            q for q in _before
+            if any(f" from {t}" in q for t in ("exports", "audit_logs", "notifications"))
+        ],
         "export": _answer(exported),
         "deletion": _answer(deleted),
         "the organization exists": _exists(lite, Organization, org.org),
@@ -600,6 +607,8 @@ def test_sqlite_an_export_first_the_organization_deletion_waits_and_anonymises_i
     _report("export first, organization deletion", observed, {
         "the organization existed while the export was held": True,
         "the deletion waited in a write": True,
+        "the write it waited in": "update audit_logs set",
+        "its reads of exports, audit or notification rows before it waited": [],
         "export": (201,),
         "deletion": (200,),
         "the organization exists": False,
