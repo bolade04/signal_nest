@@ -55,8 +55,8 @@ references. The emitter takes no other lock and never waits on a ``users`` row:
   acting user's ``users`` row); that same user's organization deletion or account deletion
   (that ``users`` row ``FOR UPDATE``, then the organization); and a decision or an export
   emitting a notification (the organization ``KEY SHARE``, then the workspace ``KEY SHARE``
-  here). PostgreSQL then aborts one of the three with a deadlock error. This is open: nothing
-  here prevents it.
+  here). PostgreSQL then aborts at least one of the three with a deadlock error. This is open:
+  nothing here prevents it.
 On SQLite every lock compiles to nothing; the single writer serializes.
 
 Steps 1-3 are the caller's contract. A breach raises :class:`NotificationContractError`

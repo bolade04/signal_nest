@@ -199,8 +199,8 @@ write (the workspace ``FOR UPDATE``, then its audit row's foreign key on the act
 ``users`` row); that same user's organization deletion or account deletion (that ``users`` row
 ``FOR UPDATE``, then the organization); and a decision or an export emitting a notification (the
 organization ``KEY SHARE``, then the workspace ``KEY SHARE`` for its notification rows).
-PostgreSQL then aborts one of the three with a deadlock error. This is open: nothing in this
-module or in the emitter prevents it.
+PostgreSQL then aborts at least one of the three with a deadlock error. This is open: nothing in
+this module or in the emitter prevents it.
 
 **The latest decision controls.** Decisions are append-only; a change of mind is a new
 row. The controlling decision of a subject version is the row with the highest
