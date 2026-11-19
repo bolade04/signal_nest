@@ -82,10 +82,32 @@ Every check after that is its own statement under READ COMMITTED, so it reads wh
 before the lock it follows: the controlling decision under the draft lock, the brief's
 controlling decision under the brief lock. An export therefore never commits after a
 committed rejection or revocation of its draft, or after a committed decision that withdrew
-its brief's approval. The row locks exist on PostgreSQL; on SQLite each compiles to a plain
-read, as for a decision, and a refusal still writes nothing. The claims library is read as it
-stands at that statement; a library write is not serialized with an export (nor with a draft
-approval).
+its brief's approval. The claims library is read as it stands at that statement; a library write
+is not serialized with an export (nor with a draft approval).
+
+**On SQLite** the row locks do not exist: the four statements compile to plain reads, and a read
+holds nothing once it has returned. There, after the role and the capability (a dark workspace
+still takes nothing) and before the first of the four statements, :func:`create_export` takes
+the database's one writer lock (:func:`app.db.sqlite_writer.hold_sqlite_writer_lock`, ``BEGIN
+IMMEDIATE``), and its transaction holds it to its end. A decision, an organization deletion or
+an account erasure that has written and not yet committed is waited for and then read by the
+checks, with the answers above (409, 404, 401); one that has not written yet waits at its own
+first write until the export has committed, and account erasure takes the same lock before it
+reads which rows name the account, so it then finds the export's rows. The differences from
+PostgreSQL:
+
+* the lock is the whole database's. An export in flight delays every other writer of every
+  tenant and first waits for any writer in flight, and two exports run one after the other. A
+  wait lasts at most the connection's busy timeout (five seconds); then the waiting request
+  fails with a server error (500) and writes nothing. That includes an export that would have
+  been refused: its 401, 404 or 409 is decided only once it holds the lock;
+* a decision that waited for an export was given its ``created_at`` before it waited (the row is
+  stamped when it is flushed), so the two rows' ``created_at`` values can state the reverse of
+  the commit order, by no more than that wait. Which decision controls is ``decision_seq``, not
+  ``created_at``;
+* only the export, account erasure and invitee-email erasure take the lock. What a decision
+  itself read before its own first write (the decider's role, the brief's approval for a draft
+  approval) is not held to its commit on SQLite.
 
 The export history (:func:`list_exports`) is gated the same way (capability, the history's
 role set, the same scoped 404) and never returns rendered text.
@@ -126,6 +148,7 @@ from app.core.errors import (
 from app.core.logging import get_logger, log_event
 from app.creative.models import ContentReview, CreativeDraft
 from app.creative.service import DRAFT_NOT_FOUND, draft_approval_refusal, get_scoped_draft
+from app.db.sqlite_writer import hold_sqlite_writer_lock
 from app.exports.models import Export
 from app.exports.policy import EXPORT_HISTORY_READER_ROLES, EXPORTER_ROLES
 from app.exports.render import ExportSource, render_export
@@ -436,11 +459,15 @@ def create_export(
     locked), 404 (the organization is gone, or the draft or its brief is unknown, foreign,
     soft-deleted or gone) or 409 (preconditions 5, P12, 3 and 2 of the module docstring, in
     that order). After the capability and before every other check it takes the export's row
-    locks (:func:`_lock_for_export`), which the caller's transaction holds until it ends.
+    locks (:func:`_lock_for_export`), which the caller's transaction holds until it ends; on
+    SQLite, where those are plain reads, it first takes the database's writer lock (module
+    docstring, "On SQLite"), and a request that cannot get it within the busy timeout fails
+    with a server error and writes nothing.
     """
     export_format = ExportFormat(export_format)
     _require_role(ctx, EXPORTER_ROLES)
     require_export_feature(db, ctx, settings)
+    hold_sqlite_writer_lock(db)  # SQLite only; module docstring, "On SQLite"
     draft, brief = _lock_for_export(db, ctx, draft_id)
     jurisdiction_code = _require_jurisdiction(draft, brief, ctx)
     approval = _require_approved(db, draft, ctx)
