@@ -526,8 +526,9 @@ class Settings(BaseSettings):
     # --- Project Phase 5C: creative generation (W21 CF-2) — BEGIN -------------
     #: Master switch for text creative generation (dark by default). Bound to
     #: ``Capability.CREATIVE_GENERATION``, which is ``workspace_enableable`` (O-3), so
-    #: availability is the capability resolver's per-workspace decision. CF-2 adds the
-    #: flag, the capability and the contracts only: nothing consumes it yet.
+    #: availability is the capability resolver's per-workspace decision. CF-2 added the
+    #: flag, the capability and the contracts only (nothing consumed it then); since 5C the
+    #: creative routes and the generation service decide on it through the resolver.
     creative_generation_enabled: bool = False
     #: The four 5C cost and quota ceilings. **None has an approved value**: ``None``
     #: means "not configured", and the 5C generation service must refuse every

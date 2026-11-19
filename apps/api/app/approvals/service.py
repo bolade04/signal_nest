@@ -154,7 +154,8 @@ of step 7)                              (``KEY SHARE`` against its ``FOR       m
 
 So each path either takes, as its first contested lock, a row the decision takes earlier in the
 same order (the user, or the organization), or holds nothing the decision waits for. Two
-transactions therefore never each hold a row the other waits on. The organization is taken
+transactions therefore never each hold a row the other waits on (the argument is for two
+transactions; for three, see the known limit AD-NOTIF-LOCK-01 below). The organization is taken
 after the user because account deletion locks the user, then its organizations: the reverse
 order would cycle with it. The membership ``FOR SHARE`` is still taken and held to commit, as
 ruled; with step 2 before it, a membership writer that takes the organization first never
@@ -190,6 +191,16 @@ write holds the workspace ``FOR UPDATE`` and waits on nothing an export holds, s
 notification rows (step 7's locks, with the organization already held) can only wait for it.
 Two exports hold ``SHARE`` and ``KEY SHARE`` together and never wait for each other. Each order
 is exercised on PostgreSQL in ``test_i5e_export_serialization.py``.
+
+**Known limit: a ring of three transactions (AD-NOTIF-LOCK-01).** Every "no" of the table, and
+"can only wait for it" above, is an argument about two transactions. While notifications are
+on, three can wait in a ring through the workspace row of step 7: a schedule-cap or override
+write (the workspace ``FOR UPDATE``, then its audit row's foreign key on the acting user's
+``users`` row); that same user's organization deletion or account deletion (that ``users`` row
+``FOR UPDATE``, then the organization); and a decision or an export emitting a notification (the
+organization ``KEY SHARE``, then the workspace ``KEY SHARE`` for its notification rows).
+PostgreSQL then aborts one of the three with a deadlock error. This is open: nothing in this
+module or in the emitter prevents it.
 
 **The latest decision controls.** Decisions are append-only; a change of mind is a new
 row. The controlling decision of a subject version is the row with the highest

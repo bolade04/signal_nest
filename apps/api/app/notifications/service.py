@@ -47,8 +47,16 @@ references. The emitter takes no other lock and never waits on a ``users`` row:
   generation's ``NO KEY UPDATE``. For a decision and for an export (whose rows are FK-less on
   the workspace) it is new: it can wait only for a capability-override or schedule-cap
   mutation (``FOR UPDATE`` on the workspace). Neither waits on any row a decision or an export
-  holds, so no cycle forms. Organization deletion locks the organization first, which the
-  decision or the export already holds.
+  holds, so no cycle of two transactions forms. Organization deletion locks the organization
+  first, which the decision or the export already holds.
+* **Known limit, three transactions (AD-NOTIF-LOCK-01).** The no-cycle argument above is for
+  two transactions. Three can wait in a ring through the workspace row: a schedule-cap or
+  override write (the workspace ``FOR UPDATE``, then its audit row's foreign key on the
+  acting user's ``users`` row); that same user's organization deletion or account deletion
+  (that ``users`` row ``FOR UPDATE``, then the organization); and a decision or an export
+  emitting a notification (the organization ``KEY SHARE``, then the workspace ``KEY SHARE``
+  here). PostgreSQL then aborts one of the three with a deadlock error. This is open: nothing
+  here prevents it.
 On SQLite every lock compiles to nothing; the single writer serializes.
 
 Steps 1-3 are the caller's contract. A breach raises :class:`NotificationContractError`

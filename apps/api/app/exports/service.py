@@ -431,9 +431,12 @@ def create_export(
 ) -> ExportResult:
     """Check the six preconditions, then record and render one export. Flushes only.
 
-    Raises (writing nothing) 403, 503, 404 or 409 in the order of the module docstring. After
-    the capability and before every other check it takes the export's row locks
-    (:func:`_lock_for_export`), which the caller's transaction holds until it ends.
+    Raises (writing nothing), in the order the code answers: 403 (the role), 503 (the
+    capability), 401 (the exporter's account no longer exists when its ``users`` row is
+    locked), 404 (the organization is gone, or the draft or its brief is unknown, foreign,
+    soft-deleted or gone) or 409 (preconditions 5, P12, 3 and 2 of the module docstring, in
+    that order). After the capability and before every other check it takes the export's row
+    locks (:func:`_lock_for_export`), which the caller's transaction holds until it ends.
     """
     export_format = ExportFormat(export_format)
     _require_role(ctx, EXPORTER_ROLES)
