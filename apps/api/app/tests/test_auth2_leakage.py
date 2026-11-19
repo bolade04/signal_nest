@@ -777,7 +777,13 @@ class TestOpenApiContract:
         # a customer (workspace member) read, not an account-mail operation.
         # 141 -> 142 (W21 ADDR): PUT .../locations/{location_id}/geo-coverage/
         # locality-confirmation, a customer (editor) write, not an account-mail operation.
-        assert count == 142
+        # 142 -> 151 (Project Phase 5E, I-5E stage 1; recomputed from the served routes):
+        # POST and GET .../drafts/{draft_id}/exports and GET .../export-capability (5E-W1);
+        # GET .../analytics (5E-W2); GET .../notifications, POST .../notifications/
+        # {notification_id}/read, GET and PUT .../notification-preferences and GET
+        # .../notifications-analytics-capability (5E-W3). All customer (workspace) routes,
+        # none token-bearing and none an account-mail operation of this module.
+        assert count == 151
 
     def test_no_token_in_any_path_query_or_header_anywhere(self, doc: dict):
         for path, item in doc["paths"].items():

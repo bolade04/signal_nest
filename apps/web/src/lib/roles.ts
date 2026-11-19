@@ -302,3 +302,45 @@ export function canReadApprovalHistory(role: RoleInput): boolean {
   return isRole(role) && APPROVAL_HISTORY_READER_ROLES.has(role);
 }
 // ---- Phase 5B approvals (W21 lane P5B) — end ---------------------------------------
+
+// ---- Project Phase 5E (I-5E) — begin ---------------------------------------------------
+
+// `require_analytics_reader` — `ANALYTICS_READER_ROLES` (apps/api/app/analytics/policy.py).
+const ANALYTICS_READER_ROLES: ReadonlySet<Role> = new Set<Role>([
+  'owner',
+  'admin',
+  'marketer',
+  'reviewer',
+]);
+
+// `require_exporter` — `EXPORTER_ROLES` (apps/api/app/exports/policy.py).
+const EXPORTER_ROLES: ReadonlySet<Role> = new Set<Role>(['owner', 'admin', 'marketer']);
+
+// `require_export_history_reader` — `EXPORT_HISTORY_READER_ROLES` (exports/policy.py): the
+// analytics set plus `compliance_reviewer` (operator ruling on D-N4 item 32).
+const EXPORT_HISTORY_READER_ROLES: ReadonlySet<Role> = new Set<Role>([
+  'owner',
+  'admin',
+  'marketer',
+  'reviewer',
+  'compliance_reviewer',
+]);
+
+/**
+ * Reading status analytics — exactly owner, admin, marketer or reviewer, by name. Viewer
+ * and compliance_reviewer are refused (the API answers 403).
+ */
+export function canReadAnalytics(role: RoleInput): boolean {
+  return isRole(role) && ANALYTICS_READER_ROLES.has(role);
+}
+
+/** Exporting an approved draft version — exactly owner, admin or marketer. */
+export function canExportDrafts(role: RoleInput): boolean {
+  return isRole(role) && EXPORTER_ROLES.has(role);
+}
+
+/** Reading a draft's export history — every role except `viewer`, by name (item 32). */
+export function canReadExportHistory(role: RoleInput): boolean {
+  return isRole(role) && EXPORT_HISTORY_READER_ROLES.has(role);
+}
+// ---- Project Phase 5E (I-5E) — end -----------------------------------------------------

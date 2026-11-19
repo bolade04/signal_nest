@@ -5,7 +5,7 @@ import { useAuth } from '@/auth/AuthContext';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { App } from '@/App';
 import { API_PREFIX } from '@/api/config';
-import { contextModel } from '@/test/handlers';
+import { analyticsFixture, contextModel } from '@/test/handlers';
 import { server } from '@/test/server';
 import { renderApp, renderProductionApp } from '@/test/utils';
 
@@ -17,7 +17,9 @@ import { renderApp, renderProductionApp } from '@/test/utils';
  * Since I-5D the inventory has 18: the Phase 5D campaign pages at `/campaigns` and
  * `/campaigns/:campaignId`, which no flag gates. The flag-gated routes mounted at I-5B
  * (`/approvals`) and I-5C (`/creative`, `/creative/:briefId`) are not in this inventory;
- * their integration suites cover them.
+ * their integration suites cover them. The status analytics route mounted at I-5E
+ * (`/analytics`) is covered in its own block below: it always resolves, and its nav entry
+ * exists only for a reader while O-12(B)'s capability resolves enabled.
  */
 
 /** The router's current URL, as the app sees it. */
@@ -258,4 +260,59 @@ describe('sign-in returns only to app paths (PR #234 F1)', () => {
       expect(screen.getByRole('navigation', { name: 'Primary' })).toBeInTheDocument();
     },
   );
+});
+
+/**
+ * I-5E: `/analytics` (5E-W2's page). It resolves for every signed-in member; while
+ * `notifications_analytics` is off for the workspace (the shipped default) it shows the dark
+ * state, sends no analytics request and has no nav entry; once on, the entry appears and is
+ * the active one.
+ */
+describe('the status analytics route (I-5E)', () => {
+  function countAnalyticsRequests() {
+    const seen = { analytics: 0 };
+    server.use(
+      http.get(P('/workspaces/:ws/analytics'), ({ params }) => {
+        seen.analytics += 1;
+        return HttpResponse.json(analyticsFixture(String(params.ws)));
+      }),
+    );
+    return seen;
+  }
+
+  it('renders the dark state with no nav entry and no analytics request by default', async () => {
+    const seen = countAnalyticsRequests();
+    const screen = renderApp(app, { route: '/analytics' });
+    expect(await screen.findByRole('heading', { level: 1, name: 'Status analytics' })).toBeInTheDocument();
+    expect(
+      await screen.findByText('Status analytics is not available for this workspace yet'),
+    ).toBeInTheDocument();
+    expect(routerLocation(screen)).toBe('/analytics');
+    const nav = screen.getByRole('navigation', { name: 'Primary' });
+    expect(within(nav).queryByRole('link', { name: 'Analytics' })).not.toBeInTheDocument();
+    expect(activeNavLabels(screen)).toEqual([]);
+    expect(seen.analytics).toBe(0);
+  });
+
+  it('shows the active nav entry and the figures once the capability is on', async () => {
+    server.use(
+      http.get(P('/workspaces/:ws/notifications-analytics-capability'), () =>
+        HttpResponse.json({ enabled: true }),
+      ),
+    );
+    const seen = countAnalyticsRequests();
+    const screen = renderApp(app, { route: '/analytics' });
+    expect(await screen.findByRole('heading', { level: 2, name: 'Counts by state' })).toBeInTheDocument();
+    expect(routerLocation(screen)).toBe('/analytics');
+    expect(activeNavLabels(screen)).toEqual(['Analytics']);
+    expect(seen.analytics).toBeGreaterThan(0);
+  });
+
+  it('sends a signed-out visitor to sign-in, then back after sign-in', async () => {
+    const screen = renderApp(app, { route: '/analytics?from=inventory', authed: false });
+    expect(await screen.findByRole('heading', { level: 1, name: 'Sign in' })).toBeInTheDocument();
+    await screen.user.click(screen.getByRole('button', { name: /use demo account/i }));
+    expect(await screen.findByRole('heading', { level: 1, name: 'Status analytics' })).toBeInTheDocument();
+    expect(routerLocation(screen)).toBe('/analytics?from=inventory');
+  });
 });

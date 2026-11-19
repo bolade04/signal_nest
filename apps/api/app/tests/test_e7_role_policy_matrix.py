@@ -98,6 +98,10 @@ APPROVERS = (REVIEWER,)  # require_exact_roles(REVIEWER) -- Phase 5B, O-2 (appro
 APPROVAL_HISTORY_READERS = (OWNER, ADMIN, MARKETER, REVIEWER, COMPLIANCE)  # Phase 5B
 #: W21 CF-2: the claims library is a protected control -- exact roles, marketers excluded.
 CLAIMS_STEWARDS = (OWNER, ADMIN, COMPLIANCE)  # require_exact_roles(...) -- CF-2
+#: Project Phase 5E (exports.policy, analytics.policy; item 32 for the export history).
+EXPORTERS = (OWNER, ADMIN, MARKETER)  # require_exporter
+EXPORT_HISTORY_READERS = (OWNER, ADMIN, MARKETER, REVIEWER, COMPLIANCE)  # item 32
+ANALYTICS_READERS = (OWNER, ADMIN, MARKETER, REVIEWER)  # require_analytics_reader
 
 # Categories.
 RANK_FLOOR = "role_gated_workspace_rank_floor"
@@ -148,6 +152,9 @@ FEEDBACK_DARK = "Opportunity feedback is not available yet."
 BRIEFS_DARK = "Recommendation briefs are not available yet."  # Project Phase 5A
 APPROVALS_DARK = "Recommendation briefs and approvals are not available yet."  # Phase 5B
 CREATIVE_DARK = "Creative generation is not available yet."
+EXPORT_DARK = "Export is not available yet."  # Project Phase 5E, content_export
+ANALYTICS_DARK = "Status analytics is not available yet."  # 5E, O-12(B)
+NOTIFICATIONS_DARK = "Notifications are not available yet."  # 5E, O-12(B)
 # New in 6B-3A. Messages are the service's; the codes are frozen by the contract (§50).
 INVITATION_NOT_FOUND = ("invitation_not_found", "Invitation not found.")
 MEMBER_NOT_FOUND = ("member_not_found", "Member not found.")
@@ -391,6 +398,23 @@ E7_POLICY: tuple[Policy, ...] = (
         WS_EXACT,
         _dark_503(CREATIVE_DARK),
     ),
+    # --- role-gated, workspace scope, exact set -- Project Phase 5E (I-5E) -----------------
+    # Audited manual export (5E-W1): exporting is OWNER/ADMIN/MARKETER (POST: the body is
+    # validated after the gate); the history adds REVIEWER and COMPLIANCE_REVIEWER (item 32)
+    # and is dark behind content_export (503). Status analytics (5E-W2): the analytics set,
+    # dark behind O-12(B)'s notifications_analytics (503).
+    _row("POST", f"{_W}/drafts/{{draft_id}}/exports", "workspace", EXPORTERS, WS_EXACT,
+         _body_422()),
+    _row(
+        "GET",
+        f"{_W}/drafts/{{draft_id}}/exports",
+        "workspace",
+        EXPORT_HISTORY_READERS,
+        WS_EXACT,
+        _dark_503(EXPORT_DARK),
+    ),
+    _row("GET", f"{_W}/analytics", "workspace", ANALYTICS_READERS, WS_EXACT,
+         _dark_503(ANALYTICS_DARK)),
     # --- role-gated, organization scope, exact set ------------------------------------------
     _row("POST", f"{_O}/workspaces", "organization", ORG_ADMINS, ORG_EXACT, _body_422()),
     _row("POST", f"{_O}/invitations", "organization", ORG_ADMINS, ORG_EXACT, _body_422()),
@@ -505,6 +529,30 @@ E7_POLICY: tuple[Policy, ...] = (
     # Project Phase 5A: the workspace-effective brief reflection, member-gated like the
     # brief reads it describes and never 503 (it reports the capability decision).
     _row("GET", f"{_W}/brief-capability", "workspace", ALL_ROLES, MEMBER_WS, OK_200),
+    # Project Phase 5E (I-5E): the export reflection (5E-W1) and the O-12(B) reflection
+    # (5E-W3) are member-gated and never 503. The notification routes (5E-W3) are every
+    # member's own feed and preferences, dark behind O-12(B): the router-level gate answers
+    # 503 before any id lookup or body validation.
+    _row("GET", f"{_W}/export-capability", "workspace", ALL_ROLES, MEMBER_WS, OK_200),
+    _row(
+        "GET", f"{_W}/notifications-analytics-capability", "workspace", ALL_ROLES, MEMBER_WS,
+        OK_200,
+    ),
+    _row("GET", f"{_W}/notifications", "workspace", ALL_ROLES, MEMBER_WS,
+         _dark_503(NOTIFICATIONS_DARK)),
+    _row(
+        "POST",
+        f"{_W}/notifications/{{notification_id}}/read",
+        "workspace",
+        ALL_ROLES,
+        MEMBER_WS,
+        _dark_503(NOTIFICATIONS_DARK),
+    ),
+    *(
+        _row(method, f"{_W}/notification-preferences", "workspace", ALL_ROLES, MEMBER_WS,
+             _dark_503(NOTIFICATIONS_DARK))
+        for method in ("GET", "PUT")
+    ),
     # Project Phase 5A: brief reads are member-gated like the opportunity they belong to
     # (a 5B reviewer reads the brief it approves); dark by default, so the probe is the 503.
     *(
@@ -688,9 +736,13 @@ class TestPolicyTableCompleteness:
             # the creative-capability reflection). Recomputed from the served routes.
             # +2 W21 P5C draft decisions (POST and GET .../drafts/{draft_id}/approvals).
             # +1 W21 ADDR (PUT .../geo-coverage/locality-confirmation).
-            "role_gated": 66,
+            # +3 Project Phase 5E (I-5E): POST and GET .../drafts/{draft_id}/exports, GET
+            # .../analytics.
+            "role_gated": 69,
             # +1 Project Phase 5D (5D-W1): GET /workspaces/{workspace_id}/campaigns/{item_id}.
-            MEMBER_WS: 32,
+            # +6 Project Phase 5E (I-5E): the export and O-12(B) reflections and the four
+            # notification routes.
+            MEMBER_WS: 38,
             MEMBER_ORG: 1,
             "operator": OPERATOR_ROUTE_COUNT,
             "authenticated": len(AUTHENTICATED_ONLY) + 2,
@@ -706,11 +758,13 @@ class TestPolicyTableCompleteness:
             # 1 at CF-1 (audit-logs); +3 Phase 5B (approvals); +3 W21 CF-2 (claims writes).
             # Both sides moved this pin from 1 to 4, so git kept one 4: the union is 7.
             # +2 W21 P5C (the draft decision POST and its history GET).
-            WS_EXACT: 9,
+            # +3 Project Phase 5E (the export POST and history GET, the analytics read).
+            WS_EXACT: 12,
             ORG_EXACT: 9,
             # 25 at N; +3 Phase 5A (brief reads, brief-capability); +3 W21 P5C (draft reads,
-            # creative-capability); +1 Project Phase 5D 5D-W1 (one campaign).
-            MEMBER_WS: 32,
+            # creative-capability); +1 Project Phase 5D 5D-W1 (one campaign). +6 Project
+            # Phase 5E (two reflections, four notification routes).
+            MEMBER_WS: 38,
             MEMBER_ORG: 1,
             MEMBER_HANDLER: 2,
         }
@@ -756,7 +810,11 @@ class TestPolicyTableCompleteness:
         # a MEMBER_WS row above.
         # 141 -> 142 (W21 ADDR): PUT .../locations/{location_id}/geo-coverage/
         # locality-confirmation, a RANK_FLOOR row above.
-        assert len(served) == 142
+        # 142 -> 151 (Project Phase 5E, I-5E stage 1): three WS_EXACT rows (export POST,
+        # export history GET, analytics GET) and six MEMBER_WS rows (export-capability,
+        # notifications-analytics-capability, the notification feed, mark-read, and GET and
+        # PUT notification-preferences), all customer operations.
+        assert len(served) == 151
 
     def test_one_row_per_route(self):
         keys = [p.key for p in E7_POLICY]
@@ -765,8 +823,9 @@ class TestPolicyTableCompleteness:
     def test_rows_are_machine_readable_and_partition_the_roles(self):
         rows = json.loads(json.dumps([asdict(p) for p in E7_POLICY]))
         # 93 on the I-5AB + CF-2 base; +6 W21 P5C (the draft routes); +1 5D-W1 (one campaign).
-        # +1 W21 ADDR (the locality confirmation).
-        assert len(rows) == 101
+        # +1 W21 ADDR (the locality confirmation). +9 Project Phase 5E (I-5E stage 1: three
+        # WS_EXACT and six MEMBER_WS rows).
+        assert len(rows) == 110
         for row in rows:
             assert set(row) == {"method", "path", "scope", "allowed", "denied", "category", "probe"}
             assert set(row["allowed"]) | set(row["denied"]) == set(ALL_ROLES)
@@ -1033,6 +1092,7 @@ def _url(world: World, policy: Policy) -> tuple[str, dict[str, str] | None]:
         "{user_id}",
         "{brief_id}",  # Project Phase 5A (briefs), Phase 5B (approvals), W21 P5C (drafts)
         "{draft_id}",  # W21 P5C
+        "{notification_id}",  # Project Phase 5E (5E-W3)
     ):
         path = path.replace(name, SENTINEL)
     assert "{" not in path, path

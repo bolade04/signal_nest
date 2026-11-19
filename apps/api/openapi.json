@@ -269,6 +269,90 @@
         "title": "AccountExportOut",
         "type": "object"
       },
+      "AnalyticsOut": {
+        "additionalProperties": false,
+        "description": "Status analytics for one workspace, or one of its locations.",
+        "properties": {
+          "approval_latency": {
+            "$ref": "#/components/schemas/ApprovalLatencyOut"
+          },
+          "approvals": {
+            "$ref": "#/components/schemas/ApprovalStateCounts"
+          },
+          "briefs": {
+            "$ref": "#/components/schemas/SubjectStateCounts"
+          },
+          "drafts": {
+            "$ref": "#/components/schemas/SubjectStateCounts"
+          },
+          "exports": {
+            "$ref": "#/components/schemas/ExportStateCounts"
+          },
+          "generated_at": {
+            "format": "date-time",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "location_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location Id"
+          },
+          "locations": {
+            "items": {
+              "$ref": "#/components/schemas/LocationComparisonOut"
+            },
+            "title": "Locations",
+            "type": "array"
+          },
+          "opportunities": {
+            "$ref": "#/components/schemas/OpportunityStateCounts"
+          },
+          "outcomes": {
+            "$ref": "#/components/schemas/OutcomesOut"
+          },
+          "reviews": {
+            "$ref": "#/components/schemas/ReviewStateCounts"
+          },
+          "unassigned": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LocationTotalsOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "workspace_id": {
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspace_id",
+          "location_id",
+          "generated_at",
+          "opportunities",
+          "briefs",
+          "approvals",
+          "drafts",
+          "reviews",
+          "exports",
+          "approval_latency",
+          "outcomes",
+          "locations",
+          "unassigned"
+        ],
+        "title": "AnalyticsOut",
+        "type": "object"
+      },
       "ApprovalDecision": {
         "description": "The closed decision vocabulary of an append-only approval row (Phase 5B).\n\nA change of mind is a new row, never an edit: ``revoked`` withdraws an earlier\napproval of the same subject version. The controlling decision for a subject version\nis the row with the highest ``decision_seq``; consumers gate on that latest row,\nnever on \"an approved row exists\".",
         "enum": [
@@ -351,6 +435,24 @@
           "offset"
         ],
         "title": "ApprovalHistoryOut",
+        "type": "object"
+      },
+      "ApprovalLatencyOut": {
+        "additionalProperties": false,
+        "description": "Approval latency, for briefs and for drafts separately.",
+        "properties": {
+          "briefs": {
+            "$ref": "#/components/schemas/LatencyOut"
+          },
+          "drafts": {
+            "$ref": "#/components/schemas/LatencyOut"
+          }
+        },
+        "required": [
+          "briefs",
+          "drafts"
+        ],
+        "title": "ApprovalLatencyOut",
         "type": "object"
       },
       "ApprovalOut": {
@@ -492,6 +594,52 @@
         ],
         "title": "ApprovalReason",
         "type": "string"
+      },
+      "ApprovalStateCounts": {
+        "additionalProperties": false,
+        "description": "Approval decision rows in scope (append-only; a change of mind is a new row).\n\nBy decision (``approved`` + ``rejected`` + ``revoked`` = ``total``) and by subject\n(``on_briefs`` + ``on_drafts`` = ``total``).",
+        "properties": {
+          "approved": {
+            "minimum": 0.0,
+            "title": "Approved",
+            "type": "integer"
+          },
+          "on_briefs": {
+            "minimum": 0.0,
+            "title": "On Briefs",
+            "type": "integer"
+          },
+          "on_drafts": {
+            "minimum": 0.0,
+            "title": "On Drafts",
+            "type": "integer"
+          },
+          "rejected": {
+            "minimum": 0.0,
+            "title": "Rejected",
+            "type": "integer"
+          },
+          "revoked": {
+            "minimum": 0.0,
+            "title": "Revoked",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "approved",
+          "rejected",
+          "revoked",
+          "on_briefs",
+          "on_drafts"
+        ],
+        "title": "ApprovalStateCounts",
+        "type": "object"
       },
       "ApprovalSubjectType": {
         "description": "What an approval decides on (Phase 5B).\n\nClosed: recommendation briefs since CF-1; ``creative_draft`` joined at CF-2 (Phase\n5C), together with the widening migration of the matching CHECK.",
@@ -1679,7 +1827,8 @@
           "connector_rss",
           "recommendation_briefs",
           "creative_generation",
-          "content_export"
+          "content_export",
+          "notifications_analytics"
         ],
         "title": "Capability",
         "type": "string"
@@ -3156,6 +3305,251 @@
         "title": "ErasureVerificationOut",
         "type": "object"
       },
+      "ExportCapabilityOut": {
+        "description": "Customer-visible export availability for one workspace.\n\nExactly one field (the ``RecommendationBriefCapabilityOut`` precedent): no governance\nmetadata (deciding rule, global flag, override) reaches a customer. Returned by\n``GET /workspaces/{workspace_id}/export-capability`` with 200 while export is dark\n(interface sheet P7), so the UI can show the dark state without calling an export route.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "ExportCapabilityOut",
+        "type": "object"
+      },
+      "ExportFormat": {
+        "description": "The closed set of manual-export render formats (Phase 5E). Text only.",
+        "enum": [
+          "text/plain",
+          "text/markdown",
+          "json"
+        ],
+        "title": "ExportFormat",
+        "type": "string"
+      },
+      "ExportHistoryItemOut": {
+        "description": "One audited export record of one draft version (no rendered text).",
+        "properties": {
+          "approval_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Id"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "draft_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Id"
+          },
+          "draft_version": {
+            "title": "Draft Version",
+            "type": "integer"
+          },
+          "exported_by_snapshot": {
+            "title": "Exported By Snapshot",
+            "type": "string"
+          },
+          "format": {
+            "$ref": "#/components/schemas/ExportFormat"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_simulated": {
+            "title": "Is Simulated",
+            "type": "boolean"
+          },
+          "jurisdiction_code": {
+            "title": "Jurisdiction Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "draft_id",
+          "draft_version",
+          "approval_id",
+          "format",
+          "jurisdiction_code",
+          "exported_by_snapshot",
+          "is_simulated",
+          "created_at"
+        ],
+        "title": "ExportHistoryItemOut",
+        "type": "object"
+      },
+      "ExportHistoryOut": {
+        "description": "A bounded page of one draft version's exports, newest first.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ExportHistoryItemOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "ExportHistoryOut",
+        "type": "object"
+      },
+      "ExportIn": {
+        "additionalProperties": false,
+        "description": "Export one approved draft version in one format.",
+        "properties": {
+          "format": {
+            "$ref": "#/components/schemas/ExportFormat"
+          }
+        },
+        "required": [
+          "format"
+        ],
+        "title": "ExportIn",
+        "type": "object"
+      },
+      "ExportOut": {
+        "description": "The export just recorded, with its rendered text.",
+        "properties": {
+          "approval_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Id"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "draft_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Id"
+          },
+          "draft_version": {
+            "title": "Draft Version",
+            "type": "integer"
+          },
+          "exported_by_snapshot": {
+            "title": "Exported By Snapshot",
+            "type": "string"
+          },
+          "format": {
+            "$ref": "#/components/schemas/ExportFormat"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_simulated": {
+            "title": "Is Simulated",
+            "type": "boolean"
+          },
+          "jurisdiction_code": {
+            "title": "Jurisdiction Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "draft_id",
+          "draft_version",
+          "approval_id",
+          "format",
+          "jurisdiction_code",
+          "exported_by_snapshot",
+          "is_simulated",
+          "created_at",
+          "content"
+        ],
+        "title": "ExportOut",
+        "type": "object"
+      },
+      "ExportStateCounts": {
+        "additionalProperties": false,
+        "description": "Manual exports in scope by render format (``ExportFormat``); a partition.\n\n``plain_text`` = ``text/plain``, ``markdown`` = ``text/markdown``, ``json_document`` =\n``json`` (a field named ``json`` would shadow ``BaseModel.json``).",
+        "properties": {
+          "json_document": {
+            "minimum": 0.0,
+            "title": "Json Document",
+            "type": "integer"
+          },
+          "markdown": {
+            "minimum": 0.0,
+            "title": "Markdown",
+            "type": "integer"
+          },
+          "plain_text": {
+            "minimum": 0.0,
+            "title": "Plain Text",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "plain_text",
+          "markdown",
+          "json_document"
+        ],
+        "title": "ExportStateCounts",
+        "type": "object"
+      },
       "ExportSubjectOut": {
         "properties": {
           "organization_id": {
@@ -3245,6 +3639,10 @@
             "title": "Creative Generation Enabled",
             "type": "boolean"
           },
+          "notifications_analytics_enabled": {
+            "title": "Notifications Analytics Enabled",
+            "type": "boolean"
+          },
           "opportunity_feedback_enabled": {
             "title": "Opportunity Feedback Enabled",
             "type": "boolean"
@@ -3264,7 +3662,8 @@
           "connector_rss_enabled",
           "recommendation_briefs_enabled",
           "creative_generation_enabled",
-          "content_export_enabled"
+          "content_export_enabled",
+          "notifications_analytics_enabled"
         ],
         "title": "FeatureFlagsOut",
         "type": "object"
@@ -5245,6 +5644,46 @@
         "title": "JobsOverviewOut",
         "type": "object"
       },
+      "LatencyOut": {
+        "additionalProperties": false,
+        "description": "Time from a subject version's creation to its first decision, over decided versions.\n\n``decided`` counts the versions in scope with at least one decision. ``mean_seconds`` and\n``median_seconds`` are ``None`` while ``decided`` is 0: there is nothing to measure.",
+        "properties": {
+          "decided": {
+            "minimum": 0.0,
+            "title": "Decided",
+            "type": "integer"
+          },
+          "mean_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean Seconds"
+          },
+          "median_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Median Seconds"
+          }
+        },
+        "required": [
+          "decided",
+          "mean_seconds",
+          "median_seconds"
+        ],
+        "title": "LatencyOut",
+        "type": "object"
+      },
       "LocalityConfirmationIn": {
         "description": "Confirm (``true``) that the saved business town or locality lies within this location's\narea, or withdraw that confirmation (``false``). The confirmation is the customer's own\nstatement: confirmed by the customer.",
         "properties": {
@@ -5441,6 +5880,61 @@
           "name"
         ],
         "title": "LocationBase",
+        "type": "object"
+      },
+      "LocationComparisonOut": {
+        "additionalProperties": false,
+        "description": "One location of the workspace in the per-location comparison.",
+        "properties": {
+          "approvals": {
+            "minimum": 0.0,
+            "title": "Approvals",
+            "type": "integer"
+          },
+          "briefs": {
+            "minimum": 0.0,
+            "title": "Briefs",
+            "type": "integer"
+          },
+          "drafts": {
+            "minimum": 0.0,
+            "title": "Drafts",
+            "type": "integer"
+          },
+          "exports": {
+            "minimum": 0.0,
+            "title": "Exports",
+            "type": "integer"
+          },
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "location_id": {
+            "title": "Location Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "opportunities": {
+            "minimum": 0.0,
+            "title": "Opportunities",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "opportunities",
+          "briefs",
+          "drafts",
+          "approvals",
+          "exports",
+          "location_id",
+          "name",
+          "is_active"
+        ],
+        "title": "LocationComparisonOut",
         "type": "object"
       },
       "LocationOut": {
@@ -5647,6 +6141,46 @@
         "title": "LocationOut",
         "type": "object"
       },
+      "LocationTotalsOut": {
+        "additionalProperties": false,
+        "description": "Per-family totals for one comparison row (the same scope rules as the families).",
+        "properties": {
+          "approvals": {
+            "minimum": 0.0,
+            "title": "Approvals",
+            "type": "integer"
+          },
+          "briefs": {
+            "minimum": 0.0,
+            "title": "Briefs",
+            "type": "integer"
+          },
+          "drafts": {
+            "minimum": 0.0,
+            "title": "Drafts",
+            "type": "integer"
+          },
+          "exports": {
+            "minimum": 0.0,
+            "title": "Exports",
+            "type": "integer"
+          },
+          "opportunities": {
+            "minimum": 0.0,
+            "title": "Opportunities",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "opportunities",
+          "briefs",
+          "drafts",
+          "approvals",
+          "exports"
+        ],
+        "title": "LocationTotalsOut",
+        "type": "object"
+      },
       "LoginRequest": {
         "properties": {
           "email": {
@@ -5739,6 +6273,167 @@
           "role"
         ],
         "title": "MembershipOut",
+        "type": "object"
+      },
+      "NotificationEventCode": {
+        "description": "The closed vocabulary of in-app notification events (Phase 5E).\n\nExactly the five events the 5E plan names. Each event's ``subject_id`` names one row:\n``brief.created`` a ``recommendation_briefs`` row, ``approval.decided`` an ``approvals``\nrow, ``draft.generated`` a ``creative_drafts`` row, ``review.blocked`` a\n``content_reviews`` row and ``export.completed`` an ``exports`` row\n(:data:`NOTIFICATION_SUBJECT_TABLES`). In-app only: no event is ever mailed or texted.",
+        "enum": [
+          "brief.created",
+          "approval.decided",
+          "draft.generated",
+          "review.blocked",
+          "export.completed"
+        ],
+        "title": "NotificationEventCode",
+        "type": "string"
+      },
+      "NotificationFeedOut": {
+        "description": "One page of the session user's feed in this workspace, newest first.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/NotificationOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "unread": {
+            "title": "Unread",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "unread",
+          "limit",
+          "offset"
+        ],
+        "title": "NotificationFeedOut",
+        "type": "object"
+      },
+      "NotificationOut": {
+        "description": "One of the session user's notifications.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "event_code": {
+            "$ref": "#/components/schemas/NotificationEventCode"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "read_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Read At"
+          },
+          "subject_id": {
+            "title": "Subject Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "event_code",
+          "subject_id",
+          "created_at",
+          "read_at"
+        ],
+        "title": "NotificationOut",
+        "type": "object"
+      },
+      "NotificationPreferenceItem": {
+        "additionalProperties": false,
+        "description": "Whether one event code is delivered to the session user in this workspace.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "event_code": {
+            "$ref": "#/components/schemas/NotificationEventCode"
+          }
+        },
+        "required": [
+          "event_code",
+          "enabled"
+        ],
+        "title": "NotificationPreferenceItem",
+        "type": "object"
+      },
+      "NotificationPreferencesOut": {
+        "description": "Every event code, in the vocabulary's order (no stored choice: delivered).",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/NotificationPreferenceItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "NotificationPreferencesOut",
+        "type": "object"
+      },
+      "NotificationPreferencesUpdate": {
+        "additionalProperties": false,
+        "description": "The event codes to set for the session user in this workspace; others are unchanged.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/NotificationPreferenceItem"
+            },
+            "maxItems": 5,
+            "minItems": 1,
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "NotificationPreferencesUpdate",
+        "type": "object"
+      },
+      "NotificationsAnalyticsCapabilityOut": {
+        "description": "Customer-visible availability of notifications and analytics for one workspace.\n\nExactly one field (the ``FeedbackCapabilityOut`` precedent): no governance metadata\n(deciding rule, global flag, override) reaches a customer. Returned by\n``GET /workspaces/{workspace_id}/notifications-analytics-capability`` (O-12(B)).",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "NotificationsAnalyticsCapabilityOut",
         "type": "object"
       },
       "OfferIn": {
@@ -6718,6 +7413,52 @@
         "title": "OpportunityIntelligenceResponse",
         "type": "object"
       },
+      "OpportunityStateCounts": {
+        "additionalProperties": false,
+        "description": "Opportunities in scope by their workflow ``status`` (``OpportunityStatus``).\n\n``total`` counts every row in scope; each named state counts the rows carrying it.",
+        "properties": {
+          "actioned": {
+            "minimum": 0.0,
+            "title": "Actioned",
+            "type": "integer"
+          },
+          "ignored": {
+            "minimum": 0.0,
+            "title": "Ignored",
+            "type": "integer"
+          },
+          "monitoring": {
+            "minimum": 0.0,
+            "title": "Monitoring",
+            "type": "integer"
+          },
+          "new": {
+            "minimum": 0.0,
+            "title": "New",
+            "type": "integer"
+          },
+          "saved": {
+            "minimum": 0.0,
+            "title": "Saved",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "new",
+          "saved",
+          "monitoring",
+          "ignored",
+          "actioned"
+        ],
+        "title": "OpportunityStateCounts",
+        "type": "object"
+      },
       "OpportunityStatusUpdate": {
         "properties": {
           "status": {
@@ -6962,6 +7703,62 @@
           "slug"
         ],
         "title": "OrganizationOut",
+        "type": "object"
+      },
+      "OutcomesOut": {
+        "additionalProperties": false,
+        "description": "Generation and review outcomes.\n\nGeneration: ``drafts_generated`` versions in scope, of which ``revisions`` revise an\nearlier version and ``simulated`` came from the simulated generator. Review: the share of\ncontent reviews that passed / blocked; each rate is ``None`` while no review is in scope.",
+        "properties": {
+          "drafts_generated": {
+            "minimum": 0.0,
+            "title": "Drafts Generated",
+            "type": "integer"
+          },
+          "review_block_rate": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Block Rate"
+          },
+          "review_pass_rate": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Pass Rate"
+          },
+          "revisions": {
+            "minimum": 0.0,
+            "title": "Revisions",
+            "type": "integer"
+          },
+          "simulated": {
+            "minimum": 0.0,
+            "title": "Simulated",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "drafts_generated",
+          "revisions",
+          "simulated",
+          "review_pass_rate",
+          "review_block_rate"
+        ],
+        "title": "OutcomesOut",
         "type": "object"
       },
       "PartialFetchReason": {
@@ -7598,6 +8395,40 @@
           "organization_name"
         ],
         "title": "RegisterRequest",
+        "type": "object"
+      },
+      "ReviewStateCounts": {
+        "additionalProperties": false,
+        "description": "Content reviews in scope (one per draft version) by outcome; a partition.\n\n``passed``: nothing blocks and every required disclaimer is carried. ``blocked``: the\nclaim-safety result is blocked. ``not_passed``: neither (in practice a required\ndisclaimer is missing).",
+        "properties": {
+          "blocked": {
+            "minimum": 0.0,
+            "title": "Blocked",
+            "type": "integer"
+          },
+          "not_passed": {
+            "minimum": 0.0,
+            "title": "Not Passed",
+            "type": "integer"
+          },
+          "passed": {
+            "minimum": 0.0,
+            "title": "Passed",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "passed",
+          "blocked",
+          "not_passed"
+        ],
+        "title": "ReviewStateCounts",
         "type": "object"
       },
       "Role": {
@@ -9124,6 +9955,46 @@
           "items"
         ],
         "title": "StuckJobsOut",
+        "type": "object"
+      },
+      "SubjectStateCounts": {
+        "additionalProperties": false,
+        "description": "Brief or draft versions in scope by their derived state (no status column exists).\n\nA partition, evaluated in this order (the approval queue's reading,\n``app.approvals.service._awaiting_decision_select``):\n\n* ``superseded`` \u2014 a newer version of the same chain exists (a brief: the same\n  opportunity; a draft: the same brief); it is decided through its successor.\n* ``approved`` / ``rejected`` \u2014 the controlling decision (the highest ``decision_seq``\n  on that exact version) is that decision.\n* ``awaiting_decision`` \u2014 no decision yet, or the controlling decision is ``revoked``.\n\n``total`` = the sum of the four. Soft-deleted versions (``deleted_at`` set) are excluded.",
+        "properties": {
+          "approved": {
+            "minimum": 0.0,
+            "title": "Approved",
+            "type": "integer"
+          },
+          "awaiting_decision": {
+            "minimum": 0.0,
+            "title": "Awaiting Decision",
+            "type": "integer"
+          },
+          "rejected": {
+            "minimum": 0.0,
+            "title": "Rejected",
+            "type": "integer"
+          },
+          "superseded": {
+            "minimum": 0.0,
+            "title": "Superseded",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "awaiting_decision",
+          "approved",
+          "rejected",
+          "superseded"
+        ],
+        "title": "SubjectStateCounts",
         "type": "object"
       },
       "TakedownCaseOut": {
@@ -12894,6 +13765,83 @@
         ]
       }
     },
+    "/api/v1/workspaces/{workspace_id}/analytics": {
+      "get": {
+        "description": "Counts by state for opportunities, briefs, approvals, drafts, reviews and exports;\napproval latency; generation and review outcomes; and a per-location comparison.\n\nExact roles OWNER, ADMIN, MARKETER and REVIEWER (403 otherwise); 503 while the\nnotifications-and-analytics capability is off for the workspace; 404 for a location that\nis not this workspace's. A figure without a basis is null, never 0. No attribution or\nadvertising-performance figure.",
+        "operationId": "read_workspace_analytics_api_v1_workspaces__workspace_id__analytics_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "location_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Location Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalyticsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Status analytics for this workspace, or one of its locations",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
     "/api/v1/workspaces/{workspace_id}/approval-queue": {
       "get": {
         "description": "The workspace's briefs awaiting a decision, oldest first: the latest version of each\nopportunity's brief whose controlling decision is absent or ``revoked``. Approver role\nonly (the approver's work list). Read-only.",
@@ -15869,6 +16817,232 @@
         ]
       }
     },
+    "/api/v1/workspaces/{workspace_id}/drafts/{draft_id}/exports": {
+      "get": {
+        "description": "The draft version's export records, newest first, without their text. Read-only.",
+        "operationId": "list_draft_exports_api_v1_workspaces__workspace_id__drafts__draft_id__exports_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true,
+            "schema": {
+              "title": "Draft Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportHistoryOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "A draft version's exports, newest first",
+        "tags": [
+          "exports"
+        ]
+      },
+      "post": {
+        "description": "Record one audited export of the draft's exact version and answer its text, rendered\nin ``format`` (``text/plain``, ``text/markdown`` or ``json``).\n\nAnswers 503 ``capability_unavailable`` while export is not available for the workspace,\n404 for an unknown, foreign or deleted draft, and 409 when the draft cannot be exported:\n``export_jurisdiction_missing`` (no valid jurisdiction recorded on the draft or its brief),\n``jurisdiction_mismatch`` (the two differ), ``export_not_approved`` (the latest decision on\nthis version is not an approval) or ``export_review_blocked`` (its content review, or the\nclaims library as it stands now, does not allow it). A refusal records nothing.",
+        "operationId": "export_draft_api_v1_workspaces__workspace_id__drafts__draft_id__exports_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true,
+            "schema": {
+              "title": "Draft Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export one approved draft version (owner, admin or marketer)",
+        "tags": [
+          "exports"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/export-capability": {
+      "get": {
+        "description": "Customer-facing, workspace-effective export availability (any member). Advisory\nonly: both export endpoints re-decide and answer 503 while it is false. Answers 200 while\nexport is dark.",
+        "operationId": "read_export_capability_api_v1_workspaces__workspace_id__export_capability_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportCapabilityOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Whether export is available for this workspace",
+        "tags": [
+          "exports"
+        ]
+      }
+    },
     "/api/v1/workspaces/{workspace_id}/feedback-capability": {
       "get": {
         "description": "Customer-facing, workspace-effective feedback availability (P6-UI-005).\n\nScoped to the workspace, not an opportunity: the resolver's decision domain is\n``(capability, workspace)``, so an opportunity segment would advertise a dimension\nthe decision cannot express.\n\nEditor-gated to match the feedback routes' usable audience. A viewer cannot submit\nor read feedback, so reflecting its availability to them would disclose tenant\ngovernance state for a feature they could not use.\n\nAdvisory only. ``GET``/``POST`` feedback re-decide independently and answer 503 when\nunavailable; that remains the enforcement boundary, and this route weakens nothing.",
@@ -16822,6 +17996,341 @@
         "summary": "Reactivate Location",
         "tags": [
           "locations"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/notification-preferences": {
+      "get": {
+        "description": "Every event code with whether it is delivered to the caller here (default: delivered).",
+        "operationId": "read_notification_preferences_api_v1_workspaces__workspace_id__notification_preferences_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationPreferencesOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "The session user's notification preferences in this workspace",
+        "tags": [
+          "notifications"
+        ]
+      },
+      "put": {
+        "description": "Set the given event codes for the caller; the others are unchanged. Answers every code.",
+        "operationId": "update_notification_preferences_api_v1_workspaces__workspace_id__notification_preferences_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationPreferencesUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationPreferencesOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set the session user's notification preferences in this workspace",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/notifications": {
+      "get": {
+        "description": "A bounded page of the caller's own feed, with its total and unread counts.",
+        "operationId": "list_notifications_api_v1_workspaces__workspace_id__notifications_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationFeedOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "The session user's notifications in this workspace, newest first",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/notifications-analytics-capability": {
+      "get": {
+        "description": "Customer-facing, workspace-effective availability of notifications and analytics.\n\nAny member may read it. Advisory only: every notification and analytics endpoint\nre-decides and answers 503 while it is off. It answers 200 while dark, by design.",
+        "operationId": "read_notifications_analytics_capability_api_v1_workspaces__workspace_id__notifications_analytics_capability_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationsAnalyticsCapabilityOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Whether notifications and analytics are available for this workspace",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/notifications/{notification_id}/read": {
+      "post": {
+        "description": "Mark the caller's own notification read; the first ``read_at`` is kept.\n\nAny miss (unknown id, another workspace's, another user's, deleted) is the same 404.",
+        "operationId": "mark_notification_read_api_v1_workspaces__workspace_id__notifications__notification_id__read_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "notification_id",
+            "required": true,
+            "schema": {
+              "title": "Notification Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mark one of the session user's notifications read (idempotent)",
+        "tags": [
+          "notifications"
         ]
       }
     },

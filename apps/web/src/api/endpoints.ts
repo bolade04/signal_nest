@@ -10,6 +10,7 @@ import type {
   CreativeDraftListOut,
   CreativeDraftOut,
   CreativeGenerationQueuedOut,
+  WorkspaceAnalytics,
   AccountDeletionOut,
   AccountDeletionPreviewOut,
   AccountDeletionRequest,
@@ -60,6 +61,15 @@ import type {
   LocationOut,
   LoginRequest,
   MemberRoleUpdate,
+  NotificationFeedOut,
+  NotificationOut,
+  NotificationPreferencesOut,
+  NotificationPreferencesUpdate,
+  NotificationsAnalyticsCapability,
+  DraftExport,
+  DraftExportHistory,
+  ExportCapability,
+  ExportFormat,
   OfferIn,
   OnboardingRequest,
   OnboardingResult,
@@ -790,3 +800,92 @@ export const recordDraftDecision = (
 ) =>
   apiRequest<ApprovalOut>(draftDecisionsPath(workspaceId, draftId), { method: 'POST', body });
 // ---- I-5C integration (W21 INT5AB): decisions on one draft version — end ------------
+
+// ---- Project Phase 5E: status analytics (W21 lane 5E-W2; I-5E share) — begin -----------
+// Exact roles owner, admin, marketer and reviewer (403 otherwise); 503 capability_unavailable
+// while the notifications-and-analytics capability (O-12(B)) is off for the workspace; 404 for
+// a location that is not this workspace's. Omit `location_id` for the whole workspace.
+export const getWorkspaceAnalytics = (
+  workspaceId: string,
+  params: { location_id?: string | null } = {},
+  signal?: AbortSignal,
+) =>
+  apiRequest<WorkspaceAnalytics>(`/workspaces/${workspaceId}/analytics`, {
+    query: { location_id: params.location_id ?? undefined },
+    signal,
+  });
+// ---- Project Phase 5E: status analytics (W21 lane 5E-W2; I-5E share) — end -------------
+
+// --- Project Phase 5E: in-app notifications (W21 lane 5E-W3, I-5E share) — BEGIN ---
+// The four notification routes are gated by the O-12(B) capability: while
+// `notifications_analytics` resolves disabled for the workspace they answer 503
+// (capability_unavailable). Every one acts for the session user only; no user id is ever
+// sent. The reflection answers 200 {enabled} even while dark (the feedback-capability
+// precedent) and serves the analytics surfaces too.
+export const getNotificationsAnalyticsCapability = (workspaceId: string, signal?: AbortSignal) =>
+  apiRequest<NotificationsAnalyticsCapability>(
+    `/workspaces/${workspaceId}/notifications-analytics-capability`,
+    { signal },
+  );
+
+export const listNotifications = (
+  workspaceId: string,
+  params: { limit?: number; offset?: number } = {},
+  signal?: AbortSignal,
+) =>
+  apiRequest<NotificationFeedOut>(`/workspaces/${workspaceId}/notifications`, {
+    query: { ...params },
+    signal,
+  });
+
+export const markNotificationRead = (workspaceId: string, notificationId: string) =>
+  apiRequest<NotificationOut>(`/workspaces/${workspaceId}/notifications/${notificationId}/read`, {
+    method: 'POST',
+  });
+
+export const getNotificationPreferences = (workspaceId: string, signal?: AbortSignal) =>
+  apiRequest<NotificationPreferencesOut>(`/workspaces/${workspaceId}/notification-preferences`, {
+    signal,
+  });
+
+export const updateNotificationPreferences = (
+  workspaceId: string,
+  body: NotificationPreferencesUpdate,
+) =>
+  apiRequest<NotificationPreferencesOut>(`/workspaces/${workspaceId}/notification-preferences`, {
+    method: 'PUT',
+    body,
+  });
+// --- Project Phase 5E: in-app notifications (W21 lane 5E-W3, I-5E share) — END -----
+
+// --- Project Phase 5E: audited manual export (5E-W1's routes; added at I-5E) — BEGIN ---
+// Both export routes answer 503 (capability_unavailable) while `content_export` resolves
+// disabled for the workspace, 403 for a role outside the route's set (export: owner, admin,
+// marketer; history: those plus reviewer and compliance_reviewer, item 32) and the uniform
+// 404 for an unknown, foreign or deleted draft. The POST answers 409 with one of four codes
+// when a precondition refuses (export_jurisdiction_missing, jurisdiction_mismatch,
+// export_not_approved, export_review_blocked). The reflection answers 200 {enabled} even
+// while dark (interface sheet P7).
+const draftExportsPath = (workspaceId: string, draftId: string) =>
+  `/workspaces/${workspaceId}/drafts/${draftId}/exports`;
+
+export const getExportCapability = (workspaceId: string, signal?: AbortSignal) =>
+  apiRequest<ExportCapability>(`/workspaces/${workspaceId}/export-capability`, { signal });
+
+export const createDraftExport = (workspaceId: string, draftId: string, format: ExportFormat) =>
+  apiRequest<DraftExport>(draftExportsPath(workspaceId, draftId), {
+    method: 'POST',
+    body: { format },
+  });
+
+export const listDraftExports = (
+  workspaceId: string,
+  draftId: string,
+  params: { limit?: number; offset?: number } = {},
+  signal?: AbortSignal,
+) =>
+  apiRequest<DraftExportHistory>(draftExportsPath(workspaceId, draftId), {
+    query: { ...params },
+    signal,
+  });
+// --- Project Phase 5E: audited manual export (5E-W1's routes; added at I-5E) — END -----

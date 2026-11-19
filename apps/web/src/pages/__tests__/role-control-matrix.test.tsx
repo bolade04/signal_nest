@@ -10,7 +10,7 @@ import { API_PREFIX } from '@/api/config';
 import type { CampaignOut } from '@/api/types';
 import * as api from '@/api/endpoints';
 import { useAuth } from '@/auth/AuthContext';
-import { CONTEXT_ROW_DEFAULTS, orgModel, type ModelRole } from '@/test/handlers';
+import { CONTEXT_ROW_DEFAULTS, analyticsFixture, orgModel, type ModelRole } from '@/test/handlers';
 import { server } from '@/test/server';
 import { emulateExitAnimations, renderApp, renderProductionApp } from '@/test/utils';
 import { useWorkspace } from '@/workspace/WorkspaceContext';
@@ -51,6 +51,9 @@ const ROLES: ModelRole[] = ['owner', 'admin', 'marketer', 'reviewer', 'complianc
 const EDITOR = new Set<ModelRole>(['owner', 'admin', 'marketer']);
 const ORG_ADMIN = new Set<ModelRole>(['owner', 'admin']);
 const CLAIMS_STEWARD = new Set<ModelRole>(['owner', 'admin', 'compliance_reviewer']);
+//   ANALYTICS_READER = require_exact_roles(OWNER, ADMIN, MARKETER, REVIEWER)
+//               (apps/api/app/analytics/policy.py, ANALYTICS_READER_ROLES; Project Phase 5E)
+const ANALYTICS_READER = new Set<ModelRole>(['owner', 'admin', 'marketer', 'reviewer']);
 
 type Screen = RenderResult & { user: ReturnType<typeof userEvent.setup> };
 
@@ -1530,5 +1533,126 @@ describe('an API denial stays safe when a hidden action is invoked anyway (§54)
     expect(screen.getByText("Role 'viewer' is not permitted for this action.")).toBeInTheDocument();
     expect(screen.getByText('Dallas demand scan')).toBeInTheDocument();
     expect(localStorage.getItem('signalnest-token')).toBe('test-token');
+  });
+});
+
+/**
+ * I-5E: status analytics (5E-W2) across the six roles, with O-12(B)'s capability on. The
+ * oracle is the backend's `ANALYTICS_READER_ROLES`, written out above. A reader gets the nav
+ * entry and the figures; viewer and compliance_reviewer get neither the entry nor any
+ * analytics request, and the page shows the refused state. No mutation control exists on
+ * this surface; the export controls are mounted by 5E-W3's phase B.
+ */
+describe('status analytics across six roles (I-5E)', () => {
+  it.each(ROLES)('%s', async (role) => {
+    const seen = { analytics: 0 };
+    server.use(
+      http.get(P('/workspaces/:ws/notifications-analytics-capability'), () =>
+        HttpResponse.json({ enabled: true }),
+      ),
+      http.get(P('/workspaces/:ws/analytics'), ({ params }) => {
+        seen.analytics += 1;
+        return HttpResponse.json(analyticsFixture(String(params.ws)));
+      }),
+    );
+    const screen = await renderAs(role, '/analytics');
+    await screen.findByRole('heading', { level: 1, name: 'Status analytics' });
+    const nav = screen.getByRole('navigation', { name: 'Primary' });
+    if (ANALYTICS_READER.has(role)) {
+      expect(await screen.findByRole('heading', { level: 2, name: 'Counts by state' })).toBeInTheDocument();
+      expect(within(nav).getByRole('link', { name: 'Analytics' })).toBeInTheDocument();
+      expect(seen.analytics).toBeGreaterThan(0);
+    } else {
+      expect(
+        await screen.findByText('Status analytics is not available to your role'),
+      ).toBeInTheDocument();
+      expect(within(nav).queryByRole('link', { name: 'Analytics' })).not.toBeInTheDocument();
+      expect(seen.analytics).toBe(0);
+    }
+  });
+});
+
+/**
+ * I-5E stage 1b: the export controls 5E-W3 mounted in `CreativeDraftsPanel.tsx` (interface
+ * sheet P3) on an approved draft version, across the six roles, with creative generation and
+ * content export on. The oracle is the backend's `exports/policy.py`, written out here:
+ *   EXPORTER               = require_exact_roles(OWNER, ADMIN, MARKETER)
+ *   EXPORT_HISTORY_READER  = EXPORTER + REVIEWER + COMPLIANCE_REVIEWER (item 32)
+ * The decision history the mount reads is every role but viewer's, so a viewer is offered
+ * neither and sends no export request; a reviewer or compliance reviewer sees the history
+ * but is not offered Export.
+ */
+describe('mounted export controls across six roles (I-5E stage 1b)', () => {
+  const EXPORTER = new Set<ModelRole>(['owner', 'admin', 'marketer']);
+  const HISTORY_READER = new Set<ModelRole>(['owner', 'admin', 'marketer', 'reviewer', 'compliance_reviewer']);
+  const WS = 'ws-1';
+  const OPP = 'opp-1';
+  const BRIEF = 'brief-1';
+  const DRAFT = {
+    id: 'draft-1', brief_id: BRIEF, opportunity_id: OPP, location_id: null, campaign_id: null,
+    draft_version: 1, parent_draft_id: null, channel: 'sms', headline: '',
+    body: 'A quick note: faster mobile pickup in Dallas.', call_to_action: 'Plan your visit',
+    prompt_name: 'generate_creative', prompt_version: '1.0.0', model_identifier: 'mock-1',
+    is_simulated: true, created_by: 'user-marketer',
+    created_by_snapshot: 'user-marketer Mara Marketer <mara@example.com>',
+    created_at: '2026-11-02T10:00:00Z',
+    review: {
+      id: 'review-1', draft_id: 'draft-1', draft_version: 1, risk_level: 'low', is_blocked: false,
+      findings: [], warnings: [], blocked_claim_ids: [], required_disclaimers: [],
+      disclaimers_resolved: true, passed: true, created_at: '2026-11-02T10:00:00Z',
+    },
+  };
+  const approved = (subject: 'creative_draft' | 'recommendation_brief') => ({
+    id: `appr-${subject}`, workspace_id: WS, subject_type: subject,
+    subject_id: subject === 'creative_draft' ? 'draft-1' : BRIEF, subject_version: 1,
+    brief_id: subject === 'creative_draft' ? null : BRIEF,
+    draft_id: subject === 'creative_draft' ? 'draft-1' : null, decision: 'approved',
+    decision_seq: 1, reason_code: null, note: null, decided_by: 'user-reviewer',
+    decided_by_snapshot: 'user-reviewer Rhea Reviewer <rhea@example.com>',
+    decided_role: 'reviewer', is_simulated: true, created_at: '2026-11-02T11:00:00Z',
+  });
+  const page = (items: unknown[]) => ({ items, total: items.length, limit: 20, offset: 0 });
+
+  it.each(ROLES)('%s', async (role) => {
+    const seen = { exportHistory: 0, exportPosts: 0 };
+    server.use(
+      http.get(P(`/workspaces/${WS}/creative-capability`), () =>
+        HttpResponse.json({ enabled: true, generation_configured: true }),
+      ),
+      http.get(P(`/workspaces/${WS}/briefs/${BRIEF}/drafts`), () => HttpResponse.json(page([DRAFT]))),
+      http.get(P(`/workspaces/${WS}/opportunities/${OPP}/briefs/${BRIEF}/approvals`), () =>
+        HttpResponse.json(page([approved('recommendation_brief')])),
+      ),
+      http.get(P(`/workspaces/${WS}/drafts/:draftId/approvals`), () =>
+        HttpResponse.json(page([approved('creative_draft')])),
+      ),
+      http.get(P(`/workspaces/${WS}/export-capability`), () => HttpResponse.json({ enabled: true })),
+      http.get(P(`/workspaces/${WS}/drafts/:draftId/exports`), () => {
+        seen.exportHistory += 1;
+        return HttpResponse.json(page([]));
+      }),
+      http.post(P(`/workspaces/${WS}/drafts/:draftId/exports`), () => {
+        seen.exportPosts += 1;
+        return HttpResponse.json({}, { status: 500 });
+      }),
+    );
+    const screen = await renderAs(role, `/creative/${BRIEF}?opportunity=${OPP}`);
+    const article = await screen.findByRole('article', { name: 'Draft version 1' });
+    if (HISTORY_READER.has(role)) {
+      expect(await within(article).findByRole('heading', { name: 'Exports' })).toBeInTheDocument();
+      expect(seen.exportHistory).toBeGreaterThan(0);
+    } else {
+      // Two witnesses first: the role resolved (renderAs) and the draft rendered (above).
+      await new Promise((r) => setTimeout(r, 50));
+      expect(within(article).queryByRole('heading', { name: 'Exports' })).not.toBeInTheDocument();
+      expect(seen.exportHistory).toBe(0);
+    }
+    const exportButton = within(article).queryByRole('button', { name: 'Export' });
+    if (EXPORTER.has(role)) {
+      expect(exportButton).toBeInTheDocument();
+    } else {
+      expect(exportButton).not.toBeInTheDocument();
+    }
+    expect(seen.exportPosts).toBe(0);
   });
 });

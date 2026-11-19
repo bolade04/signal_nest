@@ -163,6 +163,43 @@ export type CreativeGenerationQueuedOut = S['CreativeGenerationQueuedOut'];
 export type CreativeCapability = S['CreativeGenerationCapabilityOut'];
 // --- Project Phase 5C: text creative generation (W21 lane P5C) — END -----------
 
+// ---- Project Phase 5E: status analytics (W21 lane 5E-W2; I-5E share) — begin -----------
+// Generated contract types only (`GET /workspaces/{ws}/analytics`). Every family is a closed
+// shape; a figure without a basis is `null`, never 0.
+export type WorkspaceAnalytics = S['AnalyticsOut'];
+export type AnalyticsOpportunityCounts = S['OpportunityStateCounts'];
+export type AnalyticsSubjectCounts = S['SubjectStateCounts'];
+export type AnalyticsApprovalCounts = S['ApprovalStateCounts'];
+export type AnalyticsReviewCounts = S['ReviewStateCounts'];
+export type AnalyticsExportCounts = S['ExportStateCounts'];
+export type AnalyticsLatency = S['LatencyOut'];
+export type AnalyticsOutcomes = S['OutcomesOut'];
+export type AnalyticsLocationTotals = S['LocationTotalsOut'];
+export type AnalyticsLocationRow = S['LocationComparisonOut'];
+// ---- Project Phase 5E: status analytics (W21 lane 5E-W2; I-5E share) — end -------------
+
+// --- Project Phase 5E: in-app notifications (W21 lane 5E-W3, I-5E share) — BEGIN ---
+// Generated contract types only. A notification carries no text and names no user: the
+// feed is the session user's own, and the client renders a fixed message per event code.
+export type NotificationEventCode = S['NotificationEventCode'];
+export type NotificationOut = S['NotificationOut'];
+export type NotificationFeedOut = S['NotificationFeedOut'];
+export type NotificationPreferenceItem = S['NotificationPreferenceItem'];
+export type NotificationPreferencesOut = S['NotificationPreferencesOut'];
+export type NotificationPreferencesUpdate = S['NotificationPreferencesUpdate'];
+export type NotificationsAnalyticsCapability = S['NotificationsAnalyticsCapabilityOut'];
+// --- Project Phase 5E: in-app notifications (W21 lane 5E-W3, I-5E share) — END -----
+
+// --- Project Phase 5E: audited manual export (5E-W1's routes; added at I-5E) — BEGIN ---
+// Generated contract types only. The history lists records without their text; only the
+// POST answers the rendered `content`.
+export type ExportFormat = S['ExportFormat'];
+export type DraftExport = S['ExportOut'];
+export type DraftExportSummary = S['ExportHistoryItemOut'];
+export type DraftExportHistory = S['ExportHistoryOut'];
+export type ExportCapability = S['ExportCapabilityOut'];
+// --- Project Phase 5E: audited manual export (5E-W1's routes; added at I-5E) — END -----
+
 export type RuntimeSummary = S['RuntimeSummaryOut'];
 export type RuntimeCapability = S['CapabilityOut'];
 export type RuntimeCapabilities = S['CapabilitiesOut'];

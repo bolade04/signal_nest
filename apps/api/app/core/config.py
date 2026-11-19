@@ -517,17 +517,19 @@ class Settings(BaseSettings):
     #: Master switch for recommendation briefs and their approvals (dark by
     #: default). Bound to ``Capability.RECOMMENDATION_BRIEFS``, which is
     #: ``workspace_enableable`` (operator decision O-3), so availability is the
-    #: capability resolver's per-workspace decision, never this raw flag. CF-1 adds
-    #: the flag, the capability and the contracts only: no route, service or model
-    #: call consumes it yet.
+    #: capability resolver's per-workspace decision, never this raw flag. CF-1 added
+    #: the flag, the capability and the contracts only (no route, service or model
+    #: call consumed it then); since 5A and 5B the brief and approval routes decide
+    #: on it through the resolver.
     recommendation_briefs_enabled: bool = False
     # --- Project Phase 5A: recommendation briefs (W21 CF-1) — END ------------
 
     # --- Project Phase 5C: creative generation (W21 CF-2) — BEGIN -------------
     #: Master switch for text creative generation (dark by default). Bound to
     #: ``Capability.CREATIVE_GENERATION``, which is ``workspace_enableable`` (O-3), so
-    #: availability is the capability resolver's per-workspace decision. CF-2 adds the
-    #: flag, the capability and the contracts only: nothing consumes it yet.
+    #: availability is the capability resolver's per-workspace decision. CF-2 added the
+    #: flag, the capability and the contracts only (nothing consumed it then); since 5C the
+    #: creative routes and the generation service decide on it through the resolver.
     creative_generation_enabled: bool = False
     #: The four 5C cost and quota ceilings. **None has an approved value**: ``None``
     #: means "not configured", and the 5C generation service must refuse every
@@ -555,11 +557,25 @@ class Settings(BaseSettings):
     #: default). Bound to ``Capability.CONTENT_EXPORT``, which is ``workspace_enableable``
     #: (operator decision O-3), so availability is the capability resolver's per-workspace
     #: decision (the deny-biased ``_require_feedback_feature`` pattern), never this raw
-    #: flag. CF-3 adds the flag, the capability and the contracts only: nothing consumes it
-    #: yet. Activation additionally needs O-5 and the verified NULL-jurisdiction refusal
-    #: (Project Phase 5 plan §10). Notifications and analytics have no flag (open O-12).
+    #: flag. Since I-5E the export service decides on it through the resolver (at CF-3 nothing
+    #: consumed it). Activation additionally needs O-5 and the verified NULL-jurisdiction refusal
+    #: (Project Phase 5 plan §10). Notifications and analytics have their own flag below
+    #: (operator ruling O-12(B), 2026-11-12).
     content_export_enabled: bool = False
     # --- Project Phase 5E: audited manual export (W21 CF-3) — END --------------
+
+    # --- Project Phase 5E: notifications and analytics (W21 5E-CF) — BEGIN -----
+    #: Master switch for the in-app notifications and status-analytics surfaces (dark by
+    #: default). Operator ruling O-12(B) (2026-11-12): "one additional flag for the
+    #: notifications and analytics surfaces, off by default. Explicitly amend O-4’s
+    #: three-flag limit. Gate the backend routes, customer UI and applicable notification
+    #: emission consistently." Bound to ``Capability.NOTIFICATIONS_ANALYTICS``, which is
+    #: ``workspace_enableable`` (O-3's pattern), so availability is the capability
+    #: resolver's per-workspace decision (``effective_enabled`` only), never this raw flag.
+    #: 5E-CF added the flag and the capability; since I-5E the notification and analytics
+    #: routes, the emitter and the customer UI's reflection decide on it through the resolver.
+    notifications_analytics_enabled: bool = False
+    # --- Project Phase 5E: notifications and analytics (W21 5E-CF) — END -------
 
     # --- LLM -----------------------------------------------------------------
     llm_provider: LLMProvider = "mock"
@@ -634,6 +650,13 @@ class Settings(BaseSettings):
     retention_opportunities_days: int | None = None
     retention_job_history_days: int | None = None
     retention_audit_logs_days: int | None = None
+    #: Project Phase 5E in-app notifications (W21 5E-CF). Operator ruling on D-N4 item 30
+    #: (2026-11-12): "accept the retention-class structure. Implement notifications
+    #: retention with its duration unset and fail closed. O-5 durations remain unruled; do
+    #: not invent them." Unset like its siblings and bounded the same way. It is purged, and
+    #: becomes required in production, through ``RetentionClass.NOTIFICATIONS`` (5E-W1),
+    #: whose sweep refuses the class (``policy_unset``) while this is unset.
+    retention_notifications_days: int | None = None
     #: Root rows one purge batch deletes (with their dependents). 1..10000.
     retention_purge_batch_size: int = 500
     #: Batches per class per sweep, and links per workspace job chain. >= 1.
@@ -1263,11 +1286,20 @@ class Settings(BaseSettings):
         from app.privacy.inventory import RetentionClass
 
         errors: list[str] = []
-        for data_class in RetentionClass:
-            name = data_class.setting_name
+        # Every class the purge knows (``RetentionClass``, eight since Project Phase 5E's
+        # ``notifications``, D-N4 item 30) needs its duration in production. Every
+        # ``retention_<class>_days`` setting is bounded, also one declared before its class is
+        # registered.
+        required = [data_class.setting_name for data_class in RetentionClass]
+        durations = required + [
+            name
+            for name in type(self).model_fields
+            if name.startswith("retention_") and name.endswith("_days") and name not in required
+        ]
+        for name in durations:
             value = getattr(self, name)
             if value is None:
-                if self.is_production and not self.migration_mode:
+                if name in required and self.is_production and not self.migration_mode:
                     errors.append(
                         f"{name} must be set explicitly in production (retention durations "
                         "are an operator/legal decision, O-5 / P6-D05; there is no default)"

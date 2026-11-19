@@ -7,7 +7,8 @@
 * Every exported table can be scoped to one organization; every excluded column exists; every
   retention root of a workspace class has a ``workspace_id``.
 * Retention durations: unset by default everywhere; bounded when set; ``production`` refuses to
-  start until all seven are set; the migration actor is exempt.
+  start until all eight are set (``notifications`` since D-N4 item 30); the migration actor is
+  exempt.
 """
 
 from __future__ import annotations
@@ -180,3 +181,40 @@ def test_purge_bounds(field, value, message):
     with pytest.raises(ValueError) as exc:
         Settings(_env_file=None, **{field: value})
     assert message in str(exc.value)
+
+
+# --------------------------------------------------------------------------- #
+# D-N4 item 30 (W21 5E-CF): the notifications duration
+# --------------------------------------------------------------------------- #
+#: Every retention duration the settings declare: the classes' (``notifications`` among them
+#: since 5E-W1 registered ``RetentionClass.NOTIFICATIONS``; the union keeps the pin true either
+#: way).
+DURATIONS = sorted({c.setting_name for c in RetentionClass} | {"retention_notifications_days"})
+
+
+def test_the_declared_durations_are_exactly_the_classes_and_notifications():
+    declared = sorted(
+        n for n in Settings.model_fields if n.startswith("retention_") and n.endswith("_days")
+    )
+    assert declared == DURATIONS
+
+
+def test_the_notifications_duration_is_unset_by_default():
+    # "Implement notifications retention with its duration unset and fail closed. O-5
+    # durations remain unruled; do not invent them." (operator ruling on item 30)
+    assert Settings.model_fields["retention_notifications_days"].default is None
+    assert Settings(_env_file=None).retention_notifications_days is None
+
+
+@pytest.mark.parametrize("name", DURATIONS)
+@pytest.mark.parametrize("value", [0, -1, 36501])
+def test_every_duration_is_bounded_like_its_siblings(name, value):
+    with pytest.raises(ValueError) as exc:
+        Settings(_env_file=None, **{name: value})
+    assert f"{name} must be between 1 and 36500 days" in str(exc.value)
+
+
+@pytest.mark.parametrize("value", [1, 36500])
+def test_the_notifications_duration_accepts_the_bounds(value):
+    settings = Settings(_env_file=None, retention_notifications_days=value)
+    assert settings.retention_notifications_days == value

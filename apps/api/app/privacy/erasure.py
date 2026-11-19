@@ -47,9 +47,23 @@ write, as :func:`app.privacy.retention.purge_batch` does. The helpers (:func:`de
 row only inside a marked transaction.
 
 Locks: account deletion locks the user row, then each of its organizations in id order
-(``SELECT … FOR UPDATE``; no-ops on SQLite, whose single writer serializes instead);
-organization deletion locks the organization and re-reads the actor's role under the
-lock, as every membership mutation does (:mod:`app.organizations.members`).
+(``SELECT … FOR UPDATE``); organization deletion locks the organization and re-reads the
+actor's role under the lock, as every membership mutation does
+(:mod:`app.organizations.members`).
+
+On SQLite those statements are plain reads and hold nothing, and SQLite's single writer lock
+serializes two transactions only from the first write of each. :func:`delete_account` and
+:func:`erase_invitee_email` read which rows name their subject and then update each one, so
+they take the writer lock before those reads
+(:func:`app.db.sqlite_writer.hold_sqlite_writer_lock`; account deletion after its password
+check, the invitee-email erasure after its refusal): an export in flight
+(:func:`app.exports.service.create_export` takes the same lock) has then either committed, and
+its rows are found, or it waits. Organization deletion does not take it early and does not need
+to for those rows: its first statement after its own checks is the set-wide ``UPDATE`` of the
+organization's audit records, a write, and every statement after it (the approvals, the exports,
+the foreign-key walk) selects by organization or by parent under the writer lock that write
+took. What it read before that write (the actor's role, the name, the active jobs) is not held
+on SQLite.
 """
 
 from __future__ import annotations
@@ -73,6 +87,7 @@ from app.core.errors import AuthError, ConflictError, PermissionDeniedError, Val
 from app.core.security import verify_password
 from app.creative.models import CreativeDraft
 from app.db.models import Base
+from app.db.sqlite_writer import hold_sqlite_writer_lock
 from app.exports.models import Export
 from app.jobs.models import Job
 from app.jobs.status import ACTIVE_STATUSES
@@ -674,7 +689,8 @@ def delete_account(
 ) -> AccountErasure:
     """Delete the signed-in account on its own request (``POST /account/delete``).
 
-    Order: the password is verified (bcrypt, before any lock); the user row is locked and
+    Order: the password is verified (bcrypt, before any lock); on SQLite the database's
+    writer lock is taken (module docstring); the user row is locked and
     its credential state re-checked; every organization the account belongs to is locked
     in id order and the plan is re-made under those locks. Then, all in the caller's
     transaction: refuse if the account is the sole OWNER of an organization with other
@@ -688,6 +704,7 @@ def delete_account(
     """
     epoch, current_hash = _verify_current_password(user, current_password)
     user_id = user.id
+    hold_sqlite_writer_lock(db)  # SQLite only: before the reads below (module docstring)
     locked = _lock_verified_user(db, user_id, epoch=epoch, current_hash=current_hash)
     scope = email_scope(locked)
     email = locked.email if scope is EmailScope.INCLUDED else None
@@ -739,7 +756,8 @@ def erase_invitee_email(db: Session, *, email: str) -> ErasureCounts:
     account holder's own deletion, which also covers this. An unverified account holding the
     address does not block it, because nothing proves the address is that account's (a
     registrant can claim any address); its accepted invitations go too, while it stays a
-    member. Flushes, never commits.
+    member. On SQLite the database's writer lock is taken after that refusal and before the
+    reads that find what to erase (module docstring). Flushes, never commits.
     """
     holders = db.execute(
         select(User.email).where(
@@ -753,6 +771,7 @@ def erase_invitee_email(db: Session, *, email: str) -> ErasureCounts:
             "An account with this verified email address exists; delete the account instead.",
             code="erasure_account_exists",
         )
+    hold_sqlite_writer_lock(db)  # SQLite only: before the reads below (module docstring)
     mark_privacy_writer(db)  # the PostgreSQL append-only backstop's exception (D-N4 item 37)
     counts = erase_invitations_addressed_to(db, email=email)
     counts.anonymised["audit_logs"] += anonymise_audit_for_subject(db, user_id=None, email=email)

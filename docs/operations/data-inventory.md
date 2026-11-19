@@ -56,7 +56,7 @@ applies to the table's rows (durations undecided; see below).
 | `password_reset_tokens` | `user_id`, `token_hash` (digest only) | delete | — | `account_tokens` (by `expires_at`) |
 | `email_verification_tokens` | `user_id`, `token_hash`, `email_snapshot` | delete | — | `account_tokens` (by `expires_at`) |
 | `organization_invitations` | `email` (invitee — may never register), `invited_by_user_id`, `accepted_by_user_id`, `token_hash`, `role` | rows the account accepted: delete; other rows addressed to the account's email (case-insensitive), **only if that address is verified**: delete; `invited_by_user_id` / `accepted_by_user_id`: set null | delete | `invitations` (accepted, revoked or expired rows, by the latest of those times) |
-| `notifications` | Project Phase 5E (W21 CF-3; no rows until the 5E service writes them): one account's in-app feed — `user_id` (the recipient), `event_code`, `subject_id` (the id of the brief, approval, draft, review or export the event is about), `read_at`, `deleted_at` (the 5E retention marker), `created_at`; no text, no actor | delete (the recipient key cascades) | delete (with its workspace) | none — no time-based class; whether the feed is purged after a duration is undecided (`O-5`), and no duration is set. In the account export, not in the organization export |
+| `notifications` | Project Phase 5E (W21 CF-3; no rows until the 5E service writes them): one account's in-app feed — `user_id` (the recipient), `event_code`, `subject_id` (the id of the brief, approval, draft, review or export the event is about), `read_at`, `deleted_at` (the 5E retention marker), `created_at`; no text, no actor | delete (the recipient key cascades) | delete (with its workspace) | `notifications` (by `created_at`; operator ruling on D-N4 item 30, 2026-11-12; see "Retention durations"): duration `RETENTION_NOTIFICATIONS_DAYS` unset and undecided (`O-5`), so the sweep refuses the class and nothing is purged. In the account export, not in the organization export |
 | `notification_preferences` | Project Phase 5E (W21 CF-3): one account's per-event opt-outs in a workspace — `user_id`, `event_code`, `enabled`, timestamps | delete | delete (with its workspace) | none. In the account export, not in the organization export |
 
 ### Compliance and attribution records
@@ -191,7 +191,7 @@ and creates none (it only logs and counts `llm_settlements_orphaned_total`).
 
 ## Retention durations (undecided)
 
-Seven data classes carry a time-based purge. Each duration is a setting with **no
+Eight data classes carry a time-based purge. Each duration is a setting with **no
 default**; the values are `O-5` / `P6-D05`, reserved to the operator and legal, and this
 repository does not choose them. The decision material is in the lane's
 `DECISION-MEMO.md` (evidence set `P6-W1-PRIV-01`).
@@ -205,13 +205,23 @@ repository does not choose them. The decision material is in the lane's
 | `opportunities` | `RETENTION_OPPORTUNITIES_DAYS` | `opportunities` (+ dependents) | `created_at` |
 | `job_history` | `RETENTION_JOB_HISTORY_DAYS` | terminal `jobs` (+ `job_events`) | `updated_at` |
 | `audit_logs` | `RETENTION_AUDIT_LOGS_DAYS` | `audit_logs`, `approvals`, `exports` | `created_at` |
+| `notifications` | `RETENTION_NOTIFICATIONS_DAYS` | `notifications` (in-app feed rows; preferences are not purged by age) | `created_at` |
 
 **Unset is not a default.** A class whose duration is unset is *undecided*: the purge
 refuses it and deletes nothing (the sweep reports `policy_unset` and exits non-zero).
-`environment=production` **refuses to start** until all seven are set explicitly
+`environment=production` **refuses to start** until all eight are set explicitly
 (1–36500 days); development, test and staging may leave them unset. The cut-off is the
 start of the current UTC day (database clock) minus the duration, so a purge never
 removes a row earlier than the policy allows.
+
+**Notifications (D-N4 item 30).** The operator's ruling of 2026-11-12: "accept the
+retention-class structure. Implement notifications retention with its duration unset and
+fail closed. O-5 durations remain unruled; do not invent them." The `notifications` class
+(Project Phase 5E) has no default duration and none is chosen. Its rows carry a workspace,
+but it is purged by the sweep itself, never by a workspace job: `enqueue_purge` and
+`run_purge_job` refuse it and no `JobType` can dispatch it (5E exit criterion 6). While
+`RETENTION_NOTIFICATIONS_DAYS` is unset the sweep reports `policy_unset` and deletes nothing,
+and production refuses to start, as for the other seven.
 
 ## Members of a deleted organization
 

@@ -141,13 +141,27 @@ def test_override_page_empty_defaults_are_coherent() -> None:
 # --------------------------------------------------------------------------- #
 # Decision-source guard: every live gate decides through the resolver (P6-CAP-1)
 # --------------------------------------------------------------------------- #
-#: The module holding each capability's single decision call site.
-_DECISION_SITES = {
-    "opportunity_feedback": Path("app/feedback/routes.py"),  # Phase 4B-A
-    "scout_scheduling": Path("app/scouting_requests/schedules.py"),  # P6-CAP-1
-    "connector_rss": Path("app/scouting_requests/connectors.py"),  # P6-CAP-1
-    "recommendation_briefs": Path("app/briefs/routes.py"),  # Project Phase 5A
-}
+#: The modules holding each capability's decision call sites (one per module): every
+#: production module that calls ``resolve_capability`` to gate a customer surface.
+_DECISION_SITES: tuple[tuple[str, Path], ...] = (
+    ("opportunity_feedback", Path("app/feedback/routes.py")),  # Phase 4B-A
+    ("scout_scheduling", Path("app/scouting_requests/schedules.py")),  # P6-CAP-1
+    ("connector_rss", Path("app/scouting_requests/connectors.py")),  # P6-CAP-1
+    ("recommendation_briefs", Path("app/briefs/routes.py")),  # Project Phase 5A
+    # Project Phase 5B: the approval routes decide brief decisions through their own call
+    # (the same capability as 5A). Project Phase 5C: the creative package's single call,
+    # shared by its routes, its reflection, the draft decision routes and the worker's
+    # re-check. Both rows added at the I-5E fold (review R-final RF-A r1 INFO-4, RF-B INFO-5):
+    # the sites existed and were not listed.
+    ("recommendation_briefs", Path("app/approvals/routes.py")),
+    ("creative_generation", Path("app/creative/service.py")),
+    # Project Phase 5E (I-5E): the export gate (5E-W1), and O-12(B)'s two sites: the
+    # analytics route's gate (5E-W2) and the notifications package's single call, shared by
+    # its routes, its reflection and the emitter (5E-W3).
+    ("content_export", Path("app/exports/service.py")),
+    ("notifications_analytics", Path("app/analytics/routes.py")),
+    ("notifications_analytics", Path("app/notifications/service.py")),
+)
 #: The raw global flags. Reading one directly is how a gate bypasses the resolver.
 _RAW_FLAGS = frozenset(
     {
@@ -161,6 +175,9 @@ _RAW_FLAGS = frozenset(
         "creative_generation_enabled",
         # Project Phase 5 CF-3: likewise for the 5E export gate when it lands.
         "content_export_enabled",
+        # Project Phase 5E, W21 5E-CF (operator ruling O-12(B)): likewise for the
+        # notification and analytics gates and the emitter when they land.
+        "notifications_analytics_enabled",
     }
 )
 #: The only production module allowed to read them: the deliberately raw-global
@@ -171,7 +188,7 @@ _RAW_FLAG_READERS = frozenset({Path("app/system/routes.py")})
 def test_every_live_gate_decides_through_the_resolver() -> None:
     # Before P6-CAP-1 this guard asserted the opposite for scheduling and RSS — that
     # they must NOT import the resolver — which pinned the defect the row describes.
-    for capability, module_path in _DECISION_SITES.items():
+    for capability, module_path in _DECISION_SITES:
         tree = ast.parse((API_DIR / module_path).read_text(encoding="utf-8"))
         calls = [
             node for node in ast.walk(tree)

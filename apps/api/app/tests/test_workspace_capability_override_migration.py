@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -35,7 +36,7 @@ import pytest
 API_DIR = Path(__file__).resolve().parents[2]
 # Revision immediately before the workspace_capability_overrides migration.
 PREV = "4945b98229e6"
-HEAD = "1574637e56d3"  # D-N4 item 36: the closed claim kinds (above D-N4 item 37)
+HEAD = "53fdde95354a"  # 5E-CF: the CHECK admits notifications_analytics (above D-N4 item 36)
 TABLE = "workspace_capability_overrides"
 
 
@@ -197,6 +198,7 @@ def test_all_capability_flags_remain_dark() -> None:
     assert settings.recommendation_briefs_enabled is False  # Project Phase 5 CF-1
     assert settings.creative_generation_enabled is False  # Project Phase 5 CF-2
     assert settings.content_export_enabled is False  # Project Phase 5 CF-3
+    assert settings.notifications_analytics_enabled is False  # 5E-CF, operator ruling O-12(B)
     # And every registry-bound flag is dark.
     for capability in iter_capabilities():
         assert getattr(settings, get_policy(capability).global_flag_attr) is False
@@ -305,3 +307,193 @@ def test_postgres_workspace_deletion_cascades_override() -> None:  # pragma: no 
             ) == 0
     finally:
         engine.dispose()
+
+
+# --------------------------------------------------------------------------- #
+# Project Phase 5E 5E-CF (operator ruling O-12(B)): the CHECK admits
+# notifications_analytics (revision 53fdde95354a, under the operator's narrow
+# migration-freeze exception of 2026-11-15, Q-1)
+# --------------------------------------------------------------------------- #
+#: The revision below the 5E-CF widening (D-N4 item 36's closed claim kinds).
+CLAIM_KINDS = "1574637e56d3"
+CHECK_NAME = "ck_workspace_capability_override_capability"
+NEW_CAPABILITY = "notifications_analytics"
+_INSERT_OVERRIDE = (
+    f"INSERT INTO {TABLE} (id, organization_id, workspace_id, capability, enabled)"
+    " VALUES (?, 'org-1', ?, ?, 0)"
+)
+
+
+def _sql(db_path: Path, statement: str, params: tuple = ()) -> list[tuple]:
+    con = sqlite3.connect(db_path)
+    try:
+        rows = con.execute(statement, params).fetchall()
+        con.commit()
+        return rows
+    finally:
+        con.close()
+
+
+def _capability_check(db_path: Path) -> set[str]:
+    """The capability values the migrated CHECK admits, read from the database."""
+    from sqlalchemy import create_engine, inspect
+
+    from app.tests.test_cf1_contract_migration import _in_list
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        checks = {c["name"]: c["sqltext"] for c in inspect(engine).get_check_constraints(TABLE)}
+    finally:
+        engine.dispose()
+    return _in_list(checks[CHECK_NAME], "capability")
+
+
+def _version(db_path: Path) -> list[str]:
+    return [r[0] for r in _sql(db_path, "SELECT version_num FROM alembic_version")]
+
+
+def test_the_5e_cf_widening_is_the_single_head_above_the_claim_kinds() -> None:
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
+    assert [r.revision for r in script.get_revisions("heads")] == [HEAD]
+    assert script.get_revision(HEAD).down_revision == CLAIM_KINDS
+
+
+def test_the_head_check_admits_every_registered_capability(db_path) -> None:
+    from app.capabilities.registry import persisted_values
+
+    assert _alembic(db_path, "upgrade", "head").returncode == 0
+    assert _capability_check(db_path) == set(persisted_values())
+    for value in persisted_values():
+        _sql(db_path, _INSERT_OVERRIDE, (f"ov-{value}", f"ws-{value}", value))
+    with pytest.raises(sqlite3.IntegrityError):
+        _sql(db_path, _INSERT_OVERRIDE, ("ov-bogus", "ws-bogus", "not_a_capability"))
+
+
+def test_the_5e_cf_downgrade_refuses_while_an_override_names_the_capability(db_path) -> None:
+    assert _alembic(db_path, "upgrade", "head").returncode == 0
+    _sql(db_path, _INSERT_OVERRIDE, ("ov-na", "ws-1", NEW_CAPABILITY))
+
+    refused = _alembic(db_path, "downgrade", "-1")
+
+    assert refused.returncode != 0
+    assert f"name '{NEW_CAPABILITY}'; clear them before downgrading" in (
+        refused.stdout + refused.stderr
+    )
+    assert _version(db_path) == [HEAD]  # nothing changed
+    assert NEW_CAPABILITY in _capability_check(db_path)
+    assert _sql(db_path, f"SELECT capability FROM {TABLE}") == [(NEW_CAPABILITY,)]
+
+
+def test_the_5e_cf_downgrade_narrows_to_the_cf3_set_and_the_upgrade_restores_it(db_path) -> None:
+    from app.capabilities.registry import persisted_values
+
+    assert _alembic(db_path, "upgrade", "head").returncode == 0
+    _sql(db_path, _INSERT_OVERRIDE, ("ov-export", "ws-1", "content_export"))
+
+    down = _alembic(db_path, "downgrade", "-1")
+
+    assert down.returncode == 0, down.stdout + down.stderr
+    assert _version(db_path) == [CLAIM_KINDS]
+    assert _capability_check(db_path) == set(persisted_values()) - {NEW_CAPABILITY}
+    assert _sql(db_path, f"SELECT id, capability FROM {TABLE}") == [("ov-export", "content_export")]
+    with pytest.raises(sqlite3.IntegrityError):
+        _sql(db_path, _INSERT_OVERRIDE, ("ov-na", "ws-2", NEW_CAPABILITY))
+
+    up = _alembic(db_path, "upgrade", "head")
+
+    assert up.returncode == 0, up.stdout + up.stderr
+    assert _version(db_path) == [HEAD]
+    assert _capability_check(db_path) == set(persisted_values())
+    _sql(db_path, _INSERT_OVERRIDE, ("ov-na", "ws-2", NEW_CAPABILITY))
+    check = _alembic(db_path, "check")
+    assert check.returncode == 0, check.stdout + check.stderr
+
+
+def test_postgres_5e_cf_widening_round_trips() -> None:
+    """On PostgreSQL (a database of its own): the head CHECK admits the capability, the
+    downgrade refuses before any DDL while an override names it, then narrows the CHECK to
+    the CF-3 set, and the upgrade restores it with no drift."""
+    import sqlalchemy as sa
+    from sqlalchemy import create_engine
+    from sqlalchemy.exc import IntegrityError
+
+    from app.capabilities.registry import persisted_values
+    from app.tests._auth2_support import pg_database, require_postgres
+    from app.tests.test_postgres_migration_proof import _alembic as _pg_alembic
+    from app.tests.test_postgres_migration_proof import _confirmation, _run
+    from app.tests.test_postgres_migration_proof import _version as _pg_version
+
+    require_postgres()
+    overrides = sa.table(TABLE, *(sa.column(c) for c in (
+        "id", "organization_id", "workspace_id", "capability", "enabled")))
+
+    def check_values(url: str) -> set[str]:
+        engine = create_engine(url)
+        try:
+            with engine.connect() as conn:
+                definition = conn.execute(
+                    sa.select(sa.func.pg_get_constraintdef(sa.column("oid")))
+                    .select_from(sa.table("pg_constraint", sa.column("oid"), sa.column("conname")))
+                    .where(sa.column("conname") == CHECK_NAME)
+                ).scalar_one()
+        finally:
+            engine.dispose()
+        return set(re.findall(r"'([^']*)'", definition))
+
+    def insert(url: str, row_id: str, workspace: str, capability: str) -> None:
+        engine = create_engine(url)
+        try:
+            with engine.begin() as conn:
+                conn.execute(overrides.insert().values(
+                    id=row_id, organization_id="org-1", workspace_id=workspace,
+                    capability=capability, enabled=False))
+        finally:
+            engine.dispose()
+
+    with pg_database("sn_5ecf") as url:
+        _pg_alembic(url, "upgrade", "head")
+        assert _pg_version(url) == [HEAD]
+        assert check_values(url) == set(persisted_values())
+        engine = create_engine(url)
+        try:
+            with engine.begin() as conn:
+                conn.execute(sa.table("organizations", sa.column("id"), sa.column("name"),
+                                      sa.column("slug")).insert().values(
+                    id="org-1", name="org-1", slug="org-1"))
+                conn.execute(sa.table("workspaces", *(sa.column(c) for c in (
+                    "id", "organization_id", "name", "slug", "onboarding_completed"))).insert(),
+                    [{"id": w, "organization_id": "org-1", "name": w, "slug": w,
+                      "onboarding_completed": True} for w in ("ws-1", "ws-2")])
+        finally:
+            engine.dispose()
+        insert(url, "ov-na", "ws-1", NEW_CAPABILITY)
+
+        token = _confirmation(url, "-1")
+        refused = _run(["-x", f"confirm={token}", "downgrade", "-1"], url)
+        assert refused.returncode != 0
+        assert f"name '{NEW_CAPABILITY}'; clear them before downgrading" in (
+            refused.stdout + refused.stderr
+        )
+        assert _pg_version(url) == [HEAD] and NEW_CAPABILITY in check_values(url)
+
+        engine = create_engine(url)
+        try:
+            with engine.begin() as conn:
+                conn.execute(overrides.delete().where(overrides.c.id == "ov-na"))
+        finally:
+            engine.dispose()
+        token = _confirmation(url, "-1")
+        _pg_alembic(url, "-x", f"confirm={token}", "downgrade", "-1")
+        assert _pg_version(url) == [CLAIM_KINDS]
+        assert check_values(url) == set(persisted_values()) - {NEW_CAPABILITY}
+        with pytest.raises(IntegrityError):
+            insert(url, "ov-na", "ws-2", NEW_CAPABILITY)
+
+        _pg_alembic(url, "upgrade", "head")
+        assert _pg_version(url) == [HEAD]
+        assert check_values(url) == set(persisted_values())
+        insert(url, "ov-na", "ws-2", NEW_CAPABILITY)
+        _pg_alembic(url, "check")

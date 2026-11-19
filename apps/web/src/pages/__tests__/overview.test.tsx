@@ -1,9 +1,10 @@
 import { http, HttpResponse } from 'msw';
-import { waitFor } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { waitFor, within } from '@testing-library/react';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { App } from '@/App';
 import { API_PREFIX } from '@/api/config';
-import { pagedJson } from '@/test/handlers';
+import { OverviewPage } from '@/pages/Overview';
+import { analyticsFixture, orgModel, pagedJson, type ModelRole } from '@/test/handlers';
 import { server } from '@/test/server';
 import { renderApp } from '@/test/utils';
 
@@ -262,5 +263,171 @@ describe('Overview — opportunity count is the total, not the page (same class 
     await waitFor(async () => expect(await tileValue(screen, 'Opportunities')).toBe('12'));
     expect(screen.getByText('1 markets')).toBeInTheDocument();
     expect(screen.queryByText(/computed from the/)).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------------
+// Project Phase 5E (lane 5E-W4; interface sheet P11, A.4): the Overview's status-analytics
+// summary renders only for an analytics reader (owner, admin, marketer, reviewer) while the
+// notifications-and-analytics reflection is literally `{enabled: true}`. For anyone else, or
+// while the reflection is off, unknown or failed, it renders nothing and sends no analytics
+// request (a non-reader does not even ask the reflection). A refusal the API makes anyway
+// (403, 503, 404) renders nothing; the rest of the Overview never depends on it.
+// ---------------------------------------------------------------------------------
+
+const ANALYTICS_READERS: ModelRole[] = ['owner', 'admin', 'marketer', 'reviewer'];
+const ANALYTICS_REFUSED: ModelRole[] = ['viewer', 'compliance_reviewer'];
+
+interface AnalyticsTraffic {
+  reflection: number;
+  analytics: URL[];
+}
+
+function analyticsBackend({
+  reflection = { status: 200, body: { enabled: true } as unknown },
+  analytics,
+}: {
+  reflection?: { status: number; body: unknown };
+  analytics?: { status: number; body: unknown };
+} = {}): AnalyticsTraffic {
+  const traffic: AnalyticsTraffic = { reflection: 0, analytics: [] };
+  server.use(
+    http.get(P('/workspaces/:ws/notifications-analytics-capability'), () => {
+      traffic.reflection += 1;
+      return HttpResponse.json(reflection.body as object, { status: reflection.status });
+    }),
+    http.get(P('/workspaces/:ws/analytics'), ({ request, params }) => {
+      traffic.analytics.push(new URL(request.url));
+      const answer = analytics ?? { status: 200, body: analyticsFixture(String(params.ws)) };
+      return HttpResponse.json(answer.body as object, { status: answer.status });
+    }),
+  );
+  return traffic;
+}
+
+/** Let any request a component would still send go out before asserting none did. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 60));
+
+const summaryRegion = (screen: ReturnType<typeof renderApp>) =>
+  screen.queryByRole('region', { name: 'Status analytics' });
+
+describe('Overview — status analytics summary (5E, P11)', () => {
+  beforeEach(() => orgModel.reset());
+
+  it.each(ANALYTICS_READERS)('%s sees the summary while the reflection is on', async (role) => {
+    orgModel.setMembership('org-1', 'user-1', role);
+    const traffic = analyticsBackend();
+    const screen = renderApp(<OverviewPage />);
+    const region = await screen.findByRole('region', { name: 'Status analytics' });
+    expect(
+      await within(region).findByText(
+        '2 awaiting a decision · 1 approved · 1 rejected · 1 superseded by a newer version',
+      ),
+    ).toBeInTheDocument();
+    expect(within(region).getByRole('link', { name: /View analytics/ })).toHaveAttribute(
+      'href',
+      '/analytics',
+    );
+    expect(traffic.analytics).toHaveLength(1);
+    expect(traffic.analytics[0]!.searchParams.has('location_id')).toBe(false);
+    // The existing Overview content is unchanged around it.
+    expect(screen.getByText('Opportunities by classification')).toBeInTheDocument();
+  });
+
+  it.each(ANALYTICS_REFUSED)(
+    '%s sees no summary and sends neither the reflection nor the analytics request',
+    async (role) => {
+      orgModel.setMembership('org-1', 'user-1', role);
+      const traffic = analyticsBackend();
+      const screen = renderApp(<OverviewPage />);
+      expect(await screen.findByText('Opportunities by classification')).toBeInTheDocument();
+      await settle();
+      expect(summaryRegion(screen)).not.toBeInTheDocument();
+      expect(traffic.reflection).toBe(0);
+      expect(traffic.analytics).toEqual([]);
+    },
+  );
+
+  it.each([
+    ['off', { status: 200, body: { enabled: false } }],
+    ['the string "true"', { status: 200, body: { enabled: 'true' } }],
+    ['the number 1', { status: 200, body: { enabled: 1 } }],
+    ['missing its field', { status: 200, body: {} }],
+    ['failed', { status: 500, body: { error: { code: 'internal', message: 'x' } } }],
+    ['refused', { status: 403, body: { error: { code: 'permission_denied', message: 'x' } } }],
+  ] as const)(
+    'an owner sees no summary and sends no analytics request while the reflection is %s',
+    async (_name, reflection) => {
+      const traffic = analyticsBackend({ reflection });
+      const screen = renderApp(<OverviewPage />);
+      expect(await screen.findByText('Opportunities by classification')).toBeInTheDocument();
+      await waitFor(() => expect(traffic.reflection).toBeGreaterThan(0));
+      await settle();
+      expect(summaryRegion(screen)).not.toBeInTheDocument();
+      expect(traffic.analytics).toEqual([]);
+    },
+  );
+
+  it.each([
+    ['dark (503)', 503, 'capability_unavailable'],
+    ['refused (403)', 403, 'permission_denied'],
+    ['not found (404)', 404, 'not_found'],
+  ] as const)('an analytics answer that is %s renders nothing', async (_name, status, code) => {
+    const traffic = analyticsBackend({
+      analytics: { status, body: { error: { code, message: 'SERVER TEXT', request_id: 'r' } } },
+    });
+    const screen = renderApp(<OverviewPage />);
+    await waitFor(() => expect(traffic.analytics).toHaveLength(1));
+    await settle();
+    expect(summaryRegion(screen)).not.toBeInTheDocument();
+    expect(screen.queryByText('SERVER TEXT')).not.toBeInTheDocument();
+    expect(screen.getByText('Opportunities by classification')).toBeInTheDocument();
+  });
+
+  it('any other failure is one muted line with a retry, never the server text', async () => {
+    // A 422 is not retried by the hook (deterministic), so the line shows at once.
+    const traffic = analyticsBackend({
+      analytics: { status: 422, body: { error: { code: 'validation_error', message: 'SERVER TEXT' } } },
+    });
+    const screen = renderApp(<OverviewPage />);
+    const region = await screen.findByRole('region', { name: 'Status analytics' });
+    expect(await within(region).findByText('Status analytics could not be loaded.')).toBeInTheDocument();
+    expect(screen.queryByText('SERVER TEXT')).not.toBeInTheDocument();
+    const before = traffic.analytics.length;
+    await screen.user.click(within(region).getByRole('button', { name: /Try again/ }));
+    await waitFor(() => expect(traffic.analytics.length).toBe(before + 1));
+  });
+
+  it('a location view asks for the active location only', async () => {
+    const traffic = analyticsBackend();
+    renderApp(<OverviewPage />, { activeLocation: 'loc-dallas' });
+    await waitFor(() => expect(traffic.analytics).toHaveLength(1));
+    expect(traffic.analytics[0]!.searchParams.get('location_id')).toBe('loc-dallas');
+  });
+
+  it('on the real route, the shipped dark default renders no summary and sends no analytics request', async () => {
+    const seen: string[] = [];
+    const record = ({ request }: { request: Request }) => {
+      seen.push(new URL(request.url).pathname);
+    };
+    server.events.on('request:start', record);
+    try {
+      const screen = renderApp(<App />, { route: '/' });
+      expect(await screen.findByText('Opportunities by classification')).toBeInTheDocument();
+      await waitFor(() =>
+        expect(seen.some((p) => p.endsWith('/notifications-analytics-capability'))).toBe(true),
+      );
+      await settle();
+      expect(summaryRegion(screen)).not.toBeInTheDocument();
+      expect(seen.filter((p) => p.endsWith('/analytics'))).toEqual([]);
+    } finally {
+      server.events.removeListener('request:start', record);
+    }
+  });
+
+  it('on the real route, a reader with the reflection on sees the summary', async () => {
+    analyticsBackend();
+    const screen = renderApp(<App />, { route: '/' });
+    expect(await screen.findByRole('region', { name: 'Status analytics' })).toBeInTheDocument();
   });
 });

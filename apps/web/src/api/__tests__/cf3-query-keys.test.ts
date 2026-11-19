@@ -26,6 +26,15 @@ describe('queryKeys: 5D campaign, 5E export and analytics (CF-3)', () => {
       'exports',
     ]);
     expect(queryKeys.exportCapability('ws-1')).toEqual(['workspaces', 'ws-1', 'export-capability']);
+    // I-5E: the one O-12(B) reflection key, per workspace (shell bell, analytics, Overview).
+    expect(queryKeys.notificationsAnalyticsCapability('ws-1')).toEqual([
+      'workspaces',
+      'ws-1',
+      'notifications-analytics-capability',
+    ]);
+    expect(queryKeys.notificationsAnalyticsCapability('ws-1')).not.toEqual(
+      queryKeys.notificationsAnalyticsCapability('ws-2'),
+    );
     expect(queryKeys.analytics('ws-1', null)).toEqual([
       'workspaces',
       'ws-1',

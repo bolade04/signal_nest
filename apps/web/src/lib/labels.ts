@@ -1,3 +1,4 @@
+import type { ExportFormat, NotificationEventCode } from '@/api/types';
 import { titleCase } from './utils';
 
 // Human-readable labels + semantic intents for backend enum values. These mirror
@@ -177,6 +178,24 @@ export const roleLabels: Record<string, string> = {
   viewer: 'Viewer',
   compliance_reviewer: 'Compliance Reviewer',
 };
+
+// Project Phase 5E (I-5E): the two 5E vocabularies, total over the generated contract types so
+// a value added to or removed from the API is a compile error here.
+/** Audited manual export formats (`ExportFormat`). */
+export const exportFormatLabels = {
+  'text/plain': 'Plain text',
+  'text/markdown': 'Markdown',
+  json: 'JSON',
+} as const satisfies Record<ExportFormat, string>;
+
+/** In-app notification event codes (`NotificationEventCode`), as the preferences name them. */
+export const notificationEventLabels = {
+  'brief.created': 'New briefs to review',
+  'approval.decided': 'Decisions on your briefs and drafts',
+  'draft.generated': 'Your drafts are ready',
+  'review.blocked': 'Your drafts are blocked by review',
+  'export.completed': 'Exports of your drafts',
+} as const satisfies Record<NotificationEventCode, string>;
 
 export function label(map: Record<string, string>, value: string | null | undefined): string {
   if (!value) return '—';

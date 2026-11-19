@@ -6,9 +6,21 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { NotificationsMenu } from '@/pages/notifications/NotificationFeed';
 
-// Placeholder surface — real-time notifications are a later-phase capability.
+/**
+ * The shell's notification bell (Project Phase 5E, I-5E). It renders lane 5E-W3's feed menu
+ * while the workspace-effective O-12(B) reflection says notifications are on for the active
+ * workspace and the signed-in user is known. Otherwise — off, loading, failed, no workspace —
+ * it renders the placeholder below and sends no feed request. UX only: every notification
+ * route answers 503 while the capability is off.
+ */
 export function Notifications() {
+  return <NotificationsMenu fallback={<NotificationsPlaceholder />} />;
+}
+
+/** The bell as it was before 5E: an empty dropdown that sends nothing. */
+function NotificationsPlaceholder() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>

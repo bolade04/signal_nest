@@ -5,7 +5,11 @@
 are additive, nullable normalised codes (:mod:`app.jurisdiction.codes`) beside the free-text
 ``country`` / ``state`` fields, which are kept. ``NULL`` means "no resolution was ever
 attempted or captured"; the resolver's ``UNRESOLVED`` is never stored (the CHECK refuses it).
-Nothing writes or reads either column yet: the resolver and its consumers are lane 5D-W2's.
+Nothing in the application writes either column. The resolver reads a location's captured code
+when it is present and refuses a resolution that disagrees with it
+(:func:`app.jurisdiction.resolver.resolve_jurisdiction`); no decision reads the coverage
+rule's column, and the organization data export returns both columns with the rest of each
+row. (At CF-3 this read "Nothing writes or reads either column yet".)
 ``uq_business_locations_id_workspace`` is the target of the campaign-membership table's
 workspace-consistency key (:class:`app.campaign_context.models.CampaignLocation`).
 

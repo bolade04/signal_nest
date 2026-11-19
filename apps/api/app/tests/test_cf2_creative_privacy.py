@@ -228,7 +228,8 @@ def test_inventory_of_the_two_tables():
     assert TABLES["creative_drafts"].retention_class is None  # dependent rows
     assert TABLES["content_reviews"].category is Category.COMPLIANCE
     assert TABLES["content_reviews"].retention_class is None  # cascades with its draft
-    # No new retention class and no duration was decided.
-    assert len(RetentionClass) == 7
+    # CF-2 added no retention class and decided no duration (the eighth class, Project Phase
+    # 5E's ``notifications`` under D-N4 item 30, is unset too).
+    assert len(RetentionClass) == 8
     settings = Settings(_env_file=None)
     assert all(getattr(settings, c.setting_name) is None for c in RetentionClass)

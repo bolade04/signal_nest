@@ -23,6 +23,7 @@ import { ApprovalsRoute } from '@/pages/approvals/ApprovalsRoute';
 import { CreativeRoute } from '@/pages/creative/CreativeRoute';
 import { CreativeHomePage } from '@/pages/creative/CreativeHome';
 import { BriefDraftsPage } from '@/pages/creative/BriefDraftsPage';
+import { AnalyticsPage } from '@/pages/analytics/AnalyticsPage';
 import { SettingsPage } from '@/pages/Settings';
 import { NotFoundPage } from '@/pages/NotFound';
 
@@ -59,6 +60,10 @@ export function App() {
             <Route path="creative" element={<CreativeHomePage />} />
             <Route path="creative/:briefId" element={<BriefDraftsPage />} />
           </Route>
+          {/* Project Phase 5E status analytics (I-5E): the page shows its own refused (viewer,
+              compliance reviewer) and dark (O-12(B) off for the workspace) states and sends no
+              analytics request in either; the nav entry is hidden in both. */}
+          <Route path="analytics" element={<AnalyticsPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route element={<RequireOperator />}>
             <Route path="operations" element={<OperationsPage />} />

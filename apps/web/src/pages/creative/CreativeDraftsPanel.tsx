@@ -9,7 +9,7 @@ import { useAuth } from '@/auth/AuthContext';
 import { ErrorState } from '@/components/common/states';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { canEditWorkspace } from '@/lib/roles';
+import { canEditWorkspace, canReadApprovalHistory, useActorRole } from '@/lib/roles';
 import { useStatusPolling } from '@/lib/status-polling';
 import { formatRelative } from '@/lib/utils';
 import { useBriefDecisions } from '@/pages/approvals/useApprovals';
@@ -17,10 +17,17 @@ import { useWorkspace } from '@/workspace/WorkspaceContext';
 import { BlockedState } from './BlockedState';
 import { DraftDecisions } from './DraftDecisions';
 import { DraftEditor } from './DraftEditor';
+import { DraftExportControls } from './ExportDialog';
 import { ReviewWarningsPanel } from './ReviewWarningsPanel';
 import { VersionHistory } from './VersionHistory';
 import { CHANNEL_LABELS, generationFailureMessage, isGenerationInFlight } from './creativeLabels';
-import { useBriefDrafts, useCreativeCapability, useGenerateDraft, useGenerationJob } from './useCreative';
+import {
+  useBriefDrafts,
+  useCreativeCapability,
+  useDraftDecisions,
+  useGenerateDraft,
+  useGenerationJob,
+} from './useCreative';
 
 /**
  * The generated drafts of one recommendation brief (Project Phase 5C, W21 lane P5C): the
@@ -306,6 +313,31 @@ function DraftView({ workspaceId, draft }: { workspaceId: string; draft: Creativ
       )}
       {/* I-5C: this version's decisions (every role but viewer); the reviewer's controls. */}
       <DraftDecisions key={draft.id} workspaceId={workspaceId} draft={draft} />
+      {/* 5E-W3 (interface sheet P3): export, for an approved version only. */}
+      <ApprovedDraftExport key={`export-${draft.id}`} workspaceId={workspaceId} draft={draft} />
     </article>
+  );
+}
+
+/**
+ * The export controls of one draft version, mounted only while its controlling decision is an
+ * approval (5E-W3; interface sheet P3). The decision history is the one `DraftDecisions` reads
+ * (same key, so no second request), read only by the roles that may read it (every role but
+ * viewer, which is also the export history's audience, item 32). `DraftExportControls` then
+ * renders nothing, and sends nothing, unless the workspace-effective export reflection says
+ * enabled. The export routes re-decide every precondition and answer 503, 403, 404 or 409.
+ */
+function ApprovedDraftExport({ workspaceId, draft }: { workspaceId: string; draft: CreativeDraftOut }) {
+  const { organizationId } = useWorkspace();
+  const actor = useActorRole(organizationId);
+  const readsDecisions = canReadApprovalHistory(actor.role);
+  const decisions = useDraftDecisions(workspaceId, draft.id, readsDecisions);
+  if (!readsDecisions || decisions.data?.items[0]?.decision !== 'approved') return null;
+  return (
+    <DraftExportControls
+      workspaceId={workspaceId}
+      draftId={draft.id}
+      draftVersion={draft.draft_version}
+    />
   );
 }

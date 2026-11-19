@@ -6,8 +6,12 @@ because the aggregates include approval latency and generation/review outcomes, 
 sensitivity class the audit read route is narrowed for (O-1). The set is named here so it is
 reviewable and adjustable by the operator. It reuses the Phase 6 primitive and mounts nothing.
 
-Analytics carries **no flag and no capability**: whether it should is open operator decision
-O-12. When 5E-W2 mounts it, it is live (it aggregates existing opportunities).
+The capability gate is separate from this role set. Operator decision O-12 was ruled on
+2026-11-12: "Choose O-12(B): one additional flag for the notifications and analytics surfaces,
+off by default. Explicitly amend O-4’s three-flag limit. Gate the backend routes, customer UI
+and applicable notification emission consistently." The analytics route
+(``app.analytics.routes``) therefore answers 503 while ``notifications_analytics`` does not
+resolve enabled for the workspace, after this role check.
 """
 
 from __future__ import annotations

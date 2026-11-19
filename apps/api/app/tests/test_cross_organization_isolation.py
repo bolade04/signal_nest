@@ -1595,6 +1595,270 @@ class TestCreativeDraftDecisions:
 
 
 # --------------------------------------------------------------------------- #
+# 8b. Export, status analytics and in-app notifications (Project Phase 5E, I-5E)
+# --------------------------------------------------------------------------- #
+@dataclass
+class FiveERows:
+    draft_id: str  # an exportable draft version of the tenant's creative brief
+    notification_id: str  # one unread notification of the tenant's owner
+
+
+#: The export probes' brief and draft take versions of their own, so neither appears in the
+#: creative probes' brief listing or collides with another probe's brief.
+EXPORT_BRIEF_VERSION = 9
+EXPORT_DRAFT_VERSION = 1
+
+
+@pytest.fixture(scope="module")
+def five_e_rows(world: World, creative_rows) -> dict[str, FiveERows]:
+    """Per tenant, written directly: one exportable draft version (the brief's jurisdiction on
+    the draft, a passed review, the controlling decision approved) and one unread
+    notification addressed to the owner. Export and the feed themselves are proven in the 5E
+    suites; this module proves their tenant isolation."""
+    from app.briefs.models import RecommendationBrief
+    from app.creative.models import ContentReview, CreativeDraft
+    from app.notifications.models import Notification
+
+    rows: dict[str, FiveERows] = {}
+    factory = sessionmaker(bind=world.witness, autoflush=False, expire_on_commit=False)
+    with factory() as s:
+        for t in (world.a, world.b):
+            k = f"e5{t.key}"
+            scoped = {"organization_id": t.org_id, "workspace_id": t.ws_id}
+            snapshot = f"{t.owner_id} {t.key} owner <ci3-{t.key}-owner@example.com>"
+            # A brief of its own on the creative probes' evidence chain, with the jurisdiction
+            # the export copies (5D-W3 captures it at brief creation).
+            brief_id = f"{k}brief"
+            s.add(RecommendationBrief(
+                id=brief_id, opportunity_id=t.opportunity_id,
+                intelligence_record_id=f"c5{t.key}intel", brief_version=EXPORT_BRIEF_VERSION,
+                analysis_version="1", scoring_version="1", prompt_name="explain_opportunity",
+                prompt_version="1.2.0", model_identifier="mock-1", input_hash="0" * 64,
+                is_simulated=True, created_by=t.marketer_id, created_by_snapshot=snapshot,
+                summary="s", rationale="r", recommended_actions=[], suggested_angles=[],
+                risk_notes=[], evidence_refs=[], jurisdiction_code="US-TX", **scoped,
+            ))
+            s.flush()
+            # D-N4 item 38 (DN4-38, merged at I-5E stage 1b): a draft is exportable only while
+            # its brief version is approved, as for a new draft approval.
+            s.add(Approval(
+                subject_type="recommendation_brief", subject_id=brief_id,
+                subject_version=EXPORT_BRIEF_VERSION, brief_id=brief_id, decision="approved",
+                decision_seq=1, decided_by=t.owner_id, decided_by_snapshot=snapshot,
+                decided_role="reviewer", is_simulated=False, **scoped,
+            ))
+            s.add(CreativeDraft(
+                id=f"{k}draft", brief_id=brief_id, opportunity_id=t.opportunity_id,
+                draft_version=EXPORT_DRAFT_VERSION, channel="email", body=f"Export {t.key}",
+                prompt_name="generate_creative", prompt_version="1.0.0",
+                model_identifier="mock-1", input_hash="0" * 64, is_simulated=True,
+                input_tokens=1, output_tokens=1, estimated_cost_usd=0,
+                jurisdiction_code="US-TX",
+                created_by=t.owner_id, created_by_snapshot=snapshot, **scoped,
+            ))
+            s.flush()
+            s.add(ContentReview(
+                draft_id=f"{k}draft", draft_version=EXPORT_DRAFT_VERSION, risk_level="low",
+                is_blocked=False, findings=[], warnings=[], blocked_claim_ids=[],
+                required_disclaimers=[], disclaimers_resolved=True, passed=True,
+                jurisdiction_code="US-TX", **scoped,
+            ))
+            s.add(Approval(
+                subject_type="creative_draft", subject_id=f"{k}draft",
+                subject_version=EXPORT_DRAFT_VERSION, draft_id=f"{k}draft",
+                decision="approved", decision_seq=1, decided_by=t.marketer_id,
+                decided_by_snapshot=snapshot, decided_role="reviewer", is_simulated=False,
+                **scoped,
+            ))
+            s.add(Notification(
+                id=f"{k}notif", user_id=t.owner_id, event_code="brief.created",
+                subject_id=brief_id, **scoped,
+            ))
+            rows[t.key] = FiveERows(f"{k}draft", f"{k}notif")
+        s.commit()
+    return rows
+
+
+@pytest.fixture
+def export_on() -> Iterator[None]:
+    settings = get_settings()
+    saved = settings.content_export_enabled
+    settings.content_export_enabled = True
+    try:
+        yield
+    finally:
+        settings.content_export_enabled = saved
+
+
+@pytest.fixture
+def notifications_analytics_on() -> Iterator[None]:
+    """O-12(B)'s flag on for one probe (the shipped state is off)."""
+    settings = get_settings()
+    saved = settings.notifications_analytics_enabled
+    settings.notifications_analytics_enabled = True
+    try:
+        yield
+    finally:
+        settings.notifications_analytics_enabled = saved
+
+
+class TestExports:
+    """Audited manual export (5E-W1): a foreign draft id under the caller's workspace is the
+    same 404 as a missing one and writes nothing; the foreign workspace path is the
+    membership 403; the caller's own approved draft exports into the caller's tenant only."""
+
+    def test_capability_reflection_own_workspace_only(
+        self, world: World, pov: Pov, export_on
+    ):
+        a, b = pov.a, pov.b
+        own = pov.send("GET", _ws_path(world, a, "/export-capability"))
+        assert own.status_code == 200 and own.json() == {"enabled": True}
+        _assert_membership_403(pov.send("GET", _ws_path(world, b, "/export-capability")))
+
+    def test_export_and_history_with_foreign_draft_id_404_nothing_written(
+        self, world: World, pov: Pov, five_e_rows, export_on
+    ):
+        from app.exports.models import Export
+
+        a, b = pov.a, pov.b
+        mine, theirs = five_e_rows[a.key], five_e_rows[b.key]
+        body = {"format": "text/plain"}
+        exports_before = world.count(Export)
+        theirs_before = [r for r in _rows(world, Export) if r["workspace_id"] == b.ws_id]
+        for draft_id in (theirs.draft_id, SENTINEL):
+            _assert_404(pov.send("POST", _ws_path(world, a, f"/drafts/{draft_id}/exports"), body),
+                        "Draft not found in this workspace.")  # fmt: skip
+            _assert_404(pov.send("GET", _ws_path(world, a, f"/drafts/{draft_id}/exports")),
+                        "Draft not found in this workspace.")  # fmt: skip
+        _assert_membership_403(
+            pov.send("POST", _ws_path(world, b, f"/drafts/{theirs.draft_id}/exports"), body)
+        )
+        _assert_membership_403(
+            pov.send("GET", _ws_path(world, b, f"/drafts/{theirs.draft_id}/exports"))
+        )
+        assert world.count(Export) == exports_before
+        # Positive control: the caller's own approved draft exports into its own tenant.
+        own = pov.send("POST", _ws_path(world, a, f"/drafts/{mine.draft_id}/exports"), body)
+        assert own.status_code == 201, own.text
+        row = world.row(Export, own.json()["id"])
+        assert (row["organization_id"], row["workspace_id"], row["draft_id"]) == (
+            a.org_id, a.ws_id, mine.draft_id
+        )
+        assert [r for r in _rows(world, Export) if r["workspace_id"] == b.ws_id] == theirs_before
+        history = pov.send("GET", _ws_path(world, a, f"/drafts/{mine.draft_id}/exports"))
+        assert history.status_code == 200
+        ids = {i["id"] for i in history.json()["items"]}
+        assert own.json()["id"] in ids
+        assert all(
+            world.row(Export, i)["workspace_id"] == a.ws_id for i in ids
+        )
+
+
+class TestStatusAnalytics:
+    """Status analytics (5E-W2): the caller's workspace only; a foreign location id in the
+    query is the uniform 404; the foreign workspace path is the membership 403."""
+
+    def test_own_workspace_only_and_foreign_location_404(
+        self, world: World, pov: Pov, notifications_analytics_on
+    ):
+        a, b = pov.a, pov.b
+        own = pov.send("GET", _ws_path(world, a, "/analytics"))
+        assert own.status_code == 200, own.text
+        body = own.json()
+        assert body["workspace_id"] == a.ws_id and body["location_id"] is None
+        listed = {row["location_id"] for row in body["locations"]}
+        locations = _rows(world, BusinessLocation)
+        assert listed == {r["id"] for r in locations if r["workspace_id"] == a.ws_id}
+        assert a.location_id in listed
+        assert not listed & {r["id"] for r in locations if r["workspace_id"] == b.ws_id}
+        located = pov.send("GET", _ws_path(world, a, "/analytics"),
+                           params={"location_id": a.location_id})  # fmt: skip
+        assert located.status_code == 200 and located.json()["location_id"] == a.location_id
+        _assert_404(pov.send("GET", _ws_path(world, a, "/analytics"),
+                             params={"location_id": b.location_id}),
+                    "Location not found in this workspace.")  # fmt: skip
+        _assert_membership_403(pov.send("GET", _ws_path(world, b, "/analytics")))
+
+
+class TestNotifications:
+    """In-app notifications (5E-W3): the session user's own rows in the caller's workspace
+    only; a foreign notification id under the caller's workspace is the uniform 404 and the
+    row is unchanged; the foreign workspace path is the membership 403 on every route."""
+
+    def test_capability_reflection_own_workspace_only(
+        self, world: World, pov: Pov, notifications_analytics_on
+    ):
+        a, b = pov.a, pov.b
+        own = pov.send("GET", _ws_path(world, a, "/notifications-analytics-capability"))
+        assert own.status_code == 200 and own.json() == {"enabled": True}
+        _assert_membership_403(
+            pov.send("GET", _ws_path(world, b, "/notifications-analytics-capability"))
+        )
+
+    def test_feed_and_mark_read_with_foreign_notification_id_404_unchanged(
+        self, world: World, pov: Pov, five_e_rows, notifications_analytics_on
+    ):
+        from app.notifications.models import Notification
+
+        a, b = pov.a, pov.b
+        mine, theirs = five_e_rows[a.key], five_e_rows[b.key]
+        feed = pov.send("GET", _ws_path(world, a, "/notifications"))
+        assert feed.status_code == 200
+        ids = {i["id"] for i in feed.json()["items"]}
+        assert mine.notification_id in ids and theirs.notification_id not in ids
+        _assert_membership_403(pov.send("GET", _ws_path(world, b, "/notifications")))
+        before = world.row(Notification, theirs.notification_id)
+        for notification_id in (theirs.notification_id, SENTINEL):
+            _assert_404(
+                pov.send("POST", _ws_path(world, a, f"/notifications/{notification_id}/read")),
+                "Notification not found.",
+            )
+        _assert_membership_403(
+            pov.send("POST", _ws_path(world, b, f"/notifications/{theirs.notification_id}/read"))
+        )
+        assert world.row(Notification, theirs.notification_id) == before
+        own = pov.send("POST", _ws_path(world, a, f"/notifications/{mine.notification_id}/read"))
+        assert own.status_code == 200 and own.json()["id"] == mine.notification_id
+        assert world.row(Notification, mine.notification_id)["read_at"] is not None
+        assert world.row(Notification, theirs.notification_id) == before
+
+    def test_preferences_own_workspace_only_nothing_written_for_the_foreign(
+        self, world: World, pov: Pov, notifications_analytics_on
+    ):
+        from app.notifications.models import NotificationPreference
+
+        a, b = pov.a, pov.b
+        body = {"items": [{"event_code": "brief.created", "enabled": False}]}
+        theirs_before = sorted(
+            (r["user_id"], r["event_code"], r["enabled"])
+            for r in _rows(world, NotificationPreference)
+            if r["workspace_id"] == b.ws_id
+        )
+        _assert_membership_403(pov.send("GET", _ws_path(world, b, "/notification-preferences")))
+        _assert_membership_403(
+            pov.send("PUT", _ws_path(world, b, "/notification-preferences"), body)
+        )
+        theirs_after = sorted(
+            (r["user_id"], r["event_code"], r["enabled"])
+            for r in _rows(world, NotificationPreference)
+            if r["workspace_id"] == b.ws_id
+        )
+        assert theirs_after == theirs_before
+        own = pov.send("PUT", _ws_path(world, a, "/notification-preferences"), body)
+        assert own.status_code == 200, own.text
+        stored = [
+            r for r in _rows(world, NotificationPreference)
+            if r["workspace_id"] == a.ws_id and r["event_code"] == "brief.created"
+        ]
+        assert [(r["organization_id"], r["user_id"], r["enabled"]) for r in stored] == [
+            (a.org_id, a.owner_id, False)
+        ]
+        read = pov.send("GET", _ws_path(world, a, "/notification-preferences"))
+        assert read.status_code == 200
+        assert {"event_code": "brief.created", "enabled": False} in read.json()["items"]
+
+
+# --------------------------------------------------------------------------- #
 # 9. Jobs
 # --------------------------------------------------------------------------- #
 class TestJobs:
@@ -2203,6 +2467,35 @@ COVERAGE: dict[tuple[str, str], tuple[str, ...]] = {
     ("GET", f"{W}/opportunities/{{opportunity_id}}/feedback"): (
         "TestOpportunities::test_feedback_capability_and_feedback_routes",
     ),
+    # Project Phase 5E (I-5E stage 1): export (5E-W1), status analytics (5E-W2) and in-app
+    # notifications (5E-W3).
+    ("GET", f"{W}/export-capability"): (
+        "TestExports::test_capability_reflection_own_workspace_only",
+    ),
+    **{
+        (m, f"{W}/drafts/{{draft_id}}/exports"): (
+            "TestExports::test_export_and_history_with_foreign_draft_id_404_nothing_written",
+        )
+        for m in ("POST", "GET")
+    },
+    ("GET", f"{W}/analytics"): (
+        "TestStatusAnalytics::test_own_workspace_only_and_foreign_location_404",
+    ),
+    ("GET", f"{W}/notifications-analytics-capability"): (
+        "TestNotifications::test_capability_reflection_own_workspace_only",
+    ),
+    ("GET", f"{W}/notifications"): (
+        "TestNotifications::test_feed_and_mark_read_with_foreign_notification_id_404_unchanged",
+    ),
+    ("POST", f"{W}/notifications/{{notification_id}}/read"): (
+        "TestNotifications::test_feed_and_mark_read_with_foreign_notification_id_404_unchanged",
+    ),
+    **{
+        (m, f"{W}/notification-preferences"): (
+            "TestNotifications::test_preferences_own_workspace_only_nothing_written_for_the_foreign",
+        )
+        for m in ("GET", "PUT")
+    },
     ("POST", f"{W}/opportunities/{{opportunity_id}}/feedback"): (
         "TestOpportunities::test_feedback_capability_and_feedback_routes",
     ),
@@ -2355,8 +2648,11 @@ class TestCoverageCompleteness:
         # list/generate a brief's drafts and fetch one draft (TestCreativeDrafts); 97 -> 99:
         # decide on a draft and its decision history (TestCreativeDraftDecisions). 99 -> 100
         # (Project Phase 5D, 5D-W1): read one campaign (TestCampaignRead). 100 -> 101 (W21 ADDR):
-        # the locality confirmation (TestLocations).
-        assert len(served) == 101
+        # the locality confirmation (TestLocations). 101 -> 110 (Project Phase 5E, I-5E stage
+        # 1): the export reflection, export and its history (TestExports), status analytics
+        # (TestStatusAnalytics), and the O-12(B) reflection, the feed, mark-read and the
+        # preferences read and write (TestNotifications).
+        assert len(served) == 110
 
     def test_every_named_proof_exists(self):
         here = _tests_defined_in(Path(__file__))

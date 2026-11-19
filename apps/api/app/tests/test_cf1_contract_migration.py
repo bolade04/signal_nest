@@ -5,9 +5,10 @@ Through the real Alembic CLI on a throwaway SQLite database (as CI validates mig
 * ``f3a9c1e7b2d5`` follows ``e7b3c5a9d1f4``, CF-2's ``a7d2e9f4c1b8`` follows it, CF-3's
   ``c3f8e1a6d2b9`` follows CF-2, 5D-W1's campaign-location data repair ``d5f616c0ec97`` follows
   CF-3, W21 ADDR's structured business address ``6f8a80cf1785`` follows the repair, D-N4 item
-  37's append-only backstop ``d0a8bce8de6a`` (triggers on PostgreSQL only) follows ADDR, and the
-  single head (D-N4 item 36's closed claim kinds ``1574637e56d3``, data only) follows the
-  backstop; ``upgrade head`` then ``alembic
+  37's append-only backstop ``d0a8bce8de6a`` (triggers on PostgreSQL only) follows ADDR, D-N4
+  item 36's closed claim kinds ``1574637e56d3`` (data only) follows the backstop, and the single
+  head (5E-CF's capability-CHECK widening ``53fdde95354a``, operator ruling O-12(B)) follows the
+  claim kinds; ``upgrade head`` then ``alembic
   check`` reports no drift between the models and the migrations (Phase 5 plan §6.2.0);
 * **the migrated database's CHECKs equal their Python authorities, in both directions** — the
   capability set (``persisted_values()``), the approval decision / subject-type / decided-role
@@ -23,7 +24,8 @@ Through the real Alembic CLI on a throwaway SQLite database (as CI validates mig
 
 The CHECK-equality and insert tests run at the code head, where the CHECKs must equal the
 *current* Python authorities (CF-2 widened the capability and approval-subject vocabularies
-and added ``ck_approval_draft_subject``); the downgrade tests start from ``f3a9c1e7b2d5``
+and added ``ck_approval_draft_subject``; CF-3 and 5E-CF widened the capability vocabulary
+again); the downgrade tests start from ``f3a9c1e7b2d5``
 itself (CF-2's own downgrade is pinned by ``test_cf2_contract_migration``).
 """
 
@@ -57,8 +59,11 @@ D1_REPAIR = "d5f616c0ec97"
 ADDR = "6f8a80cf1785"
 #: D-N4 item 37's PostgreSQL append-only backstop, which follows ADDR.
 BACKSTOP = "d0a8bce8de6a"
-#: The code head (D-N4 item 36's closed claim kinds, data only), which follows the backstop.
-HEAD = "1574637e56d3"
+#: D-N4 item 36's closed claim kinds (data only), which follows the backstop.
+CLAIM_KINDS = "1574637e56d3"
+#: The code head (Project Phase 5E 5E-CF, operator ruling O-12(B): the capability-override CHECK
+#: admits ``notifications_analytics``), which follows the claim kinds.
+HEAD = "53fdde95354a"
 #: W21 CF-2, between this revision and the head.
 CF2 = "a7d2e9f4c1b8"
 PREV = "e7b3c5a9d1f4"
@@ -197,7 +202,8 @@ def test_the_head_is_single_and_follows_the_finding_identity() -> None:
 
     script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
     assert [r.revision for r in script.get_revisions("heads")] == [HEAD]
-    assert script.get_revision(HEAD).down_revision == BACKSTOP
+    assert script.get_revision(HEAD).down_revision == CLAIM_KINDS
+    assert script.get_revision(CLAIM_KINDS).down_revision == BACKSTOP
     assert script.get_revision(BACKSTOP).down_revision == ADDR
     assert script.get_revision(ADDR).down_revision == D1_REPAIR
     assert script.get_revision(D1_REPAIR).down_revision == CF3

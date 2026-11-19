@@ -201,7 +201,7 @@ creates no role or policy.**
 - **Migrations** run as a **controlled one-time ECS task** using the **approved image**
   (`python -m app.db.migrate`); replicas never migrate (`docs/operations/deployment.md`,
   `docs/operations/migrations.md`).
-- **Single Alembic head** verified before/after: `1574637e56d3` (30 revisions).
+- **Single Alembic head** verified before/after: `53fdde95354a` (31 revisions).
 - A **migration backup / recovery checkpoint** (snapshot) is taken before applying
   migrations.
 - **Forward and rollback** procedures follow the additive-first policy
@@ -266,9 +266,10 @@ The contract **requires**, throughout INFRA implementation and environment setup
 
 - `opportunity_feedback_enabled=False`, `scout_scheduling_enabled=False`,
   `connector_rss_enabled=False`, `recommendation_briefs_enabled=False`,
-  `creative_generation_enabled=False`, `content_export_enabled=False` (all six global flags
-  remain `False`; the fourth was added by Project Phase 5 CF-1, the fifth by CF-2 and the
-  sixth by CF-3, each defaulting `False`). The four
+  `creative_generation_enabled=False`, `content_export_enabled=False`,
+  `notifications_analytics_enabled=False` (all seven global flags remain `False`; the fourth
+  was added by Project Phase 5 CF-1, the fifth by CF-2, the sixth by CF-3 and the seventh by
+  5E-CF under operator ruling O-12(B), each defaulting `False`). The four
   Project Phase 5C ceilings (`llm_daily_cost_ceiling_usd_global`,
   `llm_daily_cost_ceiling_usd_per_workspace`, `llm_max_calls_per_workspace_per_day`,
   `llm_max_output_tokens_per_call`) stay unset: no value is approved, and 5C generation

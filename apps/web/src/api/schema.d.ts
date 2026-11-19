@@ -1166,6 +1166,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/analytics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Status analytics for this workspace, or one of its locations
+         * @description Counts by state for opportunities, briefs, approvals, drafts, reviews and exports;
+         *     approval latency; generation and review outcomes; and a per-location comparison.
+         *
+         *     Exact roles OWNER, ADMIN, MARKETER and REVIEWER (403 otherwise); 503 while the
+         *     notifications-and-analytics capability is off for the workspace; 404 for a location that
+         *     is not this workspace's. A figure without a basis is null, never 0. No attribution or
+         *     advertising-performance figure.
+         */
+        get: operations["read_workspace_analytics_api_v1_workspaces__workspace_id__analytics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/approval-queue": {
         parameters: {
             query?: never;
@@ -1600,6 +1626,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/drafts/{draft_id}/exports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A draft version's exports, newest first
+         * @description The draft version's export records, newest first, without their text. Read-only.
+         */
+        get: operations["list_draft_exports_api_v1_workspaces__workspace_id__drafts__draft_id__exports_get"];
+        put?: never;
+        /**
+         * Export one approved draft version (owner, admin or marketer)
+         * @description Record one audited export of the draft's exact version and answer its text, rendered
+         *     in ``format`` (``text/plain``, ``text/markdown`` or ``json``).
+         *
+         *     Answers 503 ``capability_unavailable`` while export is not available for the workspace,
+         *     404 for an unknown, foreign or deleted draft, and 409 when the draft cannot be exported:
+         *     ``export_jurisdiction_missing`` (no valid jurisdiction recorded on the draft or its brief),
+         *     ``jurisdiction_mismatch`` (the two differ), ``export_not_approved`` (the latest decision on
+         *     this version is not an approval) or ``export_review_blocked`` (its content review, or the
+         *     claims library as it stands now, does not allow it). A refusal records nothing.
+         */
+        post: operations["export_draft_api_v1_workspaces__workspace_id__drafts__draft_id__exports_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/export-capability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether export is available for this workspace
+         * @description Customer-facing, workspace-effective export availability (any member). Advisory
+         *     only: both export endpoints re-decide and answer 503 while it is false. Answers 200 while
+         *     export is dark.
+         */
+        get: operations["read_export_capability_api_v1_workspaces__workspace_id__export_capability_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/feedback-capability": {
         parameters: {
             query?: never;
@@ -1838,6 +1918,95 @@ export interface paths {
          * @description Return a deactivated location to service; a no-op (200) when already active.
          */
         post: operations["reactivate_location_api_v1_workspaces__workspace_id__locations__location_id__reactivate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/notification-preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The session user's notification preferences in this workspace
+         * @description Every event code with whether it is delivered to the caller here (default: delivered).
+         */
+        get: operations["read_notification_preferences_api_v1_workspaces__workspace_id__notification_preferences_get"];
+        /**
+         * Set the session user's notification preferences in this workspace
+         * @description Set the given event codes for the caller; the others are unchanged. Answers every code.
+         */
+        put: operations["update_notification_preferences_api_v1_workspaces__workspace_id__notification_preferences_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The session user's notifications in this workspace, newest first
+         * @description A bounded page of the caller's own feed, with its total and unread counts.
+         */
+        get: operations["list_notifications_api_v1_workspaces__workspace_id__notifications_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/notifications-analytics-capability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether notifications and analytics are available for this workspace
+         * @description Customer-facing, workspace-effective availability of notifications and analytics.
+         *
+         *     Any member may read it. Advisory only: every notification and analytics endpoint
+         *     re-decides and answers 503 while it is off. It answers 200 while dark, by design.
+         */
+        get: operations["read_notifications_analytics_capability_api_v1_workspaces__workspace_id__notifications_analytics_capability_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/notifications/{notification_id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mark one of the session user's notifications read (idempotent)
+         * @description Mark the caller's own notification read; the first ``read_at`` is kept.
+         *
+         *     Any miss (unknown id, another workspace's, another user's, deleted) is the same 404.
+         */
+        post: operations["mark_notification_read_api_v1_workspaces__workspace_id__notifications__notification_id__read_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2571,6 +2740,32 @@ export interface components {
             subject: components["schemas"]["ExportSubjectOut"];
         };
         /**
+         * AnalyticsOut
+         * @description Status analytics for one workspace, or one of its locations.
+         */
+        AnalyticsOut: {
+            approval_latency: components["schemas"]["ApprovalLatencyOut"];
+            approvals: components["schemas"]["ApprovalStateCounts"];
+            briefs: components["schemas"]["SubjectStateCounts"];
+            drafts: components["schemas"]["SubjectStateCounts"];
+            exports: components["schemas"]["ExportStateCounts"];
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Location Id */
+            location_id: string | null;
+            /** Locations */
+            locations: components["schemas"]["LocationComparisonOut"][];
+            opportunities: components["schemas"]["OpportunityStateCounts"];
+            outcomes: components["schemas"]["OutcomesOut"];
+            reviews: components["schemas"]["ReviewStateCounts"];
+            unassigned: components["schemas"]["LocationTotalsOut"] | null;
+            /** Workspace Id */
+            workspace_id: string;
+        };
+        /**
          * ApprovalDecision
          * @description The closed decision vocabulary of an append-only approval row (Phase 5B).
          *
@@ -2606,6 +2801,14 @@ export interface components {
             offset: number;
             /** Total */
             total: number;
+        };
+        /**
+         * ApprovalLatencyOut
+         * @description Approval latency, for briefs and for drafts separately.
+         */
+        ApprovalLatencyOut: {
+            briefs: components["schemas"]["LatencyOut"];
+            drafts: components["schemas"]["LatencyOut"];
         };
         /**
          * ApprovalOut
@@ -2650,6 +2853,27 @@ export interface components {
          * @enum {string}
          */
         ApprovalReason: "evidence_sufficient" | "aligned_with_strategy" | "approved_other" | "insufficient_evidence" | "off_strategy" | "brand_or_compliance_risk" | "inaccurate" | "rejected_other" | "superseded" | "circumstances_changed" | "approved_in_error" | "revoked_other";
+        /**
+         * ApprovalStateCounts
+         * @description Approval decision rows in scope (append-only; a change of mind is a new row).
+         *
+         *     By decision (``approved`` + ``rejected`` + ``revoked`` = ``total``) and by subject
+         *     (``on_briefs`` + ``on_drafts`` = ``total``).
+         */
+        ApprovalStateCounts: {
+            /** Approved */
+            approved: number;
+            /** On Briefs */
+            on_briefs: number;
+            /** On Drafts */
+            on_drafts: number;
+            /** Rejected */
+            rejected: number;
+            /** Revoked */
+            revoked: number;
+            /** Total */
+            total: number;
+        };
         /**
          * ApprovalSubjectType
          * @description What an approval decides on (Phase 5B).
@@ -3006,7 +3230,7 @@ export interface components {
          *     registry below.
          * @enum {string}
          */
-        Capability: "opportunity_feedback" | "scout_scheduling" | "connector_rss" | "recommendation_briefs" | "creative_generation" | "content_export";
+        Capability: "opportunity_feedback" | "scout_scheduling" | "connector_rss" | "recommendation_briefs" | "creative_generation" | "content_export" | "notifications_analytics";
         /**
          * CapabilityEffectiveListOut
          * @description Effective state for a workspace, one item per resolved capability.
@@ -3624,6 +3848,117 @@ export interface components {
             /** Tables Checked */
             tables_checked: number;
         };
+        /**
+         * ExportCapabilityOut
+         * @description Customer-visible export availability for one workspace.
+         *
+         *     Exactly one field (the ``RecommendationBriefCapabilityOut`` precedent): no governance
+         *     metadata (deciding rule, global flag, override) reaches a customer. Returned by
+         *     ``GET /workspaces/{workspace_id}/export-capability`` with 200 while export is dark
+         *     (interface sheet P7), so the UI can show the dark state without calling an export route.
+         */
+        ExportCapabilityOut: {
+            /** Enabled */
+            enabled: boolean;
+        };
+        /**
+         * ExportFormat
+         * @description The closed set of manual-export render formats (Phase 5E). Text only.
+         * @enum {string}
+         */
+        ExportFormat: "text/plain" | "text/markdown" | "json";
+        /**
+         * ExportHistoryItemOut
+         * @description One audited export record of one draft version (no rendered text).
+         */
+        ExportHistoryItemOut: {
+            /** Approval Id */
+            approval_id: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Draft Id */
+            draft_id: string | null;
+            /** Draft Version */
+            draft_version: number;
+            /** Exported By Snapshot */
+            exported_by_snapshot: string;
+            format: components["schemas"]["ExportFormat"];
+            /** Id */
+            id: string;
+            /** Is Simulated */
+            is_simulated: boolean;
+            /** Jurisdiction Code */
+            jurisdiction_code: string;
+        };
+        /**
+         * ExportHistoryOut
+         * @description A bounded page of one draft version's exports, newest first.
+         */
+        ExportHistoryOut: {
+            /** Items */
+            items: components["schemas"]["ExportHistoryItemOut"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
+        /**
+         * ExportIn
+         * @description Export one approved draft version in one format.
+         */
+        ExportIn: {
+            format: components["schemas"]["ExportFormat"];
+        };
+        /**
+         * ExportOut
+         * @description The export just recorded, with its rendered text.
+         */
+        ExportOut: {
+            /** Approval Id */
+            approval_id: string | null;
+            /** Content */
+            content: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Draft Id */
+            draft_id: string | null;
+            /** Draft Version */
+            draft_version: number;
+            /** Exported By Snapshot */
+            exported_by_snapshot: string;
+            format: components["schemas"]["ExportFormat"];
+            /** Id */
+            id: string;
+            /** Is Simulated */
+            is_simulated: boolean;
+            /** Jurisdiction Code */
+            jurisdiction_code: string;
+        };
+        /**
+         * ExportStateCounts
+         * @description Manual exports in scope by render format (``ExportFormat``); a partition.
+         *
+         *     ``plain_text`` = ``text/plain``, ``markdown`` = ``text/markdown``, ``json_document`` =
+         *     ``json`` (a field named ``json`` would shadow ``BaseModel.json``).
+         */
+        ExportStateCounts: {
+            /** Json Document */
+            json_document: number;
+            /** Markdown */
+            markdown: number;
+            /** Plain Text */
+            plain_text: number;
+            /** Total */
+            total: number;
+        };
         /** ExportSubjectOut */
         ExportSubjectOut: {
             /** Organization Id */
@@ -3675,6 +4010,8 @@ export interface components {
             content_export_enabled: boolean;
             /** Creative Generation Enabled */
             creative_generation_enabled: boolean;
+            /** Notifications Analytics Enabled */
+            notifications_analytics_enabled: boolean;
             /** Opportunity Feedback Enabled */
             opportunity_feedback_enabled: boolean;
             /** Recommendation Briefs Enabled */
@@ -4467,6 +4804,21 @@ export interface components {
             total: number;
         };
         /**
+         * LatencyOut
+         * @description Time from a subject version's creation to its first decision, over decided versions.
+         *
+         *     ``decided`` counts the versions in scope with at least one decision. ``mean_seconds`` and
+         *     ``median_seconds`` are ``None`` while ``decided`` is 0: there is nothing to measure.
+         */
+        LatencyOut: {
+            /** Decided */
+            decided: number;
+            /** Mean Seconds */
+            mean_seconds: number | null;
+            /** Median Seconds */
+            median_seconds: number | null;
+        };
+        /**
          * LocalityConfirmationIn
          * @description Confirm (``true``) that the saved business town or locality lies within this location's
          *     area, or withdraw that confirmation (``false``). The confirmation is the customer's own
@@ -4519,6 +4871,28 @@ export interface components {
             /** Timezone */
             timezone?: string | null;
         };
+        /**
+         * LocationComparisonOut
+         * @description One location of the workspace in the per-location comparison.
+         */
+        LocationComparisonOut: {
+            /** Approvals */
+            approvals: number;
+            /** Briefs */
+            briefs: number;
+            /** Drafts */
+            drafts: number;
+            /** Exports */
+            exports: number;
+            /** Is Active */
+            is_active: boolean;
+            /** Location Id */
+            location_id: string;
+            /** Name */
+            name: string;
+            /** Opportunities */
+            opportunities: number;
+        };
         /** LocationOut */
         LocationOut: {
             /** Address */
@@ -4570,6 +4944,22 @@ export interface components {
             /** Workspace Id */
             workspace_id: string;
         };
+        /**
+         * LocationTotalsOut
+         * @description Per-family totals for one comparison row (the same scope rules as the families).
+         */
+        LocationTotalsOut: {
+            /** Approvals */
+            approvals: number;
+            /** Briefs */
+            briefs: number;
+            /** Drafts */
+            drafts: number;
+            /** Exports */
+            exports: number;
+            /** Opportunities */
+            opportunities: number;
+        };
         /** LoginRequest */
         LoginRequest: {
             /**
@@ -4611,6 +5001,89 @@ export interface components {
             organization_name: string;
             /** Role */
             role: string;
+        };
+        /**
+         * NotificationEventCode
+         * @description The closed vocabulary of in-app notification events (Phase 5E).
+         *
+         *     Exactly the five events the 5E plan names. Each event's ``subject_id`` names one row:
+         *     ``brief.created`` a ``recommendation_briefs`` row, ``approval.decided`` an ``approvals``
+         *     row, ``draft.generated`` a ``creative_drafts`` row, ``review.blocked`` a
+         *     ``content_reviews`` row and ``export.completed`` an ``exports`` row
+         *     (:data:`NOTIFICATION_SUBJECT_TABLES`). In-app only: no event is ever mailed or texted.
+         * @enum {string}
+         */
+        NotificationEventCode: "brief.created" | "approval.decided" | "draft.generated" | "review.blocked" | "export.completed";
+        /**
+         * NotificationFeedOut
+         * @description One page of the session user's feed in this workspace, newest first.
+         */
+        NotificationFeedOut: {
+            /** Items */
+            items: components["schemas"]["NotificationOut"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+            /** Unread */
+            unread: number;
+        };
+        /**
+         * NotificationOut
+         * @description One of the session user's notifications.
+         */
+        NotificationOut: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            event_code: components["schemas"]["NotificationEventCode"];
+            /** Id */
+            id: string;
+            /** Read At */
+            read_at: string | null;
+            /** Subject Id */
+            subject_id: string;
+        };
+        /**
+         * NotificationPreferenceItem
+         * @description Whether one event code is delivered to the session user in this workspace.
+         */
+        NotificationPreferenceItem: {
+            /** Enabled */
+            enabled: boolean;
+            event_code: components["schemas"]["NotificationEventCode"];
+        };
+        /**
+         * NotificationPreferencesOut
+         * @description Every event code, in the vocabulary's order (no stored choice: delivered).
+         */
+        NotificationPreferencesOut: {
+            /** Items */
+            items: components["schemas"]["NotificationPreferenceItem"][];
+        };
+        /**
+         * NotificationPreferencesUpdate
+         * @description The event codes to set for the session user in this workspace; others are unchanged.
+         */
+        NotificationPreferencesUpdate: {
+            /** Items */
+            items: components["schemas"]["NotificationPreferenceItem"][];
+        };
+        /**
+         * NotificationsAnalyticsCapabilityOut
+         * @description Customer-visible availability of notifications and analytics for one workspace.
+         *
+         *     Exactly one field (the ``FeedbackCapabilityOut`` precedent): no governance metadata
+         *     (deciding rule, global flag, override) reaches a customer. Returned by
+         *     ``GET /workspaces/{workspace_id}/notifications-analytics-capability`` (O-12(B)).
+         */
+        NotificationsAnalyticsCapabilityOut: {
+            /** Enabled */
+            enabled: boolean;
         };
         /** OfferIn */
         OfferIn: {
@@ -4898,6 +5371,26 @@ export interface components {
             /** Opportunity Id */
             opportunity_id: string;
         };
+        /**
+         * OpportunityStateCounts
+         * @description Opportunities in scope by their workflow ``status`` (``OpportunityStatus``).
+         *
+         *     ``total`` counts every row in scope; each named state counts the rows carrying it.
+         */
+        OpportunityStateCounts: {
+            /** Actioned */
+            actioned: number;
+            /** Ignored */
+            ignored: number;
+            /** Monitoring */
+            monitoring: number;
+            /** New */
+            new: number;
+            /** Saved */
+            saved: number;
+            /** Total */
+            total: number;
+        };
         /** OpportunityStatusUpdate */
         OpportunityStatusUpdate: {
             /** Status */
@@ -5002,6 +5495,26 @@ export interface components {
             name: string;
             /** Slug */
             slug: string;
+        };
+        /**
+         * OutcomesOut
+         * @description Generation and review outcomes.
+         *
+         *     Generation: ``drafts_generated`` versions in scope, of which ``revisions`` revise an
+         *     earlier version and ``simulated`` came from the simulated generator. Review: the share of
+         *     content reviews that passed / blocked; each rate is ``None`` while no review is in scope.
+         */
+        OutcomesOut: {
+            /** Drafts Generated */
+            drafts_generated: number;
+            /** Review Block Rate */
+            review_block_rate: number | null;
+            /** Review Pass Rate */
+            review_pass_rate: number | null;
+            /** Revisions */
+            revisions: number;
+            /** Simulated */
+            simulated: number;
         };
         /**
          * PartialFetchReason
@@ -5247,6 +5760,24 @@ export interface components {
             organization_name: string;
             /** Password */
             password: string;
+        };
+        /**
+         * ReviewStateCounts
+         * @description Content reviews in scope (one per draft version) by outcome; a partition.
+         *
+         *     ``passed``: nothing blocks and every required disclaimer is carried. ``blocked``: the
+         *     claim-safety result is blocked. ``not_passed``: neither (in practice a required
+         *     disclaimer is missing).
+         */
+        ReviewStateCounts: {
+            /** Blocked */
+            blocked: number;
+            /** Not Passed */
+            not_passed: number;
+            /** Passed */
+            passed: number;
+            /** Total */
+            total: number;
         };
         /**
          * Role
@@ -5882,6 +6413,33 @@ export interface components {
             stale_after_seconds: number;
             /** Stuck Count */
             stuck_count: number;
+        };
+        /**
+         * SubjectStateCounts
+         * @description Brief or draft versions in scope by their derived state (no status column exists).
+         *
+         *     A partition, evaluated in this order (the approval queue's reading,
+         *     ``app.approvals.service._awaiting_decision_select``):
+         *
+         *     * ``superseded`` — a newer version of the same chain exists (a brief: the same
+         *       opportunity; a draft: the same brief); it is decided through its successor.
+         *     * ``approved`` / ``rejected`` — the controlling decision (the highest ``decision_seq``
+         *       on that exact version) is that decision.
+         *     * ``awaiting_decision`` — no decision yet, or the controlling decision is ``revoked``.
+         *
+         *     ``total`` = the sum of the four. Soft-deleted versions (``deleted_at`` set) are excluded.
+         */
+        SubjectStateCounts: {
+            /** Approved */
+            approved: number;
+            /** Awaiting Decision */
+            awaiting_decision: number;
+            /** Rejected */
+            rejected: number;
+            /** Superseded */
+            superseded: number;
+            /** Total */
+            total: number;
         };
         /**
          * TakedownCaseOut
@@ -7899,6 +8457,41 @@ export interface operations {
             };
         };
     };
+    read_workspace_analytics_api_v1_workspaces__workspace_id__analytics_get: {
+        parameters: {
+            query?: {
+                location_id?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyticsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_approval_queue_api_v1_workspaces__workspace_id__approval_queue_get: {
         parameters: {
             query?: {
@@ -9281,6 +9874,114 @@ export interface operations {
             };
         };
     };
+    list_draft_exports_api_v1_workspaces__workspace_id__drafts__draft_id__exports_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportHistoryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_draft_api_v1_workspaces__workspace_id__drafts__draft_id__exports_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExportIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_export_capability_api_v1_workspaces__workspace_id__export_capability_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportCapabilityOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     read_feedback_capability_api_v1_workspaces__workspace_id__feedback_capability_get: {
         parameters: {
             query?: never;
@@ -9728,6 +10429,179 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LocationOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_notification_preferences_api_v1_workspaces__workspace_id__notification_preferences_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationPreferencesOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_notification_preferences_api_v1_workspaces__workspace_id__notification_preferences_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationPreferencesUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationPreferencesOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_notifications_api_v1_workspaces__workspace_id__notifications_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationFeedOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_notifications_analytics_capability_api_v1_workspaces__workspace_id__notifications_analytics_capability_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationsAnalyticsCapabilityOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mark_notification_read_api_v1_workspaces__workspace_id__notifications__notification_id__read_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                workspace_id: string;
+                notification_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationOut"];
                 };
             };
             /** @description Validation Error */

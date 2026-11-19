@@ -21,6 +21,8 @@ must be propagated here in the same edit.
 
 **Status update (2026-11-07, W21 tracking pass, at `main` `3564c6d0`; the status above is kept as written):** contracts only, under the operator's W21 programme instruction of 2026-11-01 (see the status update in `docs/project-phase-5-plan.md`). Merged: the 5E contracts within the CF-3 freeze (#298 `285f3672`: the notifications, notification-preferences and exports tables, the `content_export_enabled` flag and its capability, the export and analytics role policies, the notification emitter Protocol and the query keys). Not built: 5E-W1 (audited manual export and the retention design), 5E-W2 (status analytics), 5E-W3 (in-app notifications and the shell replacement), 5E-W4 (the adversarial battery), I-5E, R-5E, R-final and the Phase 5 closeout. No export, notification or analytics service, route or page exists, and the notification bell is still the placeholder. `content_export_enabled` defaults to false (`apps/api/app/core/config.py:557`). 5E's entry gate, I-5D and R-5D, is not met. Merged does not mean activated, deployed or closed out.
 
+**Status update (2026-11-18, I-5E; revised 2026-11-19 at `main` `21d966e7`; the status and the 2026-11-07 update above are kept as written):** 5E's entry gate is met (I-5D merged as #313 `6a3afe3a`; the R-5D record is held outside this repository), and 5E is **implemented** in the change that adds this paragraph, and its review waves have recorded their verdicts (below; two of the four are FINDINGS); it is not merged and not milestone-validated. In the candidate: 5E-W1 (audited manual export in three formats with its history, and the notifications retention class of D-N4 item 30, duration unset, which purges nothing and cannot be enqueued); 5E-W2 (status analytics: the read, the page and the Overview summary); 5E-W3 (in-app notifications: the emitter, feed, mark-read and preferences, the emission hooks in the brief, approval and creative services, the shell bell, and the export controls under an approved draft version); the lanes' tests of each other's code and the 5E-W4 adversarial battery; and the I-5E integration. Operator ruling O-12(B) adds a fourth flag: the notifications and analytics routes, their pages and every emission are gated by `Capability.NOTIFICATIONS_ANALYTICS` (`notifications_analytics_enabled`, default false), and export by `Capability.CONTENT_EXPORT` (`content_export_enabled`, default false); so the "live, not dark" wording of the superseded exit criterion 2 does not describe this implementation. One Alembic revision, `53fdde95354a`, widens the capability-override CHECK to admit the new capability. The review waves R-5E and R-final are recorded outside this repository. Round 1, on `1848fa8d`, returned FINDINGS on all four lines, with two substantive defects (the export took no row lock of its own before its checks; the analytics read could answer a server error when a located row was committed between its statements). One corrective fold followed under an explicit operator exception. Re-review 1, on `e7daa6d9`: R-5E line A FINDINGS, R-5E line B CLEAN, R-final line A FINDINGS (INFO only), R-final line B CLEAN. Every round-1 finding is closed or stands as recorded. One finding rated above INFO remains (A-F3): while notifications are on, three transactions (one user's schedule-cap write, that user's organization or account deletion, and an export or a draft decision) can wait on one another in a ring, and the database aborts at least one of them. As measured: the export can answer a server error and writes nothing; the reported probes found no incorrect surviving state. The operator accepted it as a disclosed limitation for merging while the capabilities remain disabled, with a mandatory repair before notifications are activated in any environment, workspace overrides included (AD-NOTIF-LOCK-01). It is not the only open activation dependency: other items of re-review 1 stand as unresolved activation decisions or as informational follow-ups, recorded outside this repository, and none is disposed of here. The commits after `e7daa6d9` up to `9f0b7bea` merge `main` and change documents, docstrings and comments only. On 2026-11-19 the operator ruled that the export's serialization and erasure requirements apply on SQLite as well, wherever the capability can be enabled; at `9f0b7bea` an export on SQLite could commit after a committed revocation of its draft's approval or withdrawal of its brief's approval, so the first corrective fold had repaired PostgreSQL only. A second, separate operator exception permitted one SQLite corrective fold and its review wave. The commits after `9f0b7bea` are that fold: on SQLite an export, an account erasure and an invitee-email erasure take the database's single writer lock before their reads, and PostgreSQL receives no new statement. That lock is the whole database's: while one of them holds it every other writer waits, for at most five seconds, after which the waiting request answers a server error and writes nothing. The review of that fold is recorded outside this repository and no verdict on it is stated here; the verdicts above are re-review 1's, on `e7daa6d9`, and do not cover it. Not done: the merge, the milestone validation and the Phase 5 closeout. `retention_notifications_days` is unset, as the operator's retention durations are unruled. Also merged: the RI-2 geography repair (#324 `7379f9ae`), which had to be merged before recommendation briefs are activated, and D-N4 item 39 (#325 `21d966e7`; protected-claim matching), which had to be merged before a real provider is used. `main` `21d966e7` is merged into the branch of the change that adds this paragraph, so that change's diff against `main` does not include #325's content. Merged does not mean activated, deployed or closed out.
+
 ## 1. Objective
 
 Close the Guided Action loop's tail: in-app notifications, derived read-only status
@@ -43,7 +45,8 @@ capability resolver** (the `_require_feedback_feature` pattern) — never a raw
 operator safety-ceiling kill switch both apply. Secret-inventory reconciliation
 94→95+N in the same change (corrected baseline, master plan §14) — the export flag plus any notification/retention
 `Settings` fields, counted from the actual field list at the freeze (master
-plan §14).
+plan §14). *(Noted at I-5E: the "94→95+N" figure is the authoring-time baseline; the counts as
+measured are in exit criterion 7.)*
 
 **Notifications (in-app only):**
 
@@ -90,7 +93,9 @@ plan §14).
   same way as the export role set. **This gate previously did not exist**, while
   5E-W4 was already charged with authoring *"authorization … negatives"* in
   `test_analytics_scope_boundary.py` — a negative test with no requirement to fail
-  against. It matters because exit criterion 2(c) makes analytics **live and ungated at
+  against. *(Superseded in part by operator ruling O-12(B), 2026-11-12: analytics is
+  capability-gated and dark by default; see the amended exit criterion 2. The sentence is
+  kept as written.)* It matters because exit criterion 2(c) makes analytics **live and ungated at
   merge, returning real tenant data**, and the aggregates include **approval latency**
   and generation/review outcomes — the same sensitivity class the audit read route is
   deliberately narrowed for under resolved O-1.
@@ -183,7 +188,14 @@ plan §14).
   durable job takes the full route — a `JobType` member plus a `jobs/handlers.py`
   import line, both CF-2 integration-owner payload, plus a lane-owned sibling handler
   module. **5E deliberately does not**: the purge mechanism is a plain callable under
-  `apps/api/app/retention/` (5E-W1), never enqueued, so it is **unrunnable by
+  `apps/api/app/retention/` (5E-W1) *(corrected at I-5E; the wording around this note is kept
+  as written: under the operator's ruling on D-N4 item 30, "accept the retention-class
+  structure", the mechanism as built is `RetentionClass.NOTIFICATIONS` in
+  `apps/api/app/privacy/retention.py`, and `apps/api/app/retention/` does not exist. The class
+  has no `JobType` member, `enqueue_purge` and the `retention.purge` handler refuse it, and the
+  operator-started sweep reports `policy_unset` and deletes nothing while
+  `retention_notifications_days` is unset; once a duration is set, that sweep purges the
+  class)*, never enqueued, so it is **unrunnable by
   construction** — there is no `JobType` under which it could be dispatched. That is
   what makes exit criterion 6 provable rather than merely asserted. An earlier version
   of this bullet called it a "durable job", which implied the 5C route and left the
@@ -229,30 +241,63 @@ decision O-11, resolved 2026-09-01).
 ## 4. Exit criteria (all TRUE with artifacts)
 
 1. Migrations round-trip; single head.
-2. **Honest live-surface ledger (corrected — 'every 5E endpoint dark' was false).**
-   Only **export** is capability-gated (`content_export_enabled` /
-   `Capability.CONTENT_EXPORT`); with that flag off every export endpoint 503s.
-   **Notifications and analytics have no flag and no capability** — O-4 fixes the
-   Phase 5 flag set at exactly three, so a fourth cannot be introduced inside this
-   plan. Their true state at merge is therefore **live, not dark**:
-   (a) the notification **list** is live and returns empty until upstream emitters
-   fire (those emitters are gated by their parent milestones' flags);
-   (b) the notification **mark-read** route is a **live, ungated write** carrying
-   the round's only new cross-user IDOR class — it is the highest-risk surface in
-   5E and must be treated as such in R-5E. **R-5E carries a second binding
-   instruction for the same reason:** `apps/web/src/api/queryKeys.ts` gains a
-   **per-user** scope dimension in the CF-3 payload (D15 PM), where every existing
-   key is at most workspace-scoped. The key factory is the frontend cache-isolation
-   boundary, so this is a **design change to an isolation control, not a
-   transcription**, and R-5E must review it as such rather than as a routine key
-   addition. It is freeze-owned (master plan §6.3) and covered by the
-   contract-equality checker, but neither control substitutes for the review;
-   (c) **analytics aggregates over existing `opportunities` rows and therefore
-   returns real, non-empty tenant data at merge** — it is live and NOT inert.
-   Whether notifications/analytics should be flagged is an **operator decision**
-   (a fourth flag would amend O-4) and is recorded here as an open question, not
-   resolved by this plan. Notifications for 5A/5B events
-   fire only when their parent features are enabled.
+2. **Honest live-surface ledger — amended by operator ruling O-12(B) (2026-11-12).** The
+   ruling, verbatim: "Choose O-12(B): one additional flag for the notifications and
+   analytics surfaces, off by default. Explicitly amend O-4’s three-flag limit. Gate the
+   backend routes, customer UI and applicable notification emission consistently." The
+   ledger the 5E merge must make true is therefore:
+   (a) **export** is capability-gated (`content_export_enabled` /
+   `Capability.CONTENT_EXPORT`); with that flag off every export endpoint answers 503;
+   (b) **notifications and analytics** are capability-gated by the fourth Phase 5 flag,
+   `notifications_analytics_enabled` / `Capability.NOTIFICATIONS_ANALYTICS` (global
+   default `False`, enableable per workspace as O-3 set for the Phase 5 flags,
+   `future_activation_phase="5E"`), decided only through the deny-biased capability
+   resolver, never a raw flag read. While it does not resolve enabled for a workspace,
+   the notification feed, mark-read and preference routes and the analytics route answer
+   the dark 503, the notification emitter writes no row for that workspace, and the
+   customer UI makes no feed or analytics request (the shell bell keeps its placeholder;
+   the analytics page and the Overview summary are not shown);
+   (c) **live while dark, disclosed here:** the workspace-effective reflection routes
+   `GET /workspaces/{ws}/export-capability` and
+   `GET /workspaces/{ws}/notifications-analytics-capability` answer 200 with the
+   resolver's answer, and `GET /system/capabilities` reflects the raw global flags (all
+   `False`) per O-4 (`ALT_expose_all`);
+   (d) the notification **mark-read** route still carries the round's only new
+   cross-user IDOR class and stays the highest-risk surface in 5E for R-5E, and R-5E
+   keeps the binding instruction on the **per-user** dimension in
+   `apps/web/src/api/queryKeys.ts` (an isolation-control change, not a transcription), as
+   the superseded text below states;
+   (e) once the flag is enabled for a workspace, analytics aggregates existing tenant
+   rows and returns real, non-empty data. Enabling it is an activation, which needs its
+   own operator authorization (master plan §10).
+   Notifications for 5A/5B events fire only when their parent features are enabled.
+
+   *Superseded wording (before O-12(B); kept as written):*
+   > **Honest live-surface ledger (corrected — 'every 5E endpoint dark' was false).**
+   > Only **export** is capability-gated (`content_export_enabled` /
+   > `Capability.CONTENT_EXPORT`); with that flag off every export endpoint 503s.
+   > **Notifications and analytics have no flag and no capability** — O-4 fixes the
+   > Phase 5 flag set at exactly three, so a fourth cannot be introduced inside this
+   > plan. Their true state at merge is therefore **live, not dark**:
+   > (a) the notification **list** is live and returns empty until upstream emitters
+   > fire (those emitters are gated by their parent milestones' flags);
+   > (b) the notification **mark-read** route is a **live, ungated write** carrying
+   > the round's only new cross-user IDOR class — it is the highest-risk surface in
+   > 5E and must be treated as such in R-5E. **R-5E carries a second binding
+   > instruction for the same reason:** `apps/web/src/api/queryKeys.ts` gains a
+   > **per-user** scope dimension in the CF-3 payload (D15 PM), where every existing
+   > key is at most workspace-scoped. The key factory is the frontend cache-isolation
+   > boundary, so this is a **design change to an isolation control, not a
+   > transcription**, and R-5E must review it as such rather than as a routine key
+   > addition. It is freeze-owned (master plan §6.3) and covered by the
+   > contract-equality checker, but neither control substitutes for the review;
+   > (c) **analytics aggregates over existing `opportunities` rows and therefore
+   > returns real, non-empty tenant data at merge** — it is live and NOT inert.
+   > Whether notifications/analytics should be flagged is an **operator decision**
+   > (a fourth flag would amend O-4) and is recorded here as an open question, not
+   > resolved by this plan. Notifications for 5A/5B events
+   > fire only when their parent features are enabled.
+
 3. Export preconditions each have a failing negative test: unapproved draft,
    blocked review, **approve-then-reject (latest decision not approved)**,
    revoked approval, wrong version, wrong role, cross-workspace subject — all
@@ -268,8 +313,11 @@ decision O-11, resolved 2026-09-01).
    member for it.
 7. Combined whole-round integration suite green; all governance pins
    (value-set/order, dark-by-default, `future_activation_phase="5E"` for the
-   export capability, secret-inventory **94→95+N at the consolidated CF-3**,
-   counted from the actual `Settings` field list at the freeze) green.
+   export capability and, since operator ruling O-12(B), the notifications-and-analytics
+   capability, and the secret-inventory count taken from the actual `Settings` field list)
+   green. *(Corrected at I-5E: the count read "secret-inventory **94→95+N at the
+   consolidated CF-3**". It was 151 → 152 at CF-3 and is 153 → 155 at 5E-CF
+   (`docs/operations/aws-staging-secret-inventory.md`).)*
 8. Phase 5 closeout checklist complete with artifacts (every 5A–5E exit
    criterion TRUE with a cited artifact); **R-final** verdict recorded
    verbatim. This is the only closeout; no intermediate record qualifies.

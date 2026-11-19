@@ -7,9 +7,10 @@ the plumbing of ``test_cf1_contract_migration``:
   data repair ``d5f616c0ec97`` (data only; tested in ``test_campaign_locations_repair``), then
   by W21 ADDR's ``6f8a80cf1785`` (tested in ``test_structured_address_migration``), by D-N4
   item 37's append-only backstop ``d0a8bce8de6a`` (triggers on PostgreSQL only; tested in
-  ``test_append_only_backstop_postgres``) and then by the single head, D-N4 item 36's closed
-  claim kinds ``1574637e56d3`` (data only; tested in ``test_claim_kinds``), so the cases below
-  upgrade to THIS revision explicitly;
+  ``test_append_only_backstop_postgres``), by D-N4 item 36's closed claim kinds
+  ``1574637e56d3`` (data only; tested in ``test_claim_kinds``) and then by the single head,
+  5E-CF's capability-CHECK widening ``53fdde95354a`` (``notifications_analytics``, operator ruling
+  O-12(B)), so the cases below upgrade to THIS revision explicitly;
   ``upgrade head`` then ``alembic check`` reports no drift (Phase 5 plan §6.2.0);
 * **the migrated CHECKs equal their Python authorities, in both directions** — campaign mode
   and status (``CampaignMode`` / ``CampaignStatus``), export format (``ExportFormat``), the
@@ -75,11 +76,19 @@ D1_REPAIR = "d5f616c0ec97"
 ADDR = "6f8a80cf1785"
 #: D-N4 item 37's PostgreSQL append-only backstop, which follows ADDR.
 BACKSTOP = "d0a8bce8de6a"
-#: The code head (D-N4 item 36's closed claim kinds, data only), which follows the backstop.
-HEAD = "1574637e56d3"
+#: D-N4 item 36's closed claim kinds (data only), which follows the backstop.
+CLAIM_KINDS = "1574637e56d3"
+#: The code head (Project Phase 5E 5E-CF, operator ruling O-12(B): the capability-override CHECK
+#: admits ``notifications_analytics``), which follows the claim kinds.
+HEAD = "53fdde95354a"
 CF2 = "a7d2e9f4c1b8"
 OVERRIDES = "workspace_capability_overrides"
 NEW_TABLES = {"campaign_locations", "exports", "notifications", "notification_preferences"}
+#: Capabilities registered after CF-3, which CF-3's own capability CHECK therefore lacks: 5E-CF's
+#: ``notifications_analytics`` (operator ruling O-12(B)), admitted by a later CHECK-widening
+#: revision. The code head's CHECK is compared with the whole registry by
+#: ``test_cf1_contract_migration`` and ``test_cf2_contract_migration``.
+AFTER_CF3_CAPABILITIES = {"notifications_analytics"}
 MIGRATION = next((API_DIR / "alembic" / "versions").glob(f"*-{CF3}_*.py"))
 
 #: The jurisdiction CHECK of every table that carries a jurisdiction column.
@@ -159,7 +168,8 @@ def test_the_head_is_single_and_follows_cf2() -> None:
 
     script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
     assert [r.revision for r in script.get_revisions("heads")] == [HEAD]
-    assert script.get_revision(HEAD).down_revision == BACKSTOP
+    assert script.get_revision(HEAD).down_revision == CLAIM_KINDS
+    assert script.get_revision(CLAIM_KINDS).down_revision == BACKSTOP
     assert script.get_revision(BACKSTOP).down_revision == ADDR
     assert script.get_revision(ADDR).down_revision == D1_REPAIR
     assert script.get_revision(D1_REPAIR).down_revision == CF3
@@ -201,7 +211,7 @@ def test_vocabulary_checks_equal_their_authorities(migrated: Path) -> None:
         ("notification_preferences", "ck_notification_preference_event_code", "event_code",
          {e.value for e in NotificationEventCode}),
         (OVERRIDES, "ck_workspace_capability_override_capability", "capability",
-         set(persisted_values())),
+         set(persisted_values()) - AFTER_CF3_CAPABILITIES),
     ):
         in_db = _in_list(_checks(migrated, table)[name], column)
         assert (in_db - authority, authority - in_db) == (set(), set()), name

@@ -275,8 +275,10 @@ python -m app.privacy.cli sweep [--class <class> ...] [--dry-run]
 ```
 
 - A class with no configured duration is **refused** (`policy_unset`, nothing deleted) and the
-  command exits `2`. `environment=production` does not start until all seven durations are set.
-- Platform classes are purged by the command itself in bounded batches; workspace classes are
+  command exits `2`. `environment=production` does not start until all eight durations are set
+  (`notifications` joined the seven in Project Phase 5E, D-N4 item 30).
+- Platform classes are purged by the command itself in bounded batches (`notifications` among
+  them: its rows carry a workspace, but by ruling it is never enqueued); workspace classes are
   enqueued as one `retention.purge` job per workspace (idempotent per day) and run by the worker.
 - Run it daily. **No scheduler exists for it yet**: an ECS scheduled task (or equivalent) running
   this command is an infrastructure follow-up for the operations lane; until then it is run by

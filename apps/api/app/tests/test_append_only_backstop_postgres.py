@@ -127,8 +127,9 @@ API_DIR = Path(__file__).resolve().parents[2]
 #: 5D-W1's campaign-location data repair).
 REVISION = "d0a8bce8de6a"
 BELOW = "6f8a80cf1785"
-#: The single head above this revision (D-N4 item 36: the closed claim kinds; data only).
-CODE_HEAD = "1574637e56d3"
+#: The single head above this revision: D-N4 item 36's closed claim kinds (data only), then
+#: Project Phase 5E 5E-CF's capability-CHECK widening (``notifications_analytics``; no table).
+CODE_HEAD = "53fdde95354a"
 REVISION_FILE = (
     API_DIR
     / "alembic"
@@ -1182,7 +1183,8 @@ def test_the_revision_upgrades_downgrades_and_upgrades_again_on_postgresql() -> 
                 assert conn.execute(text("SELECT count(*) FROM audit_logs")).scalar_one() == 1
                 conn.execute(text(DELETES["audit_logs"]), {"id": "mp-log"})  # no backstop
 
-            # Back to the head, through D-N4 item 36 (data only), where ``alembic check`` runs.
+            # Back to the head, through D-N4 item 36 (data only) and 5E-CF's CHECK widening,
+            # where ``alembic check`` runs.
             _alembic(url, "upgrade", "head")
             assert _version(url) == [CODE_HEAD]
             assert _backstop(engine) == _expected_catalog()

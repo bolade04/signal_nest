@@ -2,8 +2,9 @@
 
 * **Nothing activates.** ``content_export_enabled`` ships ``False``, is bound to
   ``Capability.CONTENT_EXPORT`` (workspace-enableable, O-3, ``future_activation_phase="5E"``)
-  and is reflected in ``FeatureFlagsOut`` (O-4). CF-3 mounts no export, notification,
-  analytics, jurisdiction or campaign-membership surface: no path names one. (The operation
+  and is reflected in ``FeatureFlagsOut`` (O-4). CF-3 mounted no export, notification,
+  analytics, jurisdiction or campaign-membership surface; since I-5E exactly the 5E routes are
+  served and no other path names one. (The operation
   count is owned by the canonical pins, ``test_auth2_leakage`` and
   ``test_e7_role_policy_matrix``, which every route-adding change recomputes.)
 * **Vocabularies.** ``CampaignStatus``, ``NotificationEventCode`` (each code names its subject
@@ -34,7 +35,7 @@ from pydantic import TypeAdapter, ValidationError
 from app.analytics.policy import ANALYTICS_READER_ROLES, require_analytics_reader
 from app.campaign_context.models import Campaign, CampaignLocation
 from app.capabilities.registry import Capability, get_policy, persisted_values
-from app.core.config import Settings
+from app.core.config import Settings, get_settings
 from app.core.enums import (
     NOTIFICATION_SUBJECT_TABLES,
     CampaignStatus,
@@ -85,13 +86,33 @@ def test_the_capability_is_workspace_enableable_and_bound_to_the_flag() -> None:
     assert "content_export" in persisted_values()
 
 
-def test_no_route_serves_a_cf3_surface() -> None:
-    """CF-3 mounts no export, notification, analytics, jurisdiction or campaign-membership
-    surface: no path names one. Deliberately not an operation count (the canonical pins own
-    it; a third copy would break every merge with a route-adding head — review CONTROLS C-2)."""
+#: The 5E surfaces I-5E mounts (5E interface sheet P4, A.3 and P7), exactly. Every other path
+#: still names no export, notification, analytics, jurisdiction or campaign-membership surface.
+SERVED_5E_PATHS = frozenset(
+    f"{get_settings().api_prefix}/workspaces/{{workspace_id}}{tail}"
+    for tail in (
+        "/drafts/{draft_id}/exports",  # 5E-W1: POST export, GET history
+        "/export-capability",  # 5E-W1: the export reflection (P7)
+        "/analytics",  # 5E-W2
+        "/notifications",  # 5E-W3: the feed
+        "/notifications/{notification_id}/read",  # 5E-W3: mark-read
+        "/notification-preferences",  # 5E-W3: GET and PUT
+        "/notifications-analytics-capability",  # 5E-W3: the O-12(B) reflection (A.3)
+    )
+)
+
+
+def test_no_route_serves_a_cf3_surface_beyond_the_5e_routes() -> None:
+    """CF-3 mounted no export, notification, analytics, jurisdiction or campaign-membership
+    surface. Since I-5E the 5E routes are served, exactly the interface sheet's; no other
+    path names one. Deliberately not an operation count (the canonical pins own it; a third
+    copy would break every merge with a route-adding head — review CONTROLS C-2)."""
     paths = app.openapi()["paths"]
     privacy_exports = ("/account/export", "/export", "/export/{table}")  # Phase 6 (P6-PRIV-1)
+    assert SERVED_5E_PATHS <= set(paths), sorted(SERVED_5E_PATHS - set(paths))
     for path in paths:
+        if path in SERVED_5E_PATHS:
+            continue
         for word in ("export", "notification", "analytics", "jurisdiction", "campaign-location"):
             if word == "export" and path.endswith(privacy_exports):
                 continue
@@ -273,10 +294,12 @@ def test_the_account_export_schema_carries_the_cf3_fields() -> None:
     )
 
 
-def test_the_analytics_fixture_module_is_registered_and_empty() -> None:
+def test_the_analytics_fixture_module_is_registered_and_exports_only_its_fixture() -> None:
+    # CF-3 registered the module empty. Lane 5E-W1 filled it (5E plan §5): the root conftest
+    # star-imports it, so ``__all__`` is exactly what it adds to every test module's fixtures.
     module = sys.modules.get("app.tests.fixtures.analytics")
     assert module is not None  # imported by the root conftest.py
-    assert module.__all__ == []
+    assert module.__all__ == ["analytics_world"]
 
 
 # --------------------------------------------------------------------------- #

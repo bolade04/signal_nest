@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from app.analytics.routes import router as analytics_router
 from app.approvals.routes import router as approvals_router
 from app.audit.routes import router as audit_router
 from app.auth.routes import router as auth_router
@@ -16,9 +17,11 @@ from app.briefs.routes import router as briefs_router
 from app.campaign_context.routes import router as campaign_context_router
 from app.connectors.routes import router as data_sources_router
 from app.creative.routes import router as creative_router
+from app.exports.routes import router as exports_router
 from app.feedback.routes import router as feedback_router
 from app.jobs.routes import router as jobs_router
 from app.locations.routes import router as locations_router
+from app.notifications.routes import router as notifications_router
 from app.opportunities.routes import router as opportunities_router
 from app.organizations.routes import router as organizations_router
 from app.privacy.routes import router as privacy_router
@@ -51,6 +54,9 @@ for _r in (
     briefs_router,
     approvals_router,
     creative_router,
+    exports_router,
+    analytics_router,
+    notifications_router,
     jobs_router,
     audit_router,
     privacy_router,

@@ -61,6 +61,24 @@ step    row                                 mode              why
                                                               the approval for that decision
 6       inserts: ``approvals``,             FK ``KEY SHARE``  only on rows 1 and 4, already held
         ``audit_logs``
+7       ``notifications`` inserts (5E-W3's  FK ``KEY SHARE``  the organization: row 2's, already
+        ``notify``, the decision's last                       held. The author's ``users`` row:
+        write, after its audit row); only                     taken first ``KEY SHARE SKIP
+        while ``notifications_analytics``                     LOCKED``
+        resolves enabled for the                              (``app.notifications.service``),
+        workspace; while off it only reads                    so a row held ``FOR UPDATE``
+                                                              (account erasure, a credential
+                                                              flow) skips that recipient and is
+                                                              never waited for. The workspace:
+                                                              new, and it conflicts only with
+                                                              ``FOR UPDATE`` or a delete of that
+                                                              row: an override set or clear and
+                                                              a schedule-cap mutation, neither
+                                                              of which waits on a row a decision
+                                                              holds; organization deletion locks
+                                                              the organization ``FOR UPDATE``
+                                                              first and so meets the decision at
+                                                              step 2, never here
 ======  ==================================  ================  ==================================
 
 Every other path that locks one of those rows, and where it first meets the decision:
@@ -122,17 +140,31 @@ a decision on the draft's brief         the brief (``FOR UPDATE`` vs step 5)   n
 (user → organization → membership →                                            draft)
 brief ``FOR UPDATE``)
 another decision                        the same order                         no
+a 5E export (``app.exports.service``:   the user (step 1) and the              no (a decision's
+the exporter's user ``KEY SHARE`` →     organization (step 2): compatible.     rows in a
+organization ``KEY SHARE`` → the        A draft decision at the draft          decision's order;
+draft ``SHARE`` → the draft's brief     (``SHARE`` against step 4's ``NO KEY   it holds nothing
+``KEY SHARE``; then its inserts and,    UPDATE``): one waits for the other.    stronger than
+while notifications are on, the rows    A decision on the brief at the brief   ``SHARE``, so it
+of step 7)                              (``KEY SHARE`` against its ``FOR       meets every other
+                                        UPDATE``): likewise                    path where a
+                                                                               draft approval
+                                                                               does, or earlier)
 ======================================  =====================================  =================
 
 So each path either takes, as its first contested lock, a row the decision takes earlier in the
 same order (the user, or the organization), or holds nothing the decision waits for. Two
-transactions therefore never each hold a row the other waits on. The organization is taken
+transactions therefore never each hold a row the other waits on (the argument is for two
+transactions; for three, see the known limit AD-NOTIF-LOCK-01 below). The organization is taken
 after the user because account deletion locks the user, then its organizations: the reverse
 order would cycle with it. The membership ``FOR SHARE`` is still taken and held to commit, as
 ruled; with step 2 before it, a membership writer that takes the organization first never
 reaches it during a decision, and one that did not (none exists) would wait on it. On SQLite
-every lock compiles to a plain read; the re-read still reads the persisted role, and the single
-writer serializes.
+every lock compiles to a plain read and holds nothing. The re-read still reads the persisted
+role, but SQLite's single writer lock serializes two transactions only from the first write of
+each, so what a decision read before its own first write (the role, and for a draft approval the
+brief's approval) is not held to its commit there. An export does not rest on that: on SQLite it
+takes the writer lock before its reads (:func:`app.db.sqlite_writer.hold_sqlite_writer_lock`).
 
 **Why step 5 is ``KEY SHARE`` after the draft, not ``SHARE`` before it** (D-N4 item 38). Only
 ``FOR UPDATE`` excludes ``KEY SHARE``, and every path that holds a brief ``FOR UPDATE`` waits on
@@ -145,6 +177,37 @@ on the ``NO KEY UPDATE`` that account erasure (brief, then draft) and the purge'
 ``UPDATE`` would cycle with generation of its revision (brief ``FOR UPDATE``, then the parent's
 ``KEY SHARE``). Each of these is exercised on PostgreSQL in
 ``test_dn4_38_brief_approved_parent.py``.
+
+**The 5E export takes the same rows in the same order** (reviews R-5E r1, A-F1 and F-B-1; the
+row above; :func:`app.exports.service._lock_for_export`). It is a reader of two decisions, so it
+takes what excludes their writers and no more: the user and the organization as a decision does
+(steps 1 and 2); the draft ``FOR SHARE``, the weakest mode a draft decision's ``NO KEY UPDATE``
+conflicts with; the brief ``FOR KEY SHARE``, step 5's lock. Against the other paths of the table:
+organization deletion and a member's account deletion meet it at the user or the organization,
+before either side holds a row the other needs, exactly as they meet a decision; an account
+deletion of a former member holds ``NO KEY UPDATE`` on the brief while it waits for the draft,
+and the export's brief ``KEY SHARE`` is admitted by that (``SHARE`` on the brief would cycle);
+generation holds the brief ``FOR UPDATE`` and its only later draft lock is the parent's
+foreign-key ``KEY SHARE``, which ``SHARE`` admits; the retention purge deletes a draft before its
+brief, so it waits for the export at the draft holding no brief lock; an override or schedule-cap
+write holds the workspace ``FOR UPDATE`` and waits on nothing an export holds, so the export's
+notification rows (step 7's locks, with the organization already held) can only wait for it.
+Two exports hold ``SHARE`` and ``KEY SHARE`` together and never wait for each other. Each order
+is exercised on PostgreSQL in ``test_i5e_export_serialization.py``. On SQLite none of these row
+locks exists; the export takes the database's writer lock before the same statements instead
+(:mod:`app.exports.service`, "On SQLite"), so there two exports do wait for each other, and the
+orders against a decision, organization deletion and account erasure are exercised in
+``test_i5e_export_serialization_sqlite.py``.
+
+**Known limit: a ring of three transactions (AD-NOTIF-LOCK-01).** Every "no" of the table, and
+"can only wait for it" above, is an argument about two transactions. While notifications are
+on, three can wait in a ring through the workspace row of step 7: a schedule-cap or override
+write (the workspace ``FOR UPDATE``, then its audit row's foreign key on the acting user's
+``users`` row); that same user's organization deletion or account deletion (that ``users`` row
+``FOR UPDATE``, then the organization); and a decision or an export emitting a notification (the
+organization ``KEY SHARE``, then the workspace ``KEY SHARE`` for its notification rows).
+PostgreSQL then aborts at least one of the three with a deadlock error. This is open: nothing in
+this module or in the emitter prevents it.
 
 **The latest decision controls.** Decisions are append-only; a change of mind is a new
 row. The controlling decision of a subject version is the row with the highest
@@ -230,7 +293,7 @@ from app.audit.service import record_audit
 from app.auth.dependencies import TenantContext
 from app.briefs.models import RecommendationBrief
 from app.core.actor_snapshot import actor_snapshot
-from app.core.enums import ApprovalDecision, ApprovalSubjectType, Role
+from app.core.enums import ApprovalDecision, ApprovalSubjectType, NotificationEventCode, Role
 from app.core.errors import (
     ConflictError,
     NotFoundError,
@@ -240,6 +303,7 @@ from app.core.errors import (
 from app.core.logging import get_logger, log_event
 from app.creative.models import CreativeDraft
 from app.creative.service import draft_approval_refusal
+from app.notifications.recipients import notify
 from app.organizations.models import Organization, OrganizationMember, User
 
 logger = get_logger("signalnest.approvals")
@@ -610,6 +674,14 @@ def record_decision(
             "reason_code": approval.reason_code,
         },
     )
+    # 5E-W3: approval.decided, in this transaction, after the decision and its audit row are
+    # flushed and after every lock of "Lock order" (steps 1-5 are unchanged). It adds no lock to
+    # that order: while notifications_analytics is off it only reads; while on, its rows'
+    # foreign keys reuse step 2's organization, take the workspace KEY SHARE (it can wait only
+    # for an override or schedule-cap mutation, which waits on nothing a decision holds), and
+    # the author's user row is taken KEY SHARE SKIP LOCKED, never waited for
+    # (app.notifications.service, "Locks").
+    notify(db, NotificationEventCode.APPROVAL_DECIDED, approval, actor_user_id=ctx.user.id)
     log_event(
         logger,
         "approval_decision_recorded",
@@ -883,6 +955,14 @@ def record_draft_decision(
             "reason_code": approval.reason_code,
         },
     )
+    # 5E-W3: approval.decided, in this transaction, after the decision and its audit row are
+    # flushed and after every lock of "Lock order" (steps 1-5 are unchanged). It adds no lock to
+    # that order: while notifications_analytics is off it only reads; while on, its rows'
+    # foreign keys reuse step 2's organization, take the workspace KEY SHARE (it can wait only
+    # for an override or schedule-cap mutation, which waits on nothing a decision holds), and
+    # the author's user row is taken KEY SHARE SKIP LOCKED, never waited for
+    # (app.notifications.service, "Locks").
+    notify(db, NotificationEventCode.APPROVAL_DECIDED, approval, actor_user_id=ctx.user.id)
     log_event(
         logger,
         "approval_decision_recorded",
