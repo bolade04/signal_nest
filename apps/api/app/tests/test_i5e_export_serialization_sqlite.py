@@ -37,6 +37,14 @@ Each test asserts the **final committed state** as read by a separate connection
 order, and that no column of a surviving ``exports``, ``audit_logs`` or ``notifications`` row
 names the erased exporter), in one comparison, so a failure states everything that was observed.
 
+**The erasure path takes the same lock.** Account erasure and the operator's invitee-email
+erasure read which rows name their subject and then update each. For an account whose erasure
+writes nothing before that read (no accepted invitation, no audit row naming it), the read ran
+while an export was uncommitted and missed its row, and ``exported_by_snapshot`` kept the erased
+account's id, name and address. Both now take the writer lock before those reads
+(``app.privacy.erasure``); both orders are forced here, and a deletion with a wrong password
+takes nothing.
+
 **The mechanism's own facts:** a dark request and a request without the exporter role issue no
 ``BEGIN IMMEDIATE`` and do not wait for a writer; the statement order of an export; a caller whose
 transaction has already written is not refused; PostgreSQL never sees the statement. **Its
@@ -54,7 +62,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import event, select
+from sqlalchemy import delete, event, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.pool import QueuePool
 
@@ -79,6 +87,7 @@ from app.tests._creative_support import (
     _creative_world,
     postgres_creative_world,
 )
+from app.tests.test_campaign_context_integrity import PASSWORD
 from app.tests.test_exports_refusal_preconditions import decide, draft, set_cap
 from app.tests.test_i5e_export_serialization import (
     BRIEF_NO_LONGER_APPROVED,
@@ -719,6 +728,239 @@ def test_sqlite_an_export_first_the_exporters_account_erasure_waits_and_anonymis
         "export notifications": 2 if notifications else 0,
         "columns naming the exporter's id, anywhere": [],
         "columns of the export's records naming the exporter": [],
+    })
+
+
+# --------------------------------------------------------------------------- #
+# An erasure that writes nothing before it reads which rows name its subject
+# --------------------------------------------------------------------------- #
+def _account_nothing_names(w: CreativeWorld, org: CreativeWorld) -> tuple[str, str, str]:
+    """Make the organization's owner an account whose erasure has nothing to write before it
+    reads which exports name it, and return its identity.
+
+    Account erasure reads the rows naming the account and then updates each
+    (``anonymise_phase5_records_for_subject``). Deleting an accepted invitation or clearing an
+    audit row that names the account comes earlier and is a write, which on SQLite happens to
+    take the writer lock before that read. The owner registered (no invitation) and authored
+    nothing; here the admin is made a second owner (so the owner may leave), and the audit rows
+    naming the owner are removed, as the audit retention purge removes them by age."""
+    owner = _identity(w, org.users["owner"])
+    with w.session() as s:
+        s.execute(
+            update(OrganizationMember)
+            .where(
+                OrganizationMember.organization_id == org.org,
+                OrganizationMember.user_id == org.users["admin"],
+            )
+            .values(role=Role.OWNER.value)
+        )
+    naming = [
+        row["id"] for row in w.rows(AuditLog) if _named_in("audit_logs", row, owner[:2])
+    ]
+    with w.session() as s:
+        s.execute(delete(AuditLog.__table__).where(AuditLog.__table__.c.id.in_(naming)))
+    assert _naming(w, owner[:2]) == []
+    return owner
+
+
+def _whole_row(row: dict) -> dict:
+    """Every column of an ``exports`` row except its id and timestamp."""
+    return {k: v for k, v in row.items() if k not in ("id", "created_at")}
+
+
+def _expected_export_row(org: CreativeWorld, made: str, approval_id: str, **changed) -> dict:
+    return {
+        "organization_id": org.org, "workspace_id": org.ws, "draft_id": made,
+        "draft_version": 1, "approval_id": approval_id, "format": "text/plain",
+        "jurisdiction_code": "US-TX", "is_simulated": True, **changed,
+    }  # fmt: skip
+
+
+@NOTIFICATIONS
+def test_sqlite_an_export_first_an_erasure_with_no_earlier_write_waits_and_anonymises_it(
+    lite: CreativeWorld, monkeypatch, notifications: bool
+):
+    """The erasure takes the writer lock before it reads which rows name the account, so it
+    waits for the export there and then finds the export's row. Without that lock its read
+    misses the uncommitted row, and the row keeps the erased account's id, name and address in
+    ``exported_by_snapshot``."""
+    org = _fresh_organization(lite, "sqbarex")
+    made, approval_id = _exportable(org, org.ws, notifications=notifications)
+    exporter = _account_nothing_names(lite, org)
+    gate = _Gate()
+    monkeypatch.setattr(export_service, "render_export", gate.before(export_service.render_export))
+    exporting = _Runner(lambda: _export(org, org.ws, made, "owner"))
+    exporting.start()
+    try:
+        gate.wait("the export")
+        with _Trace(lite.engine) as trace:
+            erasing = _Runner(lambda: _delete_account(org, "owner"))
+            erasing.start()
+            waiting, before = trace.waiting(erasing)
+    finally:
+        gate.release.set()
+    exported, erased = exporting.outcome(), erasing.outcome()
+    rows, audits = _export_records(lite, organization_id=org.org)
+    observed = {
+        "the erasure waited in": waiting,
+        "its reads of exports before it waited": [q for q in before if " from exports" in q],
+        "export": _answer(exported),
+        "erasure": _answer(erased),
+        "the account exists": _exists(lite, User, exporter[0]),
+        "the organization exists": _exists(lite, Organization, org.org),
+        "export rows, every column": [_whole_row(r) for r in rows],
+        "audit rows (actor)": [a["actor_user_id"] for a in audits],
+        "columns naming the account's id or address, anywhere": _naming(lite, exporter[:2]),
+        "columns of the export's records naming the account": _naming_in_the_exports_records(
+            lite, exporter, org.org
+        ),
+    }
+    _report("export first, an erasure with no earlier write", observed, {
+        "the erasure waited in": SERIALIZE,
+        "its reads of exports before it waited": [],
+        "export": (201,),
+        "erasure": (200,),
+        "the account exists": False,
+        "the organization exists": True,  # the second owner remains
+        "export rows, every column": [
+            _expected_export_row(
+                org, made, approval_id, exported_by=None, exported_by_snapshot="[erased]"
+            )
+        ],
+        "audit rows (actor)": [None],
+        "columns naming the account's id or address, anywhere": [],
+        "columns of the export's records naming the account": [],
+    })
+
+
+@NOTIFICATIONS
+def test_sqlite_an_erasure_first_held_before_its_first_write_the_export_waits_and_answers_401(
+    lite: CreativeWorld, monkeypatch, notifications: bool
+):
+    """The other order: the erasure has read which rows name the account and has written
+    nothing yet. It already holds the writer lock, so the export waits and, once the erasure
+    has committed, answers 401. Without that lock the export commits in the gap, after the
+    erasure's read, and its row keeps the erased identity."""
+    org = _fresh_organization(lite, "sqbarer")
+    made, _approval = _exportable(org, org.ws, notifications=notifications)
+    exporter = _account_nothing_names(lite, org)
+    gate = _Gate()
+    real = erasure.delete_rows
+
+    def delete_rows(db, table, ids):  # the user row's walk: the erasure's first write
+        if table.name == "users" and gate._first():
+            gate._hold()
+        return real(db, table, ids)
+
+    monkeypatch.setattr(erasure, "delete_rows", delete_rows)
+    erasing = _Runner(lambda: _delete_account(org, "owner"))
+    erasing.start()
+    try:
+        gate.wait("the erasure")
+        with _Trace(lite.engine) as trace:
+            exporting = _Runner(lambda: _export(org, org.ws, made, "owner"))
+            exporting.start()
+            waiting, before = trace.waiting(exporting)
+        exports_committed_while_the_erasure_was_held = len(
+            lite.rows(Export, organization_id=org.org)
+        )
+    finally:
+        gate.release.set()
+    erased, exported = erasing.outcome(), exporting.outcome()
+    rows, audits = _export_records(lite, organization_id=org.org)
+    observed = {
+        "the export waited in": waiting,
+        "exports committed while the erasure was held": (
+            exports_committed_while_the_erasure_was_held
+        ),
+        "erasure": _answer(erased),
+        "export": _answer(exported),
+        "the account exists": _exists(lite, User, exporter[0]),
+        "export rows, every column": [_whole_row(r) for r in rows],
+        "audit rows": len(audits),
+        "export notifications": _export_notifications(org, org.ws),
+        "columns naming the account's id or address, anywhere": _naming(lite, exporter[:2]),
+    }
+    _report("an erasure first, held before its first write", observed, {
+        "the export waited in": SERIALIZE,
+        "exports committed while the erasure was held": 0,
+        "erasure": (200,),
+        "export": ACCOUNT_GONE,
+        "the account exists": False,
+        "export rows, every column": [],
+        "audit rows": 0,
+        "export notifications": 0,
+        "columns naming the account's id or address, anywhere": [],
+    })
+    assert _reads_of_the_export(before) == []
+
+
+def test_sqlite_an_account_deletion_with_a_wrong_password_takes_no_writer_lock(
+    lite: CreativeWorld,
+):
+    """The password is checked first: a wrong one answers its 422 at once while another
+    connection holds the writer lock, and sends no ``BEGIN``."""
+    org = _fresh_organization(lite, "sqwrongpw")
+    with _writer_lock_held_elsewhere(lite):
+        response, sent, seconds = _traced(
+            lite,
+            lambda: org.send("POST", "/account/delete", "admin",
+                             {"current_password": PASSWORD + "x", "confirmation": "DELETE"}),
+        )
+    assert _answer(response)[:2] == (422, "current_password_incorrect")
+    assert not [q for q in sent if q.startswith("begin")]
+    assert seconds < BUSY_TIMEOUT_SECONDS / 2, seconds
+    assert _exists(lite, User, org.users["admin"])
+
+
+def test_sqlite_an_export_first_an_invitee_email_erasure_waits_and_clears_its_snapshot(
+    lite: CreativeWorld, monkeypatch
+):
+    """The operator's erasure of an address (``erase_invitee_email``) reads the same way. An
+    unverified account holds the address and stays; its export in flight is waited for, and the
+    address is cleared from the export's snapshot (``exported_by`` stays: the account does)."""
+    org = _fresh_organization(lite, "sqinvitee")
+    made, approval_id = _exportable(org, org.ws, notifications=False)
+    exporter = _account_nothing_names(lite, org)
+    assert lite.row(User, exporter[0])["email_verified_at"] is None
+    gate = _Gate()
+    monkeypatch.setattr(export_service, "render_export", gate.before(export_service.render_export))
+    exporting = _Runner(lambda: _export(org, org.ws, made, "owner"))
+    exporting.start()
+
+    def erase() -> dict:
+        with lite.session() as s:
+            return dict(erasure.erase_invitee_email(s, email=exporter[1]).anonymised)
+
+    try:
+        gate.wait("the export")
+        with _Trace(lite.engine) as trace:
+            erasing = _Runner(erase)
+            erasing.start()
+            waiting, before = trace.waiting(erasing)
+    finally:
+        gate.release.set()
+    exported, anonymised = exporting.outcome(), erasing.outcome()
+    rows, _audits = _export_records(lite, organization_id=org.org)
+    observed = {
+        "the erasure waited in": waiting,
+        "its reads of exports before it waited": [q for q in before if " from exports" in q],
+        "export": _answer(exported),
+        "exports anonymised": anonymised.get("exports", 0),
+        "export rows, every column": [_whole_row(r) for r in rows],
+        "columns naming the address, anywhere": _naming(lite, exporter[1:2]),
+    }
+    _report("export first, invitee-email erasure", observed, {
+        "the erasure waited in": SERIALIZE,
+        "its reads of exports before it waited": [],
+        "export": (201,),
+        "exports anonymised": 1,
+        "export rows, every column": [
+            _expected_export_row(
+                org, made, approval_id, exported_by=exporter[0], exported_by_snapshot="[erased]"
+            )
+        ],
+        "columns naming the address, anywhere": [],
     })
 
 
