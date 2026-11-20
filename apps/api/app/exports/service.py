@@ -10,7 +10,9 @@ each checked here whatever the route did. Before them, the tenant context answer
 session and 403 for a non-member. Then, in this order (a refusal writes nothing):
 
 1. *Precondition 4, role* — 403 ``permission_denied``: exactly
-   :data:`~app.exports.policy.EXPORTER_ROLES` (the route's ``require_exporter``, re-checked).
+   :data:`~app.exports.policy.EXPORTER_ROLES` (the route's ``require_exporter``, re-checked), on
+   the role the request resolved; and again on the exporter's membership as it stands under the
+   organization lock (below, "Locks"; G-R3-1 F-1, AD-EXPORT-ROLE-01).
 2. *Precondition 1, capability* — 503 ``capability_unavailable``: ``content_export`` resolves
    enabled for the workspace through the deny-biased resolver (never a raw flag read). Before
    any id lookup, so a dark deployment discloses nothing.
@@ -65,7 +67,14 @@ role and the capability (a dark workspace takes no lock) and before any other ch
    membership writer lock it ``FOR UPDATE`` first, so a deletion either waits for the export
    and then anonymises its row and its audit row, or commits first, after which the row is
    gone and the export answers the uniform 404. The notification rows' organization key is
-   then already held, so the insert cannot wait on a deletion;
+   then already held, so the insert cannot wait on a deletion.
+   Then the exporter's membership role is read again (a decision's step 3, but read without a
+   lock of its own: lock 2 already excludes every membership writer, each of which locks the
+   organization ``FOR UPDATE`` first). A removal, or a demotion out of the exporter roles, that
+   committed before lock 2 was granted (one the export waited for there included) is read, and
+   the export is refused (403, the tenant context's or the role gate's answer); one that comes
+   later waits at its organization lock until the export has committed, and the export stands as
+   written (G-R3-1 F-1, AD-EXPORT-ROLE-01);
 3. the draft row, ``SHARE`` (where a draft decision takes ``NO KEY UPDATE``, step 4). The two
    conflict, so a rejection or revocation either commits first and is read below, or waits
    until the export commits. ``SHARE`` and not ``KEY SHARE``: only ``FOR UPDATE`` excludes
@@ -96,13 +105,16 @@ waited for and then read by the checks, with the answers above (409, 404, 401). 
 while the export holds the lock waits until the export has committed: a decision and an account
 erasure at their own ``BEGIN IMMEDIATE``, before any read their checks rest on, so they then
 read what the export committed and account erasure finds the export's rows; an organization
-deletion at its first write. The differences from PostgreSQL:
+deletion at its first write. A membership change is such a writer too: one in flight is waited
+for and then read by the role re-read (403); one that comes later waits at its first write. The
+differences from PostgreSQL:
 
 * the lock is the whole database's. An export in flight delays every other writer of every
   tenant and first waits for any writer in flight, and two exports run one after the other. A
   wait lasts at most the connection's busy timeout (five seconds); then the waiting request
   fails with a server error (500) and writes nothing. That includes an export that would have
-  been refused: its 401, 404 or 409 is decided only once it holds the lock;
+  been refused: its 401, its 403 of the role re-read, its 404 or its 409 is decided only once it
+  holds the lock;
 * the export, the two erasures and the brief and draft decisions take the lock before the reads
   their checks rest on (:mod:`app.approvals.service`, "On SQLite"). A decision that waits for an
   export therefore waits before its row exists, and its ``created_at`` is not earlier than the
@@ -130,6 +142,7 @@ from app.approvals.service import (
     approver_user_lock_select,
     controlling_decision,
     draft_brief_lock_select,
+    member_role_select,
 )
 from app.audit.actions import AuditAction
 from app.audit.service import record_audit
@@ -324,6 +337,35 @@ def scoped_subject(
 # --------------------------------------------------------------------------- #
 #: The session's own answer for an account that no longer exists (``app.auth.dependencies``).
 ACCOUNT_GONE = "Invalid or expired token."
+#: The tenant context's answer to a non-member (``app.auth.dependencies``).
+NOT_A_MEMBER = "You are not a member of this organization."
+
+
+def _reread_exporter_role(db: Session, ctx: TenantContext) -> None:
+    """The exporter's membership role as it stands now, read after the organization lock (G-R3-1
+    F-1, AD-EXPORT-ROLE-01: "export creation must use current, protected membership and role
+    authorization"). 403, as the tenant context and the role gate answer, when the membership is
+    gone or its role is no longer in :data:`~app.exports.policy.EXPORTER_ROLES`; nothing written.
+
+    No lock of its own (:func:`app.approvals.service.member_role_select`): the organization
+    ``KEY SHARE`` taken just before excludes every membership writer, each of which locks the
+    organization ``FOR UPDATE`` first. On SQLite it is read under the writer lock the export took
+    before its first lock statement."""
+    stored = db.execute(member_role_select(ctx.organization.id, ctx.user.id)).scalar()
+    role = None if stored is None else Role(stored)
+    if role is None or role not in EXPORTER_ROLES:
+        log_event(
+            logger,
+            "content_export_refused",
+            outcome="refused",
+            organization_id=ctx.organization.id,
+            workspace_id=ctx.workspace.id,
+            code="permission_denied",
+            reason="not_a_member" if role is None else "role_not_permitted",
+        )
+        if role is None:
+            raise PermissionDeniedError(NOT_A_MEMBER)
+        raise PermissionDeniedError(f"Role '{role.value}' is not permitted for this action.")
 
 
 def export_draft_lock_select(draft_id: str) -> Select:
@@ -341,7 +383,8 @@ def _lock_for_export(
 ) -> tuple[CreativeDraft, RecommendationBrief]:
     """Take the export's four row locks in a decision's order and return the scoped subject.
 
-    The exporter's ``users`` row and the organization (``KEY SHARE``), then the tenant-scoped
+    The exporter's ``users`` row and the organization (``KEY SHARE``), then the exporter's
+    membership role read again (:func:`_reread_exporter_role`, 403), then the tenant-scoped
     read of the draft and its brief (404; a foreign or unknown draft is never locked), then the
     draft (``SHARE``) and its brief (``KEY SHARE``). Each lock is held until the caller's
     transaction ends. A row that vanished while the export waited for it gets the answer its
@@ -351,6 +394,7 @@ def _lock_for_export(
         raise AuthError(ACCOUNT_GONE)
     if db.execute(approver_organization_lock_select(ctx.organization.id)).first() is None:
         raise NotFoundError(DRAFT_NOT_FOUND)
+    _reread_exporter_role(db, ctx)
     draft, brief = scoped_subject(db, ctx, draft_id)
     if db.execute(export_draft_lock_select(draft.id)).first() is None:
         raise NotFoundError(DRAFT_NOT_FOUND)
@@ -456,15 +500,16 @@ def create_export(
 ) -> ExportResult:
     """Check the six preconditions, then record and render one export. Flushes only.
 
-    Raises (writing nothing), in the order the code answers: 403 (the role), 503 (the
-    capability), 401 (the exporter's account no longer exists when its ``users`` row is
-    locked), 404 (the organization is gone, or the draft or its brief is unknown, foreign,
-    soft-deleted or gone) or 409 (preconditions 5, P12, 3 and 2 of the module docstring, in
-    that order). After the capability and before every other check it takes the export's row
-    locks (:func:`_lock_for_export`), which the caller's transaction holds until it ends; on
-    SQLite, where those are plain reads, it first takes the database's writer lock (module
-    docstring, "On SQLite"), and a request that cannot get it within the busy timeout fails
-    with a server error and writes nothing.
+    Raises (writing nothing), in the order the code answers: 403 (the role the request
+    resolved), 503 (the capability), 401 (the exporter's account no longer exists when its
+    ``users`` row is locked), 404 (the organization is gone), 403 (the exporter's membership,
+    re-read under the organization lock, is gone or no longer an exporter role), 404 (the draft
+    or its brief is unknown, foreign, soft-deleted or gone) or 409 (preconditions 5, P12, 3 and
+    2 of the module docstring, in that order). After the capability and before every other check
+    it takes the export's row locks (:func:`_lock_for_export`), which the caller's transaction
+    holds until it ends; on SQLite, where those are plain reads, it first takes the database's
+    writer lock (module docstring, "On SQLite"), and a request that cannot get it within the
+    busy timeout fails with a server error and writes nothing.
     """
     export_format = ExportFormat(export_format)
     _require_role(ctx, EXPORTER_ROLES)
