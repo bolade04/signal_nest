@@ -166,16 +166,20 @@ lock serializes two transactions only from the first write of each. So a decisio
 writer lock before step 1 (:func:`app.db.sqlite_writer.hold_sqlite_writer_lock`, ``BEGIN
 IMMEDIATE``; AD-DECISION-SQLITE-01: D-N4 items 34 and 38 hold on SQLite too), after the request's
 role and capability gates and its own scope, author and reason checks, and its transaction holds
-it to commit. Everything the decision rests on is read after it, by statements run there: the
-role (step 3), the subject's existence and version, its controlling decision and, for a draft
-approval, the brief's controlling decision and the review. A demotion, a removal, a withdrawal
-of the brief's approval, an organization deletion or an account erasure therefore either
-committed before the lock and is read (403, 409, nothing written), or waits until the decision
-has committed (a decision or an account erasure at its own ``BEGIN IMMEDIATE``, the others at
-their first write). That is PostgreSQL's order with one point in place of five rows. Unlike
-PostgreSQL, the lock is the whole database's: while a decision holds it every other writer
+it to commit. Everything its checks after the lock rest on is read after it, by statements run
+there: the role (step 3), the subject's existence and version, its controlling decision and, for
+a draft approval, the brief's controlling decision and the review. A demotion, a removal, a
+withdrawal of the brief's approval, an organization deletion or an account erasure therefore
+either committed before the lock and is read (403, 409, nothing written), or waits until the
+decision has committed (a decision or an account erasure at its own ``BEGIN IMMEDIATE``, the
+others at their first write). That is PostgreSQL's order with one point in place of five rows.
+Unlike PostgreSQL, the lock is the whole database's: while a decision holds it another writer
 waits, at most for the busy timeout (five seconds), after which the waiting request answers a
-server error and writes nothing. The orders are exercised in
+server error and writes nothing. A writer whose transaction has already read when it first
+writes (a job's write phase, or a request inside a ``SAVEPOINT``) does not wait: its first write
+fails at once while a decision, an export or an erasure holds the lock. A decision that would be
+refused (403, 404 or 409) first waits for a writer in flight, and if the busy timeout expires it
+answers the generic 500, writing nothing. The orders are exercised in
 ``test_approvals_decision_serialization_sqlite.py``. An export takes the same lock before its
 reads.
 
@@ -240,8 +244,10 @@ and then reads the first decider's committed row: the sequence cannot race. The 
 writes nothing and is refused with 409 :data:`CONCURRENT_DECISION` (the request's whole
 transaction rolls back; the client re-reads and decides again). That backstop is what keeps
 a REPEATABLE READ session (whose snapshot predates the lock, so the lock alone is not
-sufficient there) and SQLite (where ``FOR UPDATE`` compiles to nothing) from ever storing a
-duplicate. REPEATABLE READ is proven on PostgreSQL in ``test_approvals_postgres.py``
+sufficient there) and a writer that skips the lock from ever storing a duplicate (on SQLite
+``FOR UPDATE`` compiles to nothing; there a decision holds the database's writer lock from
+before its reads, AD-DECISION-SQLITE-01). REPEATABLE READ is proven on PostgreSQL in
+``test_approvals_postgres.py``
 (``test_repeatable_read_is_not_sufficient_and_the_backstop_refuses_a_duplicate``); the clash
 answer on SQLite in ``test_approvals_api.py``
 (``TestSequence::test_a_sequence_clash_is_a_409_and_writes_nothing``).

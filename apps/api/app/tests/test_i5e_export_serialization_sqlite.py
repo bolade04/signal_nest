@@ -28,9 +28,10 @@ erasure of the exporter's account), with notifications off and on for the worksp
   must answer what the committed competitor means (409, 409, 404, 401) and write nothing;
 * *the export first*: it is held after its last check and before its first insert (the point at
   which the SQLite probes of review R-5E-A, P1 and P2, showed the defect); the competitor is
-  started and must be observed waiting in a write, with nothing of it committed; the export is
-  released. Both commit, the export first; a deletion or erasure then finds the export's rows
-  and anonymises them. (A decision's ``created_at`` follows the export's, as on PostgreSQL:
+  started and must be observed waiting (at its own ``BEGIN IMMEDIATE``, or, for organization
+  deletion, in its first write), with nothing of it committed; the export is released. Both
+  commit, the export first; a deletion or erasure then finds the export's rows and anonymises
+  them. (A decision's ``created_at`` follows the export's, as on PostgreSQL:
   :data:`STAMPED_AFTER_IT_WAITED`.)
 
 Each test asserts the **final committed state** as read by a separate connection (the rows, their

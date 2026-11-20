@@ -94,19 +94,19 @@ an account erasure that holds the writer lock and has not yet committed (a decis
 account erasure take it before their reads, an organization deletion at its first write) is
 waited for and then read by the checks, with the answers above (409, 404, 401). One that comes
 while the export holds the lock waits until the export has committed: a decision and an account
-erasure at their own ``BEGIN IMMEDIATE``, before they read anything, so they then read what the
-export committed and account erasure finds the export's rows; an organization deletion at its
-first write. The differences from PostgreSQL:
+erasure at their own ``BEGIN IMMEDIATE``, before any read their checks rest on, so they then
+read what the export committed and account erasure finds the export's rows; an organization
+deletion at its first write. The differences from PostgreSQL:
 
 * the lock is the whole database's. An export in flight delays every other writer of every
   tenant and first waits for any writer in flight, and two exports run one after the other. A
   wait lasts at most the connection's busy timeout (five seconds); then the waiting request
   fails with a server error (500) and writes nothing. That includes an export that would have
   been refused: its 401, 404 or 409 is decided only once it holds the lock;
-* the export, the two erasures and the brief and draft decisions take the lock before their reads
-  (:mod:`app.approvals.service`, "On SQLite"). A decision that waits for an export therefore
-  waits before its row exists, and its ``created_at`` is not earlier than the export's, as on
-  PostgreSQL. Which decision controls is ``decision_seq``, not ``created_at``;
+* the export, the two erasures and the brief and draft decisions take the lock before the reads
+  their checks rest on (:mod:`app.approvals.service`, "On SQLite"). A decision that waits for an
+  export therefore waits before its row exists, and its ``created_at`` is not earlier than the
+  export's, as on PostgreSQL. Which decision controls is ``decision_seq``, not ``created_at``;
 * every other writer, organization deletion among them, meets the lock at its first write; what
   organization deletion read before that write (its authority, the organization's name, the
   active jobs) is not held on SQLite.
