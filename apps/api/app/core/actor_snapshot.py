@@ -32,7 +32,9 @@ confirming a verification token minted for the stored address or by completing a
 reset mailed to it, and is never cleared. When it is set, it was set for the address the
 snapshot records. An account object read earlier in the request can only lag behind a
 verification, never run ahead of it, so a stale copy can only record the marker for an address
-verified meanwhile, never the address of an account that has not verified it.
+verified meanwhile, never the address of an account that has not verified it. Any future change
+that lets ``users.email`` change must clear ``email_verified_at`` in the same statement, or this
+rule must be revisited, with a test of its own.
 
 **What an API consumer sees.** ``created_by_snapshot`` (the recommendation-brief create, list,
 read and approval-queue answers, and the creative-draft list and read answers),
