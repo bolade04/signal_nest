@@ -176,10 +176,10 @@ others at their first write). That is PostgreSQL's order with one point in place
 Unlike PostgreSQL, the lock is the whole database's: while a decision holds it another writer
 waits, at most for the busy timeout (five seconds), after which the waiting request answers a
 server error and writes nothing. A writer whose transaction has already read when it first
-writes (a job's write phase, or a request inside a ``SAVEPOINT``) does not wait: its first write
-fails at once while a decision, an export or an erasure holds the lock. A decision that would be
-refused (403, 404 or 409) first waits for a writer in flight, and if the busy timeout expires it
-answers the generic 500, writing nothing. The orders are exercised in
+writes (one opened by a ``SAVEPOINT`` or an explicit ``BEGIN`` that reads before it writes) does
+not wait: its first write fails at once while a decision, an export or an erasure holds the lock.
+A decision that would be refused (403, 404 or 409) first waits for a writer in flight, and if the
+busy timeout expires it answers the generic 500, writing nothing. The orders are exercised in
 ``test_approvals_decision_serialization_sqlite.py``. An export takes the same lock before its
 reads.
 

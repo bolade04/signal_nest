@@ -328,7 +328,7 @@ The restored W0 carries **none** of the window actions; restoration is a prerequ
 | `P6-P5-7` | Status analytics (server-side, derived) | PARTIAL | `Overview.tsx` computes 4 cards + 1 chart client-side from the opportunity list |
 | `P6-P5-8` | Audited manual export | NOT_STARTED | No route, table, or flag |
 
-*(2026-11-19, after the merge of #326 `ab550663`: every row of this table is implemented on `main` and dark — 5A–5D by the pull requests named in `docs/project-phase-5-plan.md`'s status updates, 5E (`P6-P5-6`, `-7`, `-8`) by #326; the states and evidence above are the 2026-09-19 audit's, kept as written. Implemented is not activated: see that plan's status update of 2026-11-19.)*
+*(2026-11-19, after the merge of #326 `ab550663`: every row of this table is implemented on `main` — 5A–5D by the pull requests named in `docs/project-phase-5-plan.md`'s status updates, 5E (`P6-P5-6`, `-7`, `-8`) by #326 — behind Phase 5 capabilities that are off by default, apart from the live, un-flagged changes named in the 5B and 5D sub-plans' exit criterion 8 and in those pull requests' descriptions; the states and evidence above are the 2026-09-19 audit's, kept as written. Implemented is not activated: see that plan's status update of 2026-11-19.)*
 
 ### 4.11 Commercialization (**out of Phase-6 scope**, recorded for completeness)
 
@@ -817,7 +817,7 @@ honest.
 
 - **The Phase 5A–5E guided-action product loop** (§4.10) — **excluded by resolved
   operator decision `P6-D01` (§0)**, not merely by this plan's recommendation. It is
-  specified, frozen, and unbuilt. *(2026-11-19: 5A–5E are implemented on `main` and dark; see §4.10's note.)* It has its own plan set, its own resolved operator decisions O-1…O-11, its own
+  specified, frozen, and unbuilt. *(2026-11-19: 5A–5E are implemented on `main`, behind capabilities that are off by default apart from the live changes §4.10's note points to; see that note.)* It has its own plan set, its own resolved operator decisions O-1…O-11, its own
   open O-12, and its own 26-working-day ceiling. Folding it into Phase 6 would make Phase
   6 an unbounded container and would obscure the readiness work. **Phase 5 implementation
   remains a separate, separately-authorized track.** Phase 6 is its precondition: the

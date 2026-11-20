@@ -36,11 +36,11 @@ other writers of every tenant wait, and the caller itself first waits for any wr
 A wait lasts at most the connection's busy timeout (``busy_timeout=5000``, five seconds); after
 that the waiting statement fails with ``database is locked``, which the application answers as
 its generic 500, and the waiting request writes nothing. A writer whose transaction has already
-read when it first writes (a job's write phase, or a request inside a ``SAVEPOINT``) does not
-wait: its first write fails at once while a decision, an export or an erasure holds the lock. A
-decision that would be refused (403, 404 or 409) first waits for a writer in flight, and if the
-busy timeout expires it answers the generic 500, writing nothing. Other connections can still
-read.
+read when it first writes (one opened by a ``SAVEPOINT`` or an explicit ``BEGIN`` that reads
+before it writes) does not wait: its first write fails at once while a decision, an export or an
+erasure holds the lock. A decision that would be refused (403, 404 or 409) first waits for a
+writer in flight, and if the busy timeout expires it answers the generic 500, writing nothing.
+Other connections can still read.
 
 On every other engine the function sends nothing: PostgreSQL's row locks do this work there.
 """
