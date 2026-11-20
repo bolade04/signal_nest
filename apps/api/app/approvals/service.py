@@ -231,11 +231,12 @@ write (the workspace ``FOR UPDATE``, then its audit row's foreign key on the act
 ``users`` row); that same user's organization deletion or account deletion (that ``users`` row
 ``FOR UPDATE``, then the organization); and a decision or an export emitting a notification (the
 organization ``KEY SHARE``, then the workspace ``KEY SHARE`` for its notification rows).
-A brief capture is a third party too, notifications on or off: it holds the organization
-``KEY SHARE`` (from its usage rows with the mock; from its re-read, G-R3-1 F-3, with a priced
-provider, which opens the window before its version read), and its own row's foreign key then
-takes the workspace ``KEY SHARE``. PostgreSQL then aborts at least one of the three with a
-deadlock error. This is open: nothing in this module or in the emitter prevents it.
+A brief capture is a third party too, notifications on or off: it takes the organization
+``KEY SHARE`` and then the workspace ``KEY SHARE``, with the mock both through its usage rows'
+foreign keys right after the model call, and with a priced provider the organization at its re-read
+(G-R3-1 F-3, which opens the window before its version read) and the workspace through its own
+row's foreign key. PostgreSQL then aborts at least one of the three with a deadlock error. This is
+open: nothing in this module or in the emitter prevents it.
 
 **The latest decision controls.** Decisions are append-only; a change of mind is a new
 row. The controlling decision of a subject version is the row with the highest
