@@ -41,7 +41,7 @@ whatever its decision. A refusal writes nothing.
 * one :class:`Export` row: the draft and its exact version; ``approval_id`` = the controlling
   decision; ``jurisdiction_code`` = the draft's captured code, copied, never re-resolved
   (Q-1); ``exported_by`` and ``exported_by_snapshot`` (:func:`app.core.actor_snapshot.
-  actor_snapshot`); ``is_simulated`` = the draft's;
+  account_snapshot`); ``is_simulated`` = the draft's;
 * its audit row, ``creative_draft.exported`` (ids, version, format, jurisdiction and flags;
   no text and no identity beyond the actor column);
 * ``export.completed`` through the injected
@@ -137,7 +137,7 @@ from app.auth.dependencies import TenantContext
 from app.briefs.models import RecommendationBrief
 from app.capabilities.registry import Capability
 from app.capabilities.resolver import resolve_capability
-from app.core.actor_snapshot import actor_snapshot
+from app.core.actor_snapshot import account_snapshot
 from app.core.config import Settings, get_settings
 from app.core.enums import ApprovalDecision, ExportFormat, NotificationEventCode, Role
 from app.core.errors import (
@@ -485,9 +485,7 @@ def create_export(
         format=export_format.value,
         jurisdiction_code=jurisdiction_code,
         exported_by=ctx.user.id,
-        exported_by_snapshot=actor_snapshot(
-            user_id=ctx.user.id, full_name=ctx.user.full_name, email=ctx.user.email
-        ),
+        exported_by_snapshot=account_snapshot(ctx.user),
         is_simulated=bool(draft.is_simulated),
     )
     db.add(export)

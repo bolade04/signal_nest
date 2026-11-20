@@ -117,7 +117,7 @@ from app.claims.engine import (
     review_against_library,
 )
 from app.claims.library import load_library
-from app.core.actor_snapshot import actor_snapshot
+from app.core.actor_snapshot import account_snapshot
 from app.core.config import Settings
 from app.core.enums import ApprovalDecision, ApprovalSubjectType, NotificationEventCode, Role
 from app.core.errors import NotFoundError, SignalNestError, ValidationDomainError
@@ -822,9 +822,7 @@ def execute_generation(
         estimated_cost_usd=Decimal(str(usage.estimated_cost_usd)),
         llm_usage_event_id=_existing_usage_event(db, response.usage_event_id),
         created_by=author.id,
-        created_by_snapshot=actor_snapshot(
-            user_id=author.id, full_name=author.full_name, email=author.email
-        ),
+        created_by_snapshot=account_snapshot(author),
     )
     db.add(draft)
     try:

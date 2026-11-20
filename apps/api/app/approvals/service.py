@@ -312,7 +312,7 @@ from app.audit.actions import APPROVAL_DECISION_ACTIONS
 from app.audit.service import record_audit
 from app.auth.dependencies import TenantContext
 from app.briefs.models import RecommendationBrief
-from app.core.actor_snapshot import actor_snapshot
+from app.core.actor_snapshot import account_snapshot
 from app.core.enums import ApprovalDecision, ApprovalSubjectType, NotificationEventCode, Role
 from app.core.errors import (
     ConflictError,
@@ -402,9 +402,10 @@ def get_scoped_brief(
 def is_brief_author(brief: RecommendationBrief, user_id: str) -> bool:
     """Whether ``user_id`` authored ``brief`` (by the live FK or by the snapshot's id).
 
-    The snapshot is ``"<user id> <full name> <<email>>"``; its leading token is the author's
-    id even after ``created_by`` was nulled. An erased snapshot (``"[erased]"``) names
-    nobody, and an erased account cannot sign in to decide.
+    The snapshot is ``"<user id> <full name> <<email>>"`` (``[unverified]`` in place of an
+    address the author has not verified; :mod:`app.core.actor_snapshot`); its leading token is
+    the author's id even after ``created_by`` was nulled. An erased snapshot (``"[erased]"``)
+    names nobody, and an erased account cannot sign in to decide.
     """
     if brief.created_by is not None and brief.created_by == user_id:
         return True
@@ -671,9 +672,7 @@ def record_decision(
             "reason_code": None if reason is None else reason.value,
             "note": note,
             "decided_by": ctx.user.id,
-            "decided_by_snapshot": actor_snapshot(
-                user_id=ctx.user.id, full_name=ctx.user.full_name, email=ctx.user.email
-            ),
+            "decided_by_snapshot": account_snapshot(ctx.user),
             "decided_role": role.value,
             # A decision on simulated (mock-model) content is itself simulated.
             "is_simulated": bool(brief.is_simulated),
@@ -954,9 +953,7 @@ def record_draft_decision(
             "reason_code": None if reason is None else reason.value,
             "note": note,
             "decided_by": ctx.user.id,
-            "decided_by_snapshot": actor_snapshot(
-                user_id=ctx.user.id, full_name=ctx.user.full_name, email=ctx.user.email
-            ),
+            "decided_by_snapshot": account_snapshot(ctx.user),
             "decided_role": role.value,
             "is_simulated": bool(draft.is_simulated),
         },

@@ -28,8 +28,9 @@ import { useOpportunityIntelligence } from './useOpportunityIntelligence';
 
 /**
  * The author as captured on the brief: `created_by_snapshot` is
- * `"<user id> <full name> <<email>>"` (frozen at CF-1) or `"[erased]"`. Only the name is
- * shown; the id and address stay out of the page.
+ * `"<user id> <full name> <<email>>"` (frozen at CF-1; `[unverified]` in place of an address
+ * the author has not verified) or `"[erased]"`. Only the name is shown; the id and the e-mail
+ * component stay out of the page.
  */
 // eslint-disable-next-line react-refresh/only-export-components
 export function briefAuthorName(snapshot: string): string {

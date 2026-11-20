@@ -81,9 +81,10 @@ export const DECISION_ACTION: Readonly<Record<ApprovalDecision, string>> = {
 export const NOTE_MAX_LENGTH = 1000;
 
 /**
- * The display name inside an actor snapshot, `"<user id> <full name> <<email>>"`
+ * The display name inside an actor snapshot, `"<user id> <full name> <<email>>"`, with
+ * `[unverified]` in place of an address the account has not verified
  * (`apps/api/app/core/actor_snapshot.py`), or a neutral label for an erased account.
- * The id and the address are never shown.
+ * The id and the e-mail component are never shown.
  */
 export function snapshotName(snapshot: string): string {
   if (snapshot === '[erased]') return 'Erased account';

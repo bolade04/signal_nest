@@ -289,4 +289,8 @@ describe('briefAuthorName', () => {
   it('names an erased author without an identity', () => {
     expect(briefAuthorName('[erased]')).toBe('a deleted account');
   });
+
+  it('shows only the name when the address is not verified', () => {
+    expect(briefAuthorName('0123abcd Dana Q. Marketer <[unverified]>')).toBe('Dana Q. Marketer');
+  });
 });

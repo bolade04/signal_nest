@@ -98,7 +98,8 @@ class RecommendationBriefOut(BriefContent):
     is_simulated: bool
     #: NULL once the author's account is erased.
     created_by: str | None
-    #: "<user id> <full name> <<email>>" at capture, or "[erased]".
+    #: "<user id> <full name> <<email>>" at capture ("[unverified]" in place of an address the
+    #: author has not verified; app.core.actor_snapshot), or "[erased]".
     created_by_snapshot: str
     created_at: datetime
 

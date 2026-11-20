@@ -429,7 +429,8 @@ class TestCreateAndRead:
         assert (body["prompt_name"], body["prompt_version"]) == (prompt.name, prompt.version)
         assert body["model_identifier"] == "mock-1" and body["is_simulated"] is True
         assert body["created_by"] == "owner-dallas"
-        assert body["created_by_snapshot"] == "owner-dallas Owner dallas <owner-dallas@example.com>"
+        # The seeded owner's address is not verified: "[unverified]" in its place (O-1, R-a).
+        assert body["created_by_snapshot"] == "owner-dallas Owner dallas <[unverified]>"
         assert body["campaign_id"] is None
         assert body["evidence_refs"] == [mk.record_id, *mk.evidence_ids]
         assert body["summary"] and body["rationale"] and body["recommended_actions"]

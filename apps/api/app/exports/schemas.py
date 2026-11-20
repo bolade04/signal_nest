@@ -50,7 +50,8 @@ class ExportHistoryItemOut(BaseModel):
     format: ExportFormat
     #: The draft's captured jurisdiction, copied at export (never re-resolved).
     jurisdiction_code: str
-    #: "<user id> <full name> <<email>>" at export, or "[erased]".
+    #: "<user id> <full name> <<email>>" at export ("[unverified]" in place of an address the
+    #: exporter has not verified; app.core.actor_snapshot), or "[erased]".
     exported_by_snapshot: str
     is_simulated: bool
     created_at: datetime
