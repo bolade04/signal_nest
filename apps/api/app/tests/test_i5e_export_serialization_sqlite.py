@@ -927,7 +927,7 @@ def test_sqlite_an_account_deletion_with_a_wrong_password_takes_no_writer_lock(
     assert _exists(lite, User, org.users["admin"])
 
 
-def test_sqlite_an_export_first_an_invitee_email_erasure_waits_and_clears_its_snapshot(
+def test_sqlite_an_export_first_an_invitee_email_erasure_waits_and_no_row_names_the_address(
     lite: CreativeWorld, monkeypatch
 ):
     """The operator's erasure of an address (``erase_invitee_email``) reads the same way. An
