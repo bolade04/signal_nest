@@ -90,24 +90,26 @@ holds nothing once it has returned. There, after the role and the capability (a 
 still takes nothing) and before the first of the four statements, :func:`create_export` takes
 the database's one writer lock (:func:`app.db.sqlite_writer.hold_sqlite_writer_lock`, ``BEGIN
 IMMEDIATE``), and its transaction holds it to its end. A decision, an organization deletion or
-an account erasure that has written and not yet committed is waited for and then read by the
-checks, with the answers above (409, 404, 401); one that has not written yet waits at its own
-first write until the export has committed, and account erasure takes the same lock before it
-reads which rows name the account, so it then finds the export's rows. The differences from
-PostgreSQL:
+an account erasure that holds the writer lock and has not yet committed (a decision and an
+account erasure take it before their reads, an organization deletion at its first write) is
+waited for and then read by the checks, with the answers above (409, 404, 401). One that comes
+while the export holds the lock waits until the export has committed: a decision and an account
+erasure at their own ``BEGIN IMMEDIATE``, before any read their checks rest on, so they then
+read what the export committed and account erasure finds the export's rows; an organization
+deletion at its first write. The differences from PostgreSQL:
 
 * the lock is the whole database's. An export in flight delays every other writer of every
   tenant and first waits for any writer in flight, and two exports run one after the other. A
   wait lasts at most the connection's busy timeout (five seconds); then the waiting request
   fails with a server error (500) and writes nothing. That includes an export that would have
   been refused: its 401, 404 or 409 is decided only once it holds the lock;
-* a decision that waited for an export was given its ``created_at`` before it waited (the row is
-  stamped when it is flushed), so the two rows' ``created_at`` values can state the reverse of
-  the commit order, by no more than that wait. Which decision controls is ``decision_seq``, not
-  ``created_at``;
-* only the export, account erasure and invitee-email erasure take the lock. What a decision
-  itself read before its own first write (the decider's role, the brief's approval for a draft
-  approval) is not held to its commit on SQLite.
+* the export, the two erasures and the brief and draft decisions take the lock before the reads
+  their checks rest on (:mod:`app.approvals.service`, "On SQLite"). A decision that waits for an
+  export therefore waits before its row exists, and its ``created_at`` is not earlier than the
+  export's, as on PostgreSQL. Which decision controls is ``decision_seq``, not ``created_at``;
+* every other writer, organization deletion among them, meets the lock at its first write; what
+  organization deletion read before that write (its authority, the organization's name, the
+  active jobs) is not held on SQLite.
 
 The export history (:func:`list_exports`) is gated the same way (capability, the history's
 role set, the same scoped 404) and never returns rendered text.

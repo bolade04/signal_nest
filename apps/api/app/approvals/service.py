@@ -159,12 +159,29 @@ transactions; for three, see the known limit AD-NOTIF-LOCK-01 below). The organi
 after the user because account deletion locks the user, then its organizations: the reverse
 order would cycle with it. The membership ``FOR SHARE`` is still taken and held to commit, as
 ruled; with step 2 before it, a membership writer that takes the organization first never
-reaches it during a decision, and one that did not (none exists) would wait on it. On SQLite
-every lock compiles to a plain read and holds nothing. The re-read still reads the persisted
-role, but SQLite's single writer lock serializes two transactions only from the first write of
-each, so what a decision read before its own first write (the role, and for a draft approval the
-brief's approval) is not held to its commit there. An export does not rest on that: on SQLite it
-takes the writer lock before its reads (:func:`app.db.sqlite_writer.hold_sqlite_writer_lock`).
+reaches it during a decision, and one that did not (none exists) would wait on it.
+
+**On SQLite** every lock compiles to a plain read and holds nothing, and SQLite's single writer
+lock serializes two transactions only from the first write of each. So a decision takes that
+writer lock before step 1 (:func:`app.db.sqlite_writer.hold_sqlite_writer_lock`, ``BEGIN
+IMMEDIATE``; AD-DECISION-SQLITE-01: D-N4 items 34 and 38 hold on SQLite too), after the request's
+role and capability gates and its own scope, author and reason checks, and its transaction holds
+it to commit. Everything its checks after the lock rest on is read after it, by statements run
+there: the role (step 3), the subject's existence and version, its controlling decision and, for
+a draft approval, the brief's controlling decision and the review. A demotion, a removal, a
+withdrawal of the brief's approval, an organization deletion or an account erasure therefore
+either committed before the lock and is read (403, 409, nothing written), or waits until the
+decision has committed (a decision or an account erasure at its own ``BEGIN IMMEDIATE``, the
+others at their first write). That is PostgreSQL's order with one point in place of five rows.
+Unlike PostgreSQL, the lock is the whole database's: while a decision holds it another writer
+waits, at most for the busy timeout (five seconds), after which the waiting request answers a
+server error and writes nothing. A writer whose transaction has already read when it first
+writes (one opened by a ``SAVEPOINT`` or an explicit ``BEGIN`` that reads before it writes) does
+not wait: its first write fails at once while a decision, an export or an erasure holds the lock.
+A decision that would be refused (403, 404 or 409) first waits for a writer in flight, and if the
+busy timeout expires it answers the generic 500, writing nothing. The orders are exercised in
+``test_approvals_decision_serialization_sqlite.py``. An export takes the same lock before its
+reads.
 
 **Why step 5 is ``KEY SHARE`` after the draft, not ``SHARE`` before it** (D-N4 item 38). Only
 ``FOR UPDATE`` excludes ``KEY SHARE``, and every path that holds a brief ``FOR UPDATE`` waits on
@@ -227,8 +244,10 @@ and then reads the first decider's committed row: the sequence cannot race. The 
 writes nothing and is refused with 409 :data:`CONCURRENT_DECISION` (the request's whole
 transaction rolls back; the client re-reads and decides again). That backstop is what keeps
 a REPEATABLE READ session (whose snapshot predates the lock, so the lock alone is not
-sufficient there) and SQLite (where ``FOR UPDATE`` compiles to nothing) from ever storing a
-duplicate. REPEATABLE READ is proven on PostgreSQL in ``test_approvals_postgres.py``
+sufficient there) and a writer that skips the lock from ever storing a duplicate (on SQLite
+``FOR UPDATE`` compiles to nothing; there a decision holds the database's writer lock from
+before its reads, AD-DECISION-SQLITE-01). REPEATABLE READ is proven on PostgreSQL in
+``test_approvals_postgres.py``
 (``test_repeatable_read_is_not_sufficient_and_the_backstop_refuses_a_duplicate``); the clash
 answer on SQLite in ``test_approvals_api.py``
 (``TestSequence::test_a_sequence_clash_is_a_409_and_writes_nothing``).
@@ -270,8 +289,9 @@ new approvals. Explain downstream consequences explicitly.").** The first reason
 ``draft_approval_refusal`` gives is ``brief_not_approved``: the controlling decision on the brief
 version the draft was generated from (``draft.brief_id``; a brief row is one immutable version)
 is absent, ``rejected`` or ``revoked``. :func:`record_draft_decision` reads it under step 5 of
-"Lock order", so a revocation of that brief either commits before the approval (which then reads
-it and is refused) or waits until the approval commits. It is checked for a new ``approved``
+"Lock order" (on SQLite, under the writer lock taken before step 1), so a revocation of that
+brief either commits before the approval (which then reads it and is refused) or waits until the
+approval commits. It is checked for a new ``approved``
 decision only: rejecting or revoking a draft is allowed whatever the brief's state, and nothing
 already recorded (a draft's earlier approval, its audit rows) is read again, changed or
 withdrawn when the brief's approval is later withdrawn.
@@ -303,6 +323,7 @@ from app.core.errors import (
 from app.core.logging import get_logger, log_event
 from app.creative.models import CreativeDraft
 from app.creative.service import draft_approval_refusal
+from app.db.sqlite_writer import hold_sqlite_writer_lock
 from app.notifications.recipients import notify
 from app.organizations.models import Organization, OrganizationMember, User
 
@@ -448,8 +469,9 @@ def _lock_subject(db: Session, brief_id: str) -> int:
     """Hold the subject's row lock until the caller's transaction ends; return its version.
 
     Taken before ``max(decision_seq)`` is read. On SQLite ``FOR UPDATE`` compiles to a plain
-    read (the single-writer engine serializes writers); correctness there rests on the
-    unique key, whose clash is a 409.
+    read; the decision already holds the database's writer lock there (taken before step 1 of
+    "Lock order"), so the version and the sequence are read under it. The unique key, whose
+    clash is a 409, stays the backstop on both engines.
     """
     row = db.execute(subject_lock_select(brief_id)).first()
     if row is None:
@@ -553,7 +575,7 @@ def _insert_decision(db: Session, *, values: dict) -> Approval:
     """Insert one decision with the next ``decision_seq``, read under the subject lock.
 
     A clash on ``uq_approval_decision_seq`` (only possible where the lock does not
-    serialize: REPEATABLE READ, SQLite, or a writer that skipped the lock) writes nothing and
+    serialize: REPEATABLE READ, or a writer that skipped the lock) writes nothing and
     is refused with 409; the caller's transaction is rolled back by the request scope. Any
     other integrity failure is re-raised.
     """
@@ -597,7 +619,8 @@ def record_decision(
 
     Order of checks (each refusal writes nothing): the approver role as the request resolved
     it (403), the brief's tenant scope (404), separation of duties (403), reason polarity
-    (422); then the approver role re-read ``FOR SHARE`` from the decider's membership, under
+    (422); on SQLite, the database's writer lock, held to commit (module docstring, "On
+    SQLite"); then the approver role re-read ``FOR SHARE`` from the decider's membership, under
     locks 1 to 3 of "Lock order" (403, D-N4 item 34); then, under the subject lock: the row
     still exists (404), the exact version (409), the transition rule against the controlling
     decision (409); then the sequenced insert and the audit row, whose ``decided_role`` is the
@@ -620,7 +643,9 @@ def record_decision(
     # before the subject, review W21-REV-DN4A r1 C-1). Then everything that decides the
     # sequence is read under the subject's row lock, in this transaction (review rule
     # W21-REV-CF1-DATA): the row's existence (404 if it is gone), the exact version, the
-    # controlling decision, then max(decision_seq).
+    # controlling decision, then max(decision_seq). On SQLite, where those locks are plain reads,
+    # the database's writer lock is taken first and held to commit (AD-DECISION-SQLITE-01).
+    hold_sqlite_writer_lock(db)
     role = _reread_approver_role(db, ctx)
     version = _lock_subject(db, brief.id)
     if subject_version != version:
@@ -867,9 +892,9 @@ def record_draft_decision(
     """Append one decision on ``draft``'s exact version, with its audit row; flush only.
 
     The brief decision's checks in the same order (approver role 403, tenant scope 404,
-    author 403, reason polarity 422; the approver role re-read ``FOR SHARE`` under locks 1 to
-    3 of "Lock order" 403 (D-N4 item 34); under the draft row's lock: existence 404, exact
-    version 409, the revoke rule 409),
+    author 403, reason polarity 422; on SQLite the database's writer lock, held to commit; the
+    approver role re-read ``FOR SHARE`` under locks 1 to 3 of "Lock order" 403 (D-N4 item 34);
+    under the draft row's lock: existence 404, exact version 409, the revoke rule 409),
     then the 5C precondition: an ``approved`` decision is refused (409
     ``approval_review_blocked``, nothing written) while
     :func:`app.creative.service.draft_approval_refusal` gives a reason. For an ``approved``
@@ -889,6 +914,7 @@ def record_draft_decision(
     if not reason_allowed(decision, reason):
         raise ValidationDomainError(REASON_MISMATCH)
 
+    hold_sqlite_writer_lock(db)  # SQLite only, as for a brief (AD-DECISION-SQLITE-01)
     role = _reread_approver_role(db, ctx)  # D-N4 item 34: locks 1 to 3, as for a brief
     version = _lock_draft(db, draft.id)
     if subject_version != version:

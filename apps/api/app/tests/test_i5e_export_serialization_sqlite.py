@@ -28,10 +28,11 @@ erasure of the exporter's account), with notifications off and on for the worksp
   must answer what the committed competitor means (409, 409, 404, 401) and write nothing;
 * *the export first*: it is held after its last check and before its first insert (the point at
   which the SQLite probes of review R-5E-A, P1 and P2, showed the defect); the competitor is
-  started and must be observed waiting in a write, with nothing of it committed; the export is
-  released. Both commit, the export first; a deletion or erasure then finds the export's rows
-  and anonymises them. (One difference from PostgreSQL is pinned as it is:
-  :data:`STAMPED_BEFORE_IT_WAITED`.)
+  started and must be observed waiting (at its own ``BEGIN IMMEDIATE``, or, for organization
+  deletion, in its first write), with nothing of it committed; the export is released. Both
+  commit, the export first; a deletion or erasure then finds the export's rows and anonymises
+  them. (A decision's ``created_at`` follows the export's, as on PostgreSQL:
+  :data:`STAMPED_AFTER_IT_WAITED`.)
 
 Each test asserts the **final committed state** as read by a separate connection (the rows, their
 order, and that no column of a surviving ``exports``, ``audit_logs`` or ``notifications`` row
@@ -121,13 +122,13 @@ NOTIFICATIONS = pytest.mark.parametrize(
     "notifications", [False, True], ids=["notifications-off", "notifications-on"]
 )
 WITHDRAWALS = pytest.mark.parametrize("decision", ["revoked", "rejected"])
-#: A difference from PostgreSQL, stated and pinned. A decision's row gets its ``created_at`` when
-#: it is flushed, which on SQLite is before its insert waits for the writer lock (on PostgreSQL
-#: the decision waits earlier, at its row lock, before the row exists). So when a decision waited
-#: for an export, the commit order is export, then decision, and the two ``created_at`` values
-#: can state the reverse, by no more than the time the decision waited. In these tests the
-#: export is held before its insert, so they always do.
-STAMPED_BEFORE_IT_WAITED = "the decision's created_at (set before it waited) <= the export's"
+#: A decision's row gets its ``created_at`` when it is flushed. On SQLite a decision takes the
+#: writer lock before its reads (AD-DECISION-SQLITE-01), so one that waits for an export waits
+#: before its row exists, as on PostgreSQL (at its row lock), and is stamped after the export has
+#: committed: the commit order is export, then decision, and the two ``created_at`` values state
+#: it. (Before that repair the row was stamped before its insert waited, and they stated the
+#: reverse.)
+STAMPED_AFTER_IT_WAITED = "the export's created_at <= the decision's (stamped after it waited)"
 
 
 # --------------------------------------------------------------------------- #
@@ -390,27 +391,29 @@ def test_sqlite_an_export_first_the_draft_decision_waits_until_it_has_committed(
     later = [a for a in lite.rows(Approval, subject_id=made) if a["decision"] == decision]
     observed = {
         "decisions committed while the export was held": committed_while_the_export_was_held,
-        "the decision waited in a write": _is_write(waiting),
+        "the decision waited at BEGIN IMMEDIATE, having made none of its reads": (
+            waiting, _reads_of_the_export(_before)
+        ),
         "export": _answer(exported),
         "decision": _answer(decided),
         "decisions": _decisions(lite, made),
         "export rows, audit rows": (len(rows), len(audits)),
         "the export's approval": [r["approval_id"] for r in rows],
-        STAMPED_BEFORE_IT_WAITED: bool(
-            rows and later and later[0]["created_at"] <= rows[0]["created_at"]
+        STAMPED_AFTER_IT_WAITED: bool(
+            rows and later and rows[0]["created_at"] <= later[0]["created_at"]
         ),
         "export notifications": _export_notifications(lite, ws),
         "the next export": _answer(_export(lite, ws, made)),
     }
     _report("export first, draft decision", observed, {
         "decisions committed while the export was held": ["approved"],
-        "the decision waited in a write": True,
+        "the decision waited at BEGIN IMMEDIATE, having made none of its reads": (SERIALIZE, []),
         "export": (201,),
         "decision": (201,),
         "decisions": ["approved", decision],
         "export rows, audit rows": (1, 1),
         "the export's approval": [approval_id],
-        STAMPED_BEFORE_IT_WAITED: True,
+        STAMPED_AFTER_IT_WAITED: True,
         "export notifications": 2 if notifications else 0,
         "the next export": (409, "export_not_approved", NOT_APPROVED[decision]),
     })
@@ -490,26 +493,28 @@ def test_sqlite_an_export_first_the_brief_decision_waits_until_it_has_committed(
     later = [a for a in lite.rows(Approval, subject_id=brief_id) if a["decision"] == decision]
     observed = {
         "brief decisions committed while the export was held": committed_while_the_export_was_held,
-        "the decision waited in a write": _is_write(waiting),
+        "the decision waited at BEGIN IMMEDIATE, having made none of its reads": (
+            waiting, _reads_of_the_export(_before)
+        ),
         "export": _answer(exported),
         "decision": _answer(decided),
         "brief decisions": _decisions(lite, brief_id),
         "export rows, audit rows": (len(rows), len(audits)),
         "the export's approval": [r["approval_id"] for r in rows],
-        STAMPED_BEFORE_IT_WAITED: bool(
-            rows and later and later[0]["created_at"] <= rows[0]["created_at"]
+        STAMPED_AFTER_IT_WAITED: bool(
+            rows and later and rows[0]["created_at"] <= later[0]["created_at"]
         ),
         "the next export": _answer(_export(lite, ws, made)),
     }
     _report("export first, brief decision", observed, {
         "brief decisions committed while the export was held": ["approved"],
-        "the decision waited in a write": True,
+        "the decision waited at BEGIN IMMEDIATE, having made none of its reads": (SERIALIZE, []),
         "export": (201,),
         "decision": (201,),
         "brief decisions": ["approved", decision],
         "export rows, audit rows": (1, 1),
         "the export's approval": [approval_id],
-        STAMPED_BEFORE_IT_WAITED: True,
+        STAMPED_AFTER_IT_WAITED: True,
         "the next export": (409, "export_review_blocked", BRIEF_NO_LONGER_APPROVED),
     })
 
