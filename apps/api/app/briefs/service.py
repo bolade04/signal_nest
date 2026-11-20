@@ -62,7 +62,9 @@ trustworthy compliance record:
   PostgreSQL, the writer lock on SQLite). A removal, or a demotion out of the editor roles, that
   committed first refuses the brief (403 ``permission_denied``,
   :class:`BriefAuthorNotPermittedError`); one that comes later waits until the brief has
-  committed, which then stands as written.
+  committed, which then stands as written. Holding the organization, a capture is a third party
+  of the AD-NOTIF-LOCK-01 ring, notifications on or off, and with a priced provider this re-read
+  opens that window before the version read ("Known limit" in :mod:`app.approvals.service`).
 * **Versioning.** ``brief_version`` is the opportunity's highest version plus one and
   ``parent_brief_id`` the brief it supersedes, read after the opportunity row is locked
   (``SELECT ... FOR UPDATE`` on PostgreSQL), so concurrent captures serialize; a unique-key
