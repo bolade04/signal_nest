@@ -125,7 +125,8 @@ class CreativeDraftOut(GeneratedCreative):
     is_simulated: bool
     #: NULL once the author's account is erased.
     created_by: str | None
-    #: "<user id> <full name> <<email>>" at generation, or "[erased]".
+    #: "<user id> <full name> <<email>>" at generation ("[unverified]" in place of an address
+    #: the author has not verified; app.core.actor_snapshot), or "[erased]".
     created_by_snapshot: str
     created_at: datetime
     #: NULL only while the review has not been written.

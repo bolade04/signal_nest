@@ -87,7 +87,9 @@ class Export(Base, UUIDPrimaryKeyMixin, CreatedAtMixin):
     exported_by: Mapped[str | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), index=True
     )
-    #: Immutable "<user id> <full name> <<email>>" at export; "[erased]" once erased.
+    #: Immutable "<user id> <full name> <<email>>" at export, with "[unverified]" in place of
+    #: an address the account has not verified (app.core.actor_snapshot); "[erased]" once
+    #: erased.
     exported_by_snapshot: Mapped[str] = mapped_column(
         String(ACTOR_SNAPSHOT_MAX_LENGTH), nullable=False
     )

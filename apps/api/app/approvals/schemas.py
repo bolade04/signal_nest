@@ -64,7 +64,8 @@ class ApprovalOut(BaseModel):
     note: str | None
     #: NULL once the decider's account is erased.
     decided_by: str | None
-    #: "<user id> <full name> <<email>>" at decision time, or "[erased]".
+    #: "<user id> <full name> <<email>>" at decision time ("[unverified]" in place of an
+    #: address the decider has not verified; app.core.actor_snapshot), or "[erased]".
     decided_by_snapshot: str
     decided_role: Role
     is_simulated: bool

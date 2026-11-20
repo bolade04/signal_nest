@@ -46,6 +46,17 @@ Rules the code enforces:
   The account and its membership stay, and its export then lists no invitation. Before running
   it on an address a live account holds, ask the person to verify the address and delete the
   account themselves, or record that this history goes.
+
+  The holder's own `users.email` (its sign-in address) stays as it is: `erase-email` neither
+  erases nor changes it, so the command exits `EXIT_FINDINGS` (1) and its `verification` reports
+  that copy (`{"table": "users", "column": "email", "rows": 1}`). Since the change made under
+  the operator's O-1 disposition of 2026-11-20, a new Phase 5 actor snapshot
+  (`created_by_snapshot`, `decided_by_snapshot`, `exported_by_snapshot`) of an account whose
+  address is not verified carries the marker `[unverified]` in place of the address, so the
+  holder's later briefs, drafts, decisions and exports do not copy it. If the holder later
+  verifies the address, its new snapshots carry it, and `erase-email` is then refused in favour
+  of the holder's own deletion. Rows written before that change that name the address are still
+  cleared by `erase-email`.
 - **Which occurrences are erased** (*interim, pending the operator's decision `D-PRIV-7`* on
   ambiguous occurrences, decisions packet row 3.6a). The deletion and the verifier share one
   matcher (`app.privacy.matching`).

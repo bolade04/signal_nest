@@ -178,7 +178,9 @@ class CreativeDraft(Base, UUIDPrimaryKeyMixin, CreatedAtMixin):
     created_by: Mapped[str | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), index=True
     )
-    #: Immutable "<user id> <full name> <<email>>" at generation; "[erased]" once erased.
+    #: Immutable "<user id> <full name> <<email>>" at generation, with "[unverified]" in place
+    #: of an address the account has not verified (app.core.actor_snapshot); "[erased]" once
+    #: erased.
     created_by_snapshot: Mapped[str] = mapped_column(
         String(ACTOR_SNAPSHOT_MAX_LENGTH), nullable=False
     )

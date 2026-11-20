@@ -143,8 +143,9 @@ class Approval(Base, UUIDPrimaryKeyMixin, CreatedAtMixin):
     decided_by: Mapped[str | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), index=True
     )
-    #: Immutable "<user id> <full name> <<email>>" at decision time; "[erased]" once the
-    #: account is erased or the organization deleted.
+    #: Immutable "<user id> <full name> <<email>>" at decision time, with "[unverified]" in
+    #: place of an address the account has not verified (app.core.actor_snapshot); "[erased]"
+    #: once the account is erased or the organization deleted.
     decided_by_snapshot: Mapped[str] = mapped_column(
         String(ACTOR_SNAPSHOT_MAX_LENGTH), nullable=False
     )

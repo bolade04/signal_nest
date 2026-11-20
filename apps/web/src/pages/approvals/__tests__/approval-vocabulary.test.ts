@@ -82,4 +82,14 @@ describe('actor snapshots', () => {
     expect(isBriefAuthor({ created_by: 'u-1', created_by_snapshot: snap }, 'u-2')).toBe(false);
     expect(isBriefAuthor({ created_by: 'u-1', created_by_snapshot: snap }, null)).toBe(false);
   });
+
+  it('reads the name and the id of a snapshot whose address is not verified', () => {
+    // apps/api/app/core/actor_snapshot.py: "[unverified]" in the e-mail position (O-1).
+    const snap = 'u-1 Ada Lovelace <[unverified]>';
+    expect(snapshotName(snap)).toBe('Ada Lovelace');
+    expect(snapshotName('u-1 Ada <Byron> King <[unverified]>')).toBe('Ada <Byron> King');
+    expect(snapshotUserId(snap)).toBe('u-1');
+    expect(isBriefAuthor({ created_by: null, created_by_snapshot: snap }, 'u-1')).toBe(true);
+    expect(isBriefAuthor({ created_by: null, created_by_snapshot: snap }, 'u-2')).toBe(false);
+  });
 });

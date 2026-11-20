@@ -93,7 +93,7 @@ from app.briefs.models import RecommendationBrief
 from app.briefs.schemas import BRIEF_BOUNDS, BriefContent
 from app.campaign_context.models import Campaign
 from app.claims.engine import translate_competitor_weakness
-from app.core.actor_snapshot import actor_snapshot
+from app.core.actor_snapshot import account_snapshot
 from app.core.config import Settings
 from app.core.enums import NotificationEventCode
 from app.core.errors import NotFoundError, SignalNestError, ValidationDomainError
@@ -506,9 +506,7 @@ def create_brief(
         is_simulated=response.is_simulated,
         llm_usage_event_id=usage_event_id,
         created_by=author.id,
-        created_by_snapshot=actor_snapshot(
-            user_id=author.id, full_name=author.full_name, email=author.email
-        ),
+        created_by_snapshot=account_snapshot(author),
         **content.model_dump(),
     )
     try:
