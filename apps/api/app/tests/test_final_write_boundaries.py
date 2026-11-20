@@ -51,6 +51,12 @@ function in this process (``_Gate``); nothing in the product is changed by a tes
   seen waiting; the write commits, then the change. The record and its audit and notification rows
   stay as written.
 
+**Scope and the production path** (fix pass FX-1, after reviews FX-A FXA-2 and G-R3-1
+GR31-F123-2): the re-read is this organization's membership, so a member removed or demoted here
+who is an exporter or editor of another organization is still refused; and F-3 is also forced on
+the priced, shared-ledger path (PostgreSQL), where the capture's transaction holds no lock from its
+usage rows and its own organization lock is what makes it wait.
+
 **What is read back,** raw, on the world's witness engine after both sides finish: the committed
 rows (exports, drafts, briefs, approvals, audit), the answer (status, code, message) or the job's
 final state and error, the notifications written, and the accounting: one usage row and one ledger
@@ -871,6 +877,164 @@ def test_f3_the_role_read_at_the_boundary_decides_as_the_capture_gate_would(
             403, "permission_denied", f"Role '{role}' is not permitted for this action."
         ),
         "usage rows of the capture": 1,
+    })
+
+
+# =========================================================================== #
+# The re-read's organization scope, and F-3's production (priced) path (fix pass FX-1)
+# =========================================================================== #
+def _member_elsewhere(base: CreativeWorld, w: CreativeWorld) -> str:
+    """The marketer also holds a ``marketer`` row in a second, fresh organization (written
+    directly, as an accepted invitation leaves it). Returns that organization's id."""
+    other = _fresh_organization(base, f"f123else{uuid.uuid4().hex[:4]}")
+    with w.session() as s:
+        s.add(OrganizationMember(organization_id=other.org, user_id=w.users["marketer"],
+                                 role="marketer"))
+    return other.org
+
+
+def _role_in(w: CreativeWorld, organization_id: str, user_id: str) -> str | None:
+    rows = w.rows(OrganizationMember, organization_id=organization_id, user_id=user_id)
+    return rows[0]["role"] if rows else None
+
+
+@CHANGE
+def test_f1_a_change_here_refuses_the_export_of_a_member_who_is_an_exporter_elsewhere(
+    base: CreativeWorld, monkeypatch, change: str
+):
+    """(a), the re-read's scope (review FX-A, FXA-2). The marketer is also a marketer of another
+    organization. The export is in flight past its gates; the owner removes the marketer from
+    this organization, or demotes them to viewer, and that commits. The re-read is this
+    organization's membership, so the export is refused (403) and writes nothing; the membership
+    elsewhere is untouched and does not admit it."""
+    w = _org(base, "f1x")
+    other = _member_elsewhere(base, w)
+    made = _exportable(w)
+    gate = _Gate()
+    monkeypatch.setattr(export_service, "hold_sqlite_writer_lock",
+                        gate.before(export_service.hold_sqlite_writer_lock))
+    exporting = _in_flight(lambda: _export(w, w.ws, made, "marketer"), gate, "the export")
+    try:
+        changed = _change_membership(w, change)
+    finally:
+        gate.release.set()
+    exported = exporting.outcome()
+    _report("F-1 scope", {
+        "change": _answer(changed),
+        "export": _answer(exported),
+        **_export_state(w, made),
+        "membership": _role(w, w.users["marketer"]),
+        "membership elsewhere": _role_in(w, other, w.users["marketer"]),
+    }, {
+        "change": CHANGED[change],
+        "export": REFUSED[change],
+        "exports (by the marketer)": [],
+        "export audit rows": 0,
+        "export.completed notifications": 0,
+        "the draft's decisions": ["approved"],
+        "membership": ROLE_AFTER[change],
+        "membership elsewhere": "marketer",
+    })
+
+
+@CHANGE
+def test_f3_a_change_here_during_the_model_call_refuses_the_brief_of_an_editor_elsewhere(
+    base: CreativeWorld, monkeypatch, change: str
+):
+    """(a), the re-read's scope (review FX-A, FXA-2). The marketer is also a marketer of another
+    organization. The capture is in its model call; the owner removes the marketer from this
+    organization, or demotes them to viewer, and that commits. The re-read is this organization's
+    membership: 403, no brief, audit row or notification, and the admitted call's usage row and
+    reservation kept, once. The membership elsewhere is untouched and does not admit it."""
+    w = _org(base, "f3x")
+    other = _member_elsewhere(base, w)
+    opportunity_id, record_id = _capturable(w)
+    gate = _Gate()
+    _hold_the_model_call(monkeypatch, gate, after=False)
+    capturing = _in_flight(lambda: _capture(w, opportunity_id, record_id), gate, "the capture")
+    try:
+        changed = _change_membership(w, change)
+    finally:
+        gate.release.set()
+    captured = capturing.outcome()
+    _report("F-3 scope", {
+        "change": _answer(changed),
+        "capture": _answer(captured),
+        **_capture_state(w, opportunity_id),
+        "membership": _role(w, w.users["marketer"]),
+        "membership elsewhere": _role_in(w, other, w.users["marketer"]),
+    }, {
+        "change": CHANGED[change],
+        "capture": REFUSED[change],
+        "captured briefs (version, by the marketer)": [],
+        "brief audit rows": 0,
+        "brief.created notifications": 0,
+        "usage rows of the capture": 1,
+        "ledger reservations of the workspace": 1,
+        "each brief names the capture's usage row": [],
+        "membership": ROLE_AFTER[change],
+        "membership elsewhere": "marketer",
+    })
+
+
+@CHANGE
+def test_f3_a_change_in_flight_on_the_priced_shared_ledger_path_is_waited_for_and_prevents_it(
+    base: CreativeWorld, monkeypatch, change: str
+):
+    """(a') on F-3's production path (review G-R3-1, GR31-F123-2). A priced provider (the real
+    Anthropic adapter over an httpx ``MockTransport``, offline: ``test_briefs_postgres._priced``)
+    puts the meter on the shared ledger: the call's reservation and usage row are committed in
+    short transactions of their own, so the capture's transaction holds no organization lock when
+    the call returns (with the mock it does, through its usage rows' foreign keys). The change is
+    then held with its write flushed and uncommitted. The capture is released and must wait at
+    its own organization ``KEY SHARE``, then read the committed membership: 403, no brief, audit
+    row or notification, and exactly one usage row (priced) and one settled reservation.
+
+    PostgreSQL only: the shared ledger is PostgreSQL's (``app.llm.metering``); on SQLite every
+    provider's usage rows join the capture's own transaction, the path the other F-3 tests run."""
+    if not _is_postgres(base):
+        pytest.skip("the shared ledger (a priced provider's meter) is PostgreSQL's")
+    from app.tests.test_briefs_postgres import _priced
+
+    w = _org(base, "f3p")
+    opportunity_id, record_id = _capturable(w)
+    priced, _settings, _bodies = _priced()
+    model, held = _Gate(), _Gate()
+    _wrap_the_model_call(monkeypatch, lambda _mock: model.after(priced.run))
+    _hold_change_before_commit(monkeypatch, change, held)
+    capturing = _in_flight(lambda: _capture(w, opportunity_id, record_id), model, "the capture")
+    try:
+        changing = _in_flight(lambda: _change_membership(w, change), held, "the change")
+        with _Trace(w.engine) as trace:
+            model.release.set()
+            waited_at = _waits(w, trace, capturing)
+    finally:
+        model.release.set()
+        held.release.set()
+    usage = w.rows(LLMUsageEvent, workspace_id=w.ws, task=brief_service.BRIEF_TASK)
+    _report("F-3 priced", {
+        "the capture waited at": waited_at,
+        "change": _answer(changing.outcome()),
+        "capture": _answer(capturing.outcome()),
+        **_capture_state(w, opportunity_id),
+        "the reservations' states": sorted(
+            r["state"] for r in w.rows(LLMBudgetReservation, workspace_id=w.ws)
+        ),
+        "the usage row is priced": [u["cost_usd"] > 0 for u in usage],
+        "membership": _role(w, w.users["marketer"]),
+    }, {
+        "the capture waited at": "organizations FOR KEY SHARE",
+        "change": CHANGED[change],
+        "capture": REFUSED[change],
+        "captured briefs (version, by the marketer)": [],
+        "brief audit rows": 0,
+        "brief.created notifications": 0,
+        "usage rows of the capture": 1,
+        "ledger reservations of the workspace": 1,
+        "each brief names the capture's usage row": [],
+        "the reservations' states": ["settled"],
+        "the usage row is priced": [True],
+        "membership": ROLE_AFTER[change],
     })
 
 
