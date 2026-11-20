@@ -80,8 +80,8 @@ from app.creative import service as creative_service
 from app.creative.models import ContentReview, CreativeDraft
 from app.exports import service as export_service
 from app.exports.models import Export
+from app.llm import service as llm_module
 from app.llm.models import LLMBudgetReservation, LLMUsageEvent
-from app.llm.service import LLMService
 from app.main import app
 from app.notifications.models import Notification
 from app.organizations import members
@@ -239,12 +239,21 @@ def _decisions(w: CreativeWorld, subject_id: str) -> list[str]:
 # --------------------------------------------------------------------------- #
 # Holding a side at the model call, and seeing a side wait
 # --------------------------------------------------------------------------- #
+def _wrap_the_model_call(monkeypatch, wrap: Callable[[Callable], Callable]) -> None:
+    """Replace the model call of the process's LLM service, the one instance every call site
+    reaches (``app.llm.service.get_llm_service``: the brief route's dependency and the generation
+    handler), by ``wrap(the current call)``. Patched on the instance, not on ``LLMService``: a
+    monkeypatch of the instance's ``run`` in an earlier module leaves the bound method in the
+    instance's ``__dict__`` when it is undone, which a class-level patch would not reach."""
+    service = llm_module.get_llm_service()
+    monkeypatch.setattr(service, "run", wrap(service.run))
+
+
 def _hold_the_model_call(monkeypatch, gate: _Gate, *, after: bool) -> None:
     """The first model call made from here on is held just before the provider is asked
     (``after=False``: the call is in flight) or right after it answered (``after=True``: the
     admitted call is over, nothing of its output is written). Every later call passes."""
-    real = LLMService.run
-    monkeypatch.setattr(LLMService, "run", gate.after(real) if after else gate.before(real))
+    _wrap_the_model_call(monkeypatch, gate.after if after else gate.before)
 
 
 def _where(statement: str | None) -> str | None:
@@ -880,15 +889,17 @@ APPROVAL_READ = "select approvals.decision from approvals"
 
 def _mark_the_model_call(monkeypatch, trace: _Trace) -> None:
     """Put a marker into the trace when a model call returns."""
-    real = LLMService.run
 
-    def marked(self, *args, **kwargs):
-        result = real(self, *args, **kwargs)
-        with trace._lock:
-            trace.sent.append(MODEL_RETURNED)
-        return result
+    def wrap(real: Callable) -> Callable:
+        def marked(*args, **kwargs):
+            result = real(*args, **kwargs)
+            with trace._lock:
+                trace.sent.append(MODEL_RETURNED)
+            return result
 
-    monkeypatch.setattr(LLMService, "run", marked)
+        return marked
+
+    _wrap_the_model_call(monkeypatch, wrap)
 
 
 def _positions(sent: list[str], prefix: str) -> list[int]:
@@ -1017,14 +1028,15 @@ class _LockedAt:
 
 
 def _signal_the_model_call(monkeypatch, returned: threading.Event) -> None:
-    real = LLMService.run
+    def wrap(real: Callable) -> Callable:
+        def signalled(*args, **kwargs):
+            result = real(*args, **kwargs)
+            returned.set()
+            return result
 
-    def signalled(self, *args, **kwargs):
-        result = real(self, *args, **kwargs)
-        returned.set()
-        return result
+        return signalled
 
-    monkeypatch.setattr(LLMService, "run", signalled)
+    _wrap_the_model_call(monkeypatch, wrap)
 
 
 def test_sqlite_each_protected_reread_runs_while_the_writer_lock_is_held(
