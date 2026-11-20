@@ -233,8 +233,10 @@ def history(world: CreativeWorld, ws: str, draft_id: str, role: str = "owner", q
 
 
 def snapshot_of(world: CreativeWorld, role: str) -> str:
+    """The exporter's snapshot: its address only when verified, else "[unverified]" (O-1)."""
     user = world.row(User, world.users[role])
-    return actor_snapshot(user_id=user["id"], full_name=user["full_name"], email=user["email"])
+    email = user["email"] if user["email_verified_at"] is not None else "[unverified]"
+    return actor_snapshot(user_id=user["id"], full_name=user["full_name"], email=email)
 
 
 def audits(world: CreativeWorld, draft_id: str) -> list[dict]:

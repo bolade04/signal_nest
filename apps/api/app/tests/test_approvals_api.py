@@ -393,9 +393,8 @@ class TestDecide:
             "Looks right.",
         )
         assert body["decided_by"] == REVIEWER and body["decided_role"] == "reviewer"
-        assert body["decided_by_snapshot"] == (
-            f"{REVIEWER} Name {REVIEWER} <{REVIEWER}@example.test>"
-        )
+        # The seeded reviewer's address is not verified: "[unverified]" in its place (O-1, R-a).
+        assert body["decided_by_snapshot"] == f"{REVIEWER} Name {REVIEWER} <[unverified]>"
         assert body["is_simulated"] is True  # copied from the (simulated) brief
         stored = env.approvals()
         assert len(stored) == 1 and stored[0]["organization_id"] == ORG_A
