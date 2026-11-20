@@ -64,12 +64,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, insert, select
 
 import app as app_package
 from app.approvals.models import Approval
 from app.approvals.service import is_brief_author, is_draft_author
 from app.briefs.models import RecommendationBrief
+from app.core.actor_snapshot import actor_snapshot
 from app.core.config import get_settings
 from app.creative.models import CreativeDraft
 from app.exports.models import Export
@@ -451,7 +452,8 @@ def test_once_the_account_verifies_its_snapshots_carry_the_address_and_its_delet
         (exported, actor.snapshot(verified=True))
     ]
 
-    # Its own deletion erases both formats (by id), and nothing names the id or the address.
+    # Its own deletion erases both formats (by id), and no Phase 5 snapshot or note names the
+    # id or the address.
     _ok(_call(world, "POST", "/account/delete",
               {"current_password": PASSWORD, "confirmation": "DELETE"}, token=actor.token), 200)
     assert _stored(world, "brief", before) == (ERASED, None)
@@ -604,6 +606,65 @@ def test_erase_email_clears_an_old_format_row_and_leaves_a_marker_row(
     assert _phase5_values_naming(world, actor.email) == []
 
 
+def test_erase_email_clears_every_old_format_snapshot_and_leaves_every_marker_row(
+    world: CreativeWorld, monkeypatch, capsys
+):
+    """Review RA-B F-RAB-1 and O-RAB-1; coordinator ruling RA-3 (adapted from RA-B's probe
+    ``test_zz_rab_probe_historical_export``). The runbook promises that rows written before the
+    change and naming the address are still cleared by ``erase-email``. For each of the four
+    snapshot columns (``recommendation_briefs.created_by_snapshot``,
+    ``creative_drafts.created_by_snapshot``, ``approvals.decided_by_snapshot``, twice: a brief
+    and a draft decision, and ``exports.exported_by_snapshot``), an unverified holder of the
+    address has a marker row written through the real path and, beside it, a copy written as N's
+    writers wrote it: the raw formatter with the address. ``erase-email --confirm``, through the
+    real CLI, turns every old snapshot into ``[erased]`` and keeps its actor column, leaves every
+    marker row byte-identical, and still reports exactly the holder's ``users.email``."""
+    ws = _workspace(world, "erase-email every old format")
+    actor = _invited(world, "marketer")
+    marker_rows = _act_as_every_writer(world, ws, actor)
+    old = actor_snapshot(user_id=actor.user_id, full_name=actor.full_name, email=actor.email)
+    assert old == f"{actor.user_id} {actor.full_name} <{actor.email}>"
+    # The next free value of each unique key, so the copy sits beside its marker row.
+    bump = {RecommendationBrief: "brief_version", CreativeDraft: "draft_version",
+            Approval: "decision_seq"}
+    scope = {RecommendationBrief: ("workspace_id", "opportunity_id"),
+             CreativeDraft: ("workspace_id", "brief_id"),
+             Approval: ("subject_type", "subject_id", "subject_version")}
+    tag = _tag()
+    olds, markers = {}, {}
+    with world.witness.begin() as conn:
+        for writer, (row_id, _answered) in marker_rows.items():
+            model, snapshot, _actor = COLUMN[writer]
+            table = model.__table__
+            row = dict(conn.execute(select(*table.c).where(table.c.id == row_id)).one()._mapping)
+            markers[writer] = row
+            copy = {**row, "id": f"old{writer.replace('_', '')[:9]}{tag}", snapshot: old}
+            if model in bump:
+                column = bump[model]
+                same = [table.c[c] == row[c] for c in scope[model]]
+                top = conn.execute(select(func.max(table.c[column])).where(*same)).scalar()
+                copy[column] = top + 1
+            conn.execute(insert(table).values(**copy))
+            olds[writer] = copy["id"]
+    for writer, row_id in olds.items():
+        assert _stored(world, writer, row_id) == (old, actor.user_id), writer
+    assert {writer: row[COLUMN[writer][1]] for writer, row in markers.items()} == {
+        writer: actor.snapshot(verified=False) for writer in WRITERS
+    }
+
+    code, printed = _cli(world, monkeypatch, capsys, "erase-email", "--email", actor.email,
+                         "--confirm")
+    assert (code, printed["verification"]["content_findings"]) == (
+        privacy_cli.EXIT_FINDINGS, RESIDUE
+    ), printed
+
+    for writer, row_id in olds.items():
+        assert _stored(world, writer, row_id) == (ERASED, actor.user_id), writer
+    for writer, row in markers.items():
+        assert world.row(COLUMN[writer][0], row["id"]) == row, writer
+    assert _phase5_values_naming(world, actor.email) == []
+
+
 # --------------------------------------------------------------------------- #
 # 7. The helper: the marker, the bound, and its callers
 # --------------------------------------------------------------------------- #
@@ -674,7 +735,10 @@ def _called(node: ast.AST) -> str | None:
 def test_no_production_module_formats_a_snapshot_except_through_the_one_helper():
     """Operator §2, "across every production caller": the raw formatter is called only inside
     ``app.core.actor_snapshot``, and every value a production module gives a snapshot column is
-    either the helper's (the verification fact read from the account) or the erased marker."""
+    either the helper's (the verification fact read from the account) or the erased marker.
+    A value is given as a keyword argument, a dict key, an attribute assignment (plain,
+    annotated or augmented) or a ``setattr`` with a constant column name (review RA-A F-A-1,
+    coordinator ruling RA-3)."""
     root = Path(app_package.__file__).parent
     raw_calls, values = [], {}
     for path in sorted(root.rglob("*.py")):
@@ -693,6 +757,21 @@ def test_no_production_module_formats_a_snapshot_except_through_the_one_helper()
             if isinstance(node, ast.Dict):
                 pairs += [(k.value, v) for k, v in zip(node.keys, node.values, strict=True)
                           if isinstance(k, ast.Constant) and k.value in _COLUMNS]
+            if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for target in targets:
+                    unpacked = isinstance(target, (ast.Tuple, ast.List))
+                    for item in target.elts if unpacked else [target]:
+                        if isinstance(item, ast.Attribute) and item.attr in _COLUMNS:
+                            # An augmented or unpacked assignment is never the helper's value.
+                            whole = not unpacked and not isinstance(node, ast.AugAssign)
+                            pairs.append((item.attr, node.value if whole else None))
+            if (
+                isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "setattr" and len(node.args) >= 3
+                and isinstance(node.args[1], ast.Constant) and node.args[1].value in _COLUMNS
+            ):
+                pairs.append((node.args[1].value, node.args[2]))
             for column, value in pairs:
                 if isinstance(value, ast.Name) and value.id in {"ERASED", "ERASED_ACTOR_SNAPSHOT"}:
                     continue

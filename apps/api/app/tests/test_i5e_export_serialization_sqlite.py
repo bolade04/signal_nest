@@ -927,14 +927,16 @@ def test_sqlite_an_account_deletion_with_a_wrong_password_takes_no_writer_lock(
     assert _exists(lite, User, org.users["admin"])
 
 
-def test_sqlite_an_export_first_an_invitee_email_erasure_waits_and_no_row_names_the_address(
+def test_sqlite_an_export_first_invitee_email_erasure_waits_and_no_export_record_names_the_address(
     lite: CreativeWorld, monkeypatch
 ):
     """The operator's erasure of an address (``erase_invitee_email``) reads the same way. An
     unverified account holds the address and stays; its export in flight is waited for. The
     export's snapshot records ``[unverified]`` in place of the address (O-1, R-a), so after the
-    erasure the record names the account by id and name only, and nothing names the address
-    (``exported_by`` stays: the account does)."""
+    erasure the export record names the account by id and name only, and no export, audit or
+    notification record names the address (``exported_by`` stays: the account does). The
+    holder's own ``users.email`` still names the address; the operator's verification reports
+    that copy."""
     org = _fresh_organization(lite, "sqinvitee")
     made, approval_id = _exportable(org, org.ws, notifications=False)
     exporter = _account_nothing_names(lite, org)
