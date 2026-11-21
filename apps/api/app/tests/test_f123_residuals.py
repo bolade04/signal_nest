@@ -736,6 +736,13 @@ def _priced_creative_service(statuses: list[int]):
     return LLMService(provider, sleep=lambda _s: None, settings=settings), requests
 
 
+def _poll_once(w: CreativeWorld) -> bool:
+    """One poll of the real worker (``JobRunner.poll_once``): one attempt of one due job."""
+    runner = JobRunner(settings=get_settings(), session_factory=w.factory,
+                       store=DurableJobStore())
+    return runner.poll_once(worker_id="w-creative")
+
+
 def _use_service(monkeypatch, service) -> None:
     """Every call site's model call (``get_llm_service().run``) goes to ``service``."""
     monkeypatch.setattr(llm_module.get_llm_service(), "run", service.run)
@@ -1054,21 +1061,21 @@ def test_o2_sqlite_a_writer_present_before_the_generation_call_refuses_it_before
     job_id = _generate(w, brief_id)
     gate = _Gate()
     _hold_the_model_call(monkeypatch, gate, after=False)
-    generating = _in_flight(w.drain, gate, "the generation")
+    generating = _in_flight(lambda: _poll_once(w), gate, "the generation")
     holder = _SqliteHold(w).take()
     gate.release.set()
     timer = holder.release_at(holder.taken_at + PAST_ONE_WAIT)
     try:
-        drained = generating.outcome()
+        polled = generating.outcome()
     finally:
         timer.join()
         holder.release()
     summary = _job_summary(w, job_id)
-    observed = {"drained": drained, "job": summary["job"], "model calls": calls["model"],
+    observed = {"polled": polled, "job": summary["job"], "model calls": calls["model"],
                 "drafts": w.count(CreativeDraft, brief_id=brief_id), **_ledger(w, job_id=job_id)}
     _retire_unfinished_jobs(w)
     _report("O-F123-2 generation, a writer first", observed, {
-        "drained": 1,
+        "polled": True,
         "job": GENERATION_REFUSED_BEFORE_SENDING,
         "model calls": 0,
         "drafts": 0,
@@ -1097,13 +1104,13 @@ def test_o2_sqlite_a_writer_holds_the_lock_across_the_generation_jobs_usage_writ
     job_id = _generate(w, brief_id)
     gate = _Gate()
     _hold_the_provider_call(monkeypatch, gate)
-    generating = _in_flight(w.drain, gate, "the generation")
+    generating = _in_flight(lambda: _poll_once(w), gate, "the generation")
     holder = _SqliteHold(w).take()
     released_at = time.monotonic()
     gate.release.set()
     timer = holder.release_at(released_at + PAST_ONE_WAIT)
     try:
-        drained = generating.outcome()
+        polled = generating.outcome()
     finally:
         timer.join()
         holder.release()
@@ -1115,24 +1122,25 @@ def test_o2_sqlite_a_writer_holds_the_lock_across_the_generation_jobs_usage_writ
         w.drain()
         time.sleep(0.2)
     _report("O-F123-2 generation, a writer during the call", {
-        "drained": drained,
+        "polled": polled,
         "after the first attempt": {k: first[k] for k in (
             "job", "reservations (state, reserved, settled)", "usage rows")},
-        "after the retry": {k: v for k, v in {**_job_summary(w, job_id),
-                                              **_ledger(w, job_id=job_id)}.items()
-                            if k in ("job", "attempts", "reservations (state, reserved, settled)",
-                                     "usage rows")},
+        "after the retry": {
+            "status": w.job(job_id)["status"],
+            "attempts": w.job(job_id)["attempt_count"],
+            **_ledger(w, job_id=job_id),
+        },
         "model calls": calls["model"],
         "drafts": w.count(CreativeDraft, brief_id=brief_id),
     }, {
-        "drained": 1,
+        "polled": True,
         "after the first attempt": {
             "job": ("retry_wait", "transient", "OperationalError"),
             "reservations (state, reserved, settled)": [("reserved", 0.0, None)],
             "usage rows": 0,
         },
         "after the retry": {
-            "job": GENERATION_STORED,
+            "status": "succeeded",
             "attempts": 2,
             "reservations (state, reserved, settled)": [("released", 0.0, 0.0),
                                                         ("settled", 0.0, 0.0)],
