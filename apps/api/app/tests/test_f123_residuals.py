@@ -1293,6 +1293,149 @@ def test_o2_sqlite_nothing_is_held_at_any_reservation_settlement_or_call(
     })
 
 
+def _a_generation_left_reserved(w: CreativeWorld, monkeypatch) -> tuple[str, str, dict]:
+    """A generation job whose first attempt's settlement could not commit (a writer took SQLite's
+    lock during its call, past the busy timeout): the attempt waits for its retry, its reservation
+    left ``reserved`` at its worst case. Returns ``(brief id, job id, model-call counter)``, the
+    retry due within a second."""
+    monkeypatch.setattr(get_settings(), "job_retry_base_seconds", 0.2)
+    monkeypatch.setattr(get_settings(), "job_retry_max_seconds", 0.5)
+    calls = _count_model_calls(monkeypatch)
+    brief_id = w.seed_brief(w.ws)
+    job_id = _generate(w, brief_id)
+    gate = _Gate()
+    _hold_the_provider_call(monkeypatch, gate)
+    first = _in_flight(lambda: _poll_once(w), gate, "the first attempt")
+    holder = _SqliteHold(w).take()
+    gate.release.set()
+    timer = holder.release_at(holder.taken_at + PAST_ONE_WAIT)
+    try:
+        first.outcome()
+    finally:
+        timer.join()
+        holder.release()
+    assert _job_summary(w, job_id)["job"] == ("retry_wait", "transient", "OperationalError")
+    assert _ledger(w, job_id=job_id)["reservations (state, reserved, settled)"] == [
+        ("reserved", 0.0, None)]
+    time.sleep(1.0)  # the retry is due
+    return brief_id, job_id, calls
+
+
+def test_o2_sqlite_nothing_is_held_at_a_retrys_rebind_release(base: CreativeWorld, monkeypatch):
+    """The precondition (ruling F123R-1 §3) at the meter's third own transaction (review FR-A,
+    FRA-3): a job's later attempt releases, in ``bind``, the reservation an earlier attempt left
+    in flight (``app.llm.budget.release_for_job``, a short transaction of its own). At that point
+    no connection holds any SQLite lock: not the job's own session, not a read transaction, not a
+    writer (a ``BEGIN EXCLUSIVE`` with no busy timeout succeeds). The release then charges the
+    earlier call at its worst case, and the retry makes and settles its own call."""
+    if _is_postgres(base):
+        pytest.skip("SQLite's locks")
+    w = _org(base, "o2rb")
+    brief_id, job_id, calls = _a_generation_left_reserved(w, monkeypatch)
+    db_file = w.engine.url.database
+    seen: list[str] = []
+    real = ledger.release_for_job
+
+    def probed(*args, **kwargs):
+        seen.append(_nothing_held(db_file))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(ledger, "release_for_job", probed)
+    deadline = time.monotonic() + 20
+    while w.job(job_id)["status"] != "succeeded" and time.monotonic() < deadline:
+        _poll_once(w)
+        time.sleep(0.2)
+    _report("O-F123-2 precondition at the rebind release", {
+        "the retry's rebind release": seen,
+        "status": w.job(job_id)["status"],
+        "model calls": calls["model"],
+        "drafts": w.count(CreativeDraft, brief_id=brief_id),
+        **_ledger(w, job_id=job_id),
+    }, {
+        "the retry's rebind release": ["free"],
+        "status": "succeeded",
+        "model calls": 2,
+        "drafts": 1,
+        "reservations (state, reserved, settled)": [("released", 0.0, 0.0),
+                                                    ("settled", 0.0, 0.0)],
+        "usage rows": 1,
+    })
+
+
+def test_o2_sqlite_a_writer_blocking_the_rebind_release_ends_the_attempt_before_any_call(
+    base: CreativeWorld, monkeypatch
+):
+    """Today's answer when the rebind release cannot commit (review FR-A, FRA-3; pinned, not
+    changed). A job's later attempt reaches ``bind`` while another connection holds SQLite's
+    writer lock past the busy timeout: the release of the earlier call's reservation cannot
+    commit, ``bind`` raises before any call, and the attempt ends ``retry_wait``, ``transient``,
+    ``OperationalError`` (not ``model_unavailable``: the release is not the reservation). No call
+    is sent and nothing is lost: the earlier reservation stays ``reserved`` at its worst case, and
+    the next attempt releases it and settles its own call."""
+    if _is_postgres(base):
+        pytest.skip("SQLite's writer lock")
+    w = _org(base, "o2rc")
+    brief_id, job_id, calls = _a_generation_left_reserved(w, monkeypatch)
+    raised: list[str] = []
+    real = ledger.release_for_job
+
+    def watched(*args, **kwargs):
+        try:
+            return real(*args, **kwargs)
+        except Exception as exc:
+            raised.append(type(exc).__name__)
+            raise
+
+    monkeypatch.setattr(ledger, "release_for_job", watched)
+    gate = _Gate()
+    monkeypatch.setattr(creative_service, "generation_context",
+                        gate.before(creative_service.generation_context))
+    second = _in_flight(lambda: _poll_once(w), gate, "the second attempt")
+    holder = _SqliteHold(w).take()
+    gate.release.set()
+    timer = holder.release_at(holder.taken_at + PAST_ONE_WAIT)
+    try:
+        second.outcome()
+    finally:
+        timer.join()
+        holder.release()
+    after_second = {"the rebind release raised": list(raised),
+                    "job": _job_summary(w, job_id)["job"], "model calls": calls["model"],
+                    **_ledger(w, job_id=job_id)}
+    time.sleep(1.0)
+    deadline = time.monotonic() + 20
+    while w.job(job_id)["status"] != "succeeded" and time.monotonic() < deadline:
+        _poll_once(w)
+        time.sleep(0.2)
+    _report("O-F123-2 a writer blocking the rebind release", {
+        "after the blocked attempt": after_second,
+        "after the next attempt": {
+            "status": w.job(job_id)["status"],
+            "attempts": w.job(job_id)["attempt_count"],
+            "model calls": calls["model"],
+            **_ledger(w, job_id=job_id),
+        },
+        "drafts": w.count(CreativeDraft, brief_id=brief_id),
+    }, {
+        "after the blocked attempt": {
+            "the rebind release raised": ["OperationalError"],
+            "job": ("retry_wait", "transient", "OperationalError"),
+            "model calls": 1,
+            "reservations (state, reserved, settled)": [("reserved", 0.0, None)],
+            "usage rows": 0,
+        },
+        "after the next attempt": {
+            "status": "succeeded",
+            "attempts": 3,
+            "model calls": 2,
+            "reservations (state, reserved, settled)": [("released", 0.0, 0.0),
+                                                        ("settled", 0.0, 0.0)],
+            "usage rows": 1,
+        },
+        "drafts": 1,
+    })
+
+
 def _capture_accounting(w: CreativeWorld, opportunity_id: str, answer: tuple) -> tuple[dict, dict]:
     """What the capture left, and what the operator's item requires of it: its one admitted call
     accounted for exactly once; a brief stored exactly when the capture answered 201."""
