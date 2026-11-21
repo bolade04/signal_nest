@@ -32,20 +32,27 @@ rows, the answer or the job's final state and error and its events, the notifica
 accounting: ``llm_usage_events`` and ``llm_budget_reservations``, exactly once per admitted model
 call, none erased, none doubled.
 
-**O-F123-2's open cases** are marked ``xfail(strict=True)``: each asserts what the operator's item
-requires (the admitted call's usage kept exactly once) and fails on the product today. No product
-change for O-F123-2 is in this module's change: the lane's hand-off presents the design for a
-ruling (see its reason string). A fix that makes one pass turns it into a strict XPASS failure,
-so its marker must then be removed.
+**O-F123-2: Design B.** The operator chose "Design B: reserve first" (2026-11-21; coordinator
+ruling F123R-1): on SQLite the brief capture and creative generation reserve each call before it
+is sent, in a transaction of their own, and are refused before sending when that cannot commit;
+the settlement is another transaction of its own. The O-F123-2 cases assert the requirement that
+answer set: the admitted call's record exactly once (the usage row and the settled reservation; or,
+where the settlement cannot commit, the reservation at its worst case, which recovery charges
+once), never doubled; and a call that cannot be reserved is not sent. Both orderings of a writer
+(before the call, during it), a reader at the commit, both waits of the worker, a retry, the sweep,
+and the precondition (nothing held at any reservation, settlement or call) are run on SQLite;
+PostgreSQL's paths are unchanged, which a statement-list test pins. The Scout run is outside
+Design B: its reader-at-commit case stays a strict xfail naming that disclosed limit.
 """
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import time
 from collections.abc import Callable, Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -66,7 +73,7 @@ from app.jobs.store import DurableJobStore
 from app.jobs.worker import JobRunner, Worker
 from app.llm import budget as ledger
 from app.llm import service as llm_module
-from app.llm.models import LLMBudgetReservation, LLMUsageEvent
+from app.llm.models import LLMBudgetPeriod, LLMBudgetReservation, LLMUsageEvent
 from app.main import app
 from app.notifications.models import Notification
 from app.signals.models import RawSignal
@@ -119,14 +126,22 @@ CHANGES_AND_A_PROMOTION = pytest.mark.parametrize("change", (*CHANGES, "promoted
 #: (``app.creative.service._requester``): ``AUTHORIZATION`` is not retryable, so the job ends
 #: ``failed``.
 REQUESTER_REFUSED = ("failed", "authorization", "requester_not_permitted")
-#: Why the O-F123-2 cases that lose usage today are strict xfails, not fixed here.
-O2_OPEN = (
-    "O-F123-2: on SQLite an admitted model call's usage rows are written after the call; a "
-    "writer or reader that keeps the lock past every bounded wait makes them disappear. Closing "
-    "every such interleaving needs a durable pre-call record (an accounting-policy change) or a "
-    "durable after-the-request writer (a new subsystem): the design is presented for a ruling "
-    "and is not implemented (lane F123R hand-off)."
+#: The one O-F123-2 residual Design B does not cover (a strict xfail).
+SCOUT_LIMIT = (
+    "O-F123-2, the Scout run on SQLite, a disclosed limit: the operator chose Design B for the "
+    "brief capture and creative generation only (2026-11-21, coordinator ruling F123R-1); a "
+    "Scout run keeps the same-session meter, which writes its usage rows in the run's own "
+    "transaction, so a reader that blocks its commit and then the worker's after-rollback write "
+    "makes them disappear (lane F123R hand-off, Stage B)."
 )
+#: The capture's existing refusal of a call that is not sent (Design B: its reservation could
+#: not commit): ``BriefGenerationUnavailableError``.
+REFUSED_BEFORE_SENDING = (503, "brief_generation_unavailable",
+                          "A brief cannot be generated right now. Try again later.")
+#: The job's existing transient refusal of a call that is not sent (retried).
+GENERATION_REFUSED_BEFORE_SENDING = ("retry_wait", "transient", "model_unavailable")
+#: Marks, in a statement trace, the moment the provider is asked.
+PROVIDER_CALLED = "-- the provider is called"
 #: SQLite's busy timeout as the application sets it (``app.db.session.build_engine``).
 BUSY_TIMEOUT = 5.0
 #: A writer or reader released after one busy-timeout wait and before a second one ends.
@@ -361,7 +376,9 @@ def test_o1_a_requester_change_in_flight_at_the_boundary_is_waited_for_and_preve
     then held with its write flushed and uncommitted (it holds the writer lock). The job is
     released and must wait at its first write (the usage rows), the change commits, and the job
     must read the committed membership and store nothing; usage kept once. A re-read placed before
-    the job's writer lock would read the membership as it was and store the draft.
+    the job's writer lock would read the membership as it was and store the draft. (Under
+    Design B the call is settled in a transaction of its own, so the job's first wait is its
+    ``BEGIN IMMEDIATE`` before version allocation.)
 
     PostgreSQL has no such ordering: the job holds the organization ``KEY SHARE`` from before the
     call, so a membership change cannot hold its organization ``FOR UPDATE`` when the call returns
@@ -390,7 +407,50 @@ def test_o1_a_requester_change_in_flight_at_the_boundary_is_waited_for_and_preve
         **_generation_state(w, brief_id, job_id),
         "membership": _role(w, w.users["marketer"]),
     }, {
-        "the job waited at": "insert llm_budget_reservations",
+        "the job waited at": "BEGIN IMMEDIATE",
+        "change": CHANGED[change],
+        "drained": 1,
+        "job": REQUESTER_REFUSED,
+        "drafts (brief, version)": [],
+        "content reviews": 0,
+        "draft audit rows": 0,
+        "draft.generated notifications": 0,
+        "usage rows of the job": 1,
+        "ledger reservations of the job": 1,
+        "each draft names the job's usage row": [],
+        "the parent brief's decisions": ["approved"],
+        "membership": ROLE_AFTER[change],
+    })
+
+
+@CHANGE
+def test_o1_a_requester_change_committed_after_the_call_before_the_writer_lock_prevents_the_draft(
+    base: CreativeWorld, monkeypatch, change: str
+):
+    """(a''), SQLite (Design B). The job's call has been reserved, made and settled in
+    transactions of their own, so the job holds no lock when it reaches its ``BEGIN IMMEDIATE``
+    before version allocation; it is held there. The change commits. The job then takes the lock
+    and must read the committed membership: nothing stored, the call's record once. A re-read
+    placed before the lock would miss the change."""
+    if _is_postgres(base):
+        pytest.skip("PostgreSQL: the change waits for the job from before the call, case (a)")
+    w = _org(base, "o1j")
+    brief_id = w.seed_brief(w.ws)
+    job_id = _generate(w, brief_id)
+    gate = _Gate()
+    monkeypatch.setattr(creative_service, "hold_sqlite_writer_lock",
+                        gate.before(creative_service.hold_sqlite_writer_lock))
+    generating = _in_flight(w.drain, gate, "the generation")
+    try:
+        changed = _change_membership(w, change)
+    finally:
+        gate.release.set()
+    _report("O-F123-1 (a'')", {
+        "change": _answer(changed),
+        "drained": generating.outcome(),
+        **_generation_state(w, brief_id, job_id),
+        "membership": _role(w, w.users["marketer"]),
+    }, {
         "change": CHANGED[change],
         "drained": 1,
         "job": REQUESTER_REFUSED,
@@ -575,15 +635,654 @@ def test_o1_sqlite_the_requester_reread_runs_while_the_writer_lock_is_held(
 
 
 # =========================================================================== #
-# O-F123-2: an admitted call's usage under contention
+# O-F123-2: an admitted call's usage under contention (Design B on SQLite)
 # =========================================================================== #
-def _capture_with_the_model_call_held(w: CreativeWorld, monkeypatch) -> tuple[str, _Gate, _Runner]:
+def _hold_the_provider_call(monkeypatch, gate: _Gate, provider=None) -> None:
+    """The first provider call made from here on is held just before the provider is asked. On
+    SQLite's reserve-first path (O-F123-2, Design B) the attempt's reservation is committed by
+    then: the call is admitted. ``provider``: the process service's own (the mock) by default."""
+    provider = provider or llm_module.get_llm_service()._provider
+    monkeypatch.setattr(provider, "generate", gate.before(provider.generate))
+
+
+def _amount(value) -> float | None:
+    return None if value is None else round(float(value), 6)
+
+
+def _ledger(w: CreativeWorld, *, job_id: str | None = None,
+            task: str = brief_service.BRIEF_TASK) -> dict:
+    """The admitted calls' record: a job's reservations and usage rows, or the workspace's
+    job-less ones (a capture's), as ``(state, reserved, settled)`` and a count."""
+    if job_id is not None:
+        rows = w.rows(LLMBudgetReservation, job_id=job_id)
+        usage = w.rows(LLMUsageEvent, job_id=job_id)
+    else:
+        rows = [r for r in w.rows(LLMBudgetReservation, workspace_id=w.ws) if r["job_id"] is None]
+        usage = [u for u in w.rows(LLMUsageEvent, workspace_id=w.ws, task=task)
+                 if u["job_id"] is None]
+    return {
+        "reservations (state, reserved, settled)": sorted(
+            (r["state"], _amount(r["reserved_usd"]), _amount(r["settled_usd"])) for r in rows),
+        "usage rows": len(usage),
+    }
+
+
+def _sweep_with_the_worker(w: CreativeWorld, hours: float = 1.0) -> bool:
+    """One poll of the real worker with its clock ``hours`` ahead: lease recovery, then the
+    reservation sweep (``app.llm.budget.sweep``), then a claim. Returns whether a job ran."""
+    ahead = datetime.now(UTC) + timedelta(hours=hours)
+    runner = JobRunner(settings=get_settings(), session_factory=w.factory,
+                       store=DurableJobStore(), clock=lambda: ahead)
+    return runner.poll_once(worker_id="w-f123r-sweep")
+
+
+def _priced_capture_service(statuses: list[int], *, sleep: Callable[[float], None] | None = None,
+                            on_request: Callable[[], None] | None = None):
+    """The real Anthropic adapter over an httpx ``MockTransport`` (offline, priced: the shared
+    ledger's path), answering the brief task's output, or each status of ``statuses`` in turn
+    first (a 503 is a transient failure the service retries). Returns ``(service, requests)``."""
+    import httpx
+
+    from app.llm.providers_real import AnthropicProvider
+    from app.llm.service import LLMService
+    from app.tests._llm_offline import offline_settings
+    from app.tests.test_briefs_postgres import EXPLAINED, KEY, MODEL
+
+    queue, requests = list(statuses), []
+
+    def handler(request):
+        requests.append(1)
+        if on_request is not None:
+            on_request()
+        if queue:
+            return httpx.Response(queue.pop(0), json={"type": "error", "error": {
+                "type": "overloaded_error", "message": "busy"}})
+        return httpx.Response(200, json={
+            "content": [{"type": "text", "text": json.dumps(EXPLAINED)}],
+            "stop_reason": "end_turn", "usage": {"input_tokens": 1000, "output_tokens": 500}})
+
+    settings = offline_settings(llm_provider="anthropic", llm_api_key=KEY, llm_model=MODEL)
+    provider = AnthropicProvider(KEY, MODEL, 5,
+                                 client=httpx.Client(transport=httpx.MockTransport(handler)))
+    return LLMService(provider, sleep=sleep or (lambda _s: None), settings=settings), requests
+
+
+def _priced_creative_service(statuses: list[int]):
+    """The same adapter answering a neutral creative draft (the generation task)."""
+    import httpx
+
+    from app.llm.providers_real import AnthropicProvider
+    from app.llm.service import LLMService
+    from app.tests._llm_offline import offline_settings
+    from app.tests.test_briefs_postgres import KEY, MODEL
+
+    queue, requests = list(statuses), []
+    draft_out = {"headline": "Parking made simple",
+                 "body": "A quick note: local families are asking about weekend parking.",
+                 "call_to_action": "Plan your visit"}
+
+    def handler(request):
+        requests.append(1)
+        if queue:
+            return httpx.Response(queue.pop(0), json={"type": "error", "error": {
+                "type": "overloaded_error", "message": "busy"}})
+        return httpx.Response(200, json={
+            "content": [{"type": "text", "text": json.dumps(draft_out)}],
+            "stop_reason": "end_turn", "usage": {"input_tokens": 900, "output_tokens": 300}})
+
+    settings = offline_settings(llm_provider="anthropic", llm_api_key=KEY, llm_model=MODEL)
+    provider = AnthropicProvider(KEY, MODEL, 5,
+                                 client=httpx.Client(transport=httpx.MockTransport(handler)))
+    return LLMService(provider, sleep=lambda _s: None, settings=settings), requests
+
+
+def _use_service(monkeypatch, service) -> None:
+    """Every call site's model call (``get_llm_service().run``) goes to ``service``."""
+    monkeypatch.setattr(llm_module.get_llm_service(), "run", service.run)
+
+
+def _capture_answer_and_briefs(w: CreativeWorld, opportunity_id: str, answer: tuple) -> dict:
+    state = _capture_state(w, opportunity_id)
+    return {"capture": answer,
+            "captured briefs": len(state["captured briefs (version, by the marketer)"])}
+
+
+@pytest.mark.parametrize("released", ["within the busy timeout", "past the busy timeout"])
+def test_o2_sqlite_a_writer_present_before_the_captures_call_refuses_it_before_sending(
+    base: CreativeWorld, monkeypatch, released: str
+):
+    """(a), the writer first, SQLite, brief capture (Design B). Another connection holds the
+    writer lock when the capture reaches its model call. The call's reservation (its own short
+    transaction) must wait. Released within the busy timeout: the reservation commits, the call is
+    made and settled, 201, the record once. Released past it: the capture is refused **before the
+    call is sent**, with the existing 503 ``brief_generation_unavailable``: no model call, no
+    reservation, no usage row, no brief."""
+    if _is_postgres(base):
+        pytest.skip("SQLite's writer lock; PostgreSQL's analogue is the period-row test")
+    w = _org(base, "o2f")
+    calls = _count_model_calls(monkeypatch)
     opportunity_id, record_id = _capturable(w)
     gate = _Gate()
     _hold_the_model_call(monkeypatch, gate, after=False)
     capturing = _in_flight(_timed(lambda: _capture(w, opportunity_id, record_id)), gate,
                            "the capture")
-    return opportunity_id, gate, capturing
+    holder = _SqliteHold(w).take()
+    seconds = WITHIN_ONE_WAIT if released == "within the busy timeout" else PAST_ONE_WAIT
+    try:
+        with _Trace(w.engine) as trace:
+            released_at = time.monotonic()
+            gate.release.set()
+            timer = holder.release_at(released_at + seconds)
+            waited_at = _waits(w, trace, capturing)
+    finally:
+        gate.release.set()
+        timer.join()
+        holder.release()
+    response, _started, ended = capturing.outcome()
+    print(f"\nTIMING capture answered {ended - released_at:.2f} s after it reached the call")
+    within = released == "within the busy timeout"
+    _report(f"O-F123-2 capture, a writer first, {released}", {
+        "the reservation waited at the period row": str(waited_at).startswith(
+            "insert into llm_budget_periods"),
+        "model calls": calls["model"],
+        **_capture_answer_and_briefs(w, opportunity_id, _answer(response)),
+        **_ledger(w),
+    }, {
+        "the reservation waited at the period row": True,
+        "model calls": 1 if within else 0,
+        "capture": (201,) if within else REFUSED_BEFORE_SENDING,
+        "captured briefs": 1 if within else 0,
+        "reservations (state, reserved, settled)": [("settled", 0.0, 0.0)] if within else [],
+        "usage rows": 1 if within else 0,
+    })
+
+
+@pytest.mark.parametrize("released", ["within the busy timeout", "past the busy timeout"])
+def test_o2_sqlite_a_writer_holds_the_lock_across_the_captures_usage_write(
+    base: CreativeWorld, monkeypatch, released: str
+):
+    """(a), the writer during the call, SQLite, brief capture (Design B). The capture's
+    reservation is committed and its model call is in flight when another connection takes the
+    writer lock. The call returns; its settlement (a short transaction of its own) must wait.
+    Released within the busy timeout: settled, 201, one brief, the usage row and the settled
+    reservation once. Released past it: the settlement cannot commit, the capture answers the
+    generic 500 and stores nothing, and **the reservation is the call's record**: once, at its
+    worst case (0 with the mock); the worker's sweep then expires it, once, at that worst case."""
+    if _is_postgres(base):
+        pytest.skip("SQLite's writer lock; PostgreSQL's analogue is the period-row test")
+    w = _org(base, "o2c")
+    opportunity_id, record_id = _capturable(w)
+    gate = _Gate()
+    _hold_the_provider_call(monkeypatch, gate)
+    capturing = _in_flight(_timed(lambda: _capture(w, opportunity_id, record_id)), gate,
+                           "the capture")
+    holder = _SqliteHold(w).take()
+    seconds = WITHIN_ONE_WAIT if released == "within the busy timeout" else PAST_ONE_WAIT
+    try:
+        with _Trace(w.engine) as trace:
+            released_at = time.monotonic()
+            gate.release.set()
+            timer = holder.release_at(released_at + seconds)
+            waited_at = _waits(w, trace, capturing)
+    finally:
+        gate.release.set()
+        timer.join()
+        holder.release()
+    response, _started, ended = capturing.outcome()
+    after_the_capture = _ledger(w)
+    swept = [_sweep_with_the_worker(w), _sweep_with_the_worker(w)]
+    print(f"\nTIMING capture answered {ended - released_at:.2f} s after the call returned; "
+          f"holder released after {holder.released_at - released_at:.2f} s")
+    within = released == "within the busy timeout"
+    _report(f"O-F123-2 capture (a) {released}", {
+        "the capture waited at its settlement": str(waited_at).startswith(
+            "update llm_budget_reservations"),
+        **_capture_answer_and_briefs(w, opportunity_id, _answer(response)),
+        "after the capture": after_the_capture,
+        "after two sweeps": _ledger(w),
+        "the sweeps ran no job": swept,
+    }, {
+        "the capture waited at its settlement": True,
+        "capture": (201,) if within else (500, "internal_error", "An unexpected error occurred"),
+        "captured briefs": 1 if within else 0,
+        "after the capture": {
+            "reservations (state, reserved, settled)": [
+                ("settled", 0.0, 0.0) if within else ("reserved", 0.0, None)],
+            "usage rows": 1 if within else 0,
+        },
+        "after two sweeps": {
+            "reservations (state, reserved, settled)": [
+                ("settled", 0.0, 0.0) if within else ("expired", 0.0, 0.0)],
+            "usage rows": 1 if within else 0,
+        },
+        "the sweeps ran no job": [False, False],
+    })
+
+
+def test_o2_sqlite_the_capture_holds_the_lock_first_and_the_competing_writer_waits(
+    base: CreativeWorld, monkeypatch
+):
+    """(b) SQLite, brief capture. The capture has taken the writer lock for its final write (its
+    ``BEGIN IMMEDIATE`` before the author re-read; its call was reserved and settled before, in
+    transactions of their own) and is held there. Another writer, opened as the application opens
+    SQLite, asks for the lock and must wait; the capture commits (201, one brief, its usage row and
+    settled reservation once), then the other writer gets the lock."""
+    if _is_postgres(base):
+        pytest.skip("SQLite's writer lock")
+    w = _org(base, "o2b")
+    opportunity_id, record_id = _capturable(w)
+    gate = _Gate()
+    monkeypatch.setattr(brief_service, "hold_sqlite_writer_lock",
+                        gate.after(brief_service.hold_sqlite_writer_lock))
+    capturing = _in_flight(lambda: _capture(w, opportunity_id, record_id), gate, "the capture")
+    competing = _Runner(_competing_writer(w.engine.url.database))
+    try:
+        competing.start()
+        time.sleep(1.5)
+        still_waiting = competing.is_alive()
+    finally:
+        gate.release.set()
+    captured = capturing.outcome()
+    other = competing.outcome()
+    _report("O-F123-2 capture (b)", {
+        "the other writer was still waiting after 1.5 s": still_waiting,
+        "the other writer got the lock": other["got the lock"],
+        "it waited at least 1.5 s": other["waited"] >= 1.5,
+        **_capture_answer_and_briefs(w, opportunity_id, _answer(captured)),
+        **_ledger(w),
+    }, {
+        "the other writer was still waiting after 1.5 s": True,
+        "the other writer got the lock": True,
+        "it waited at least 1.5 s": True,
+        "capture": (201,),
+        "captured briefs": 1,
+        "reservations (state, reserved, settled)": [("settled", 0.0, 0.0)],
+        "usage rows": 1,
+    })
+
+
+def test_o2_sqlite_a_reader_holds_the_captures_commit_past_the_busy_timeout(
+    base: CreativeWorld, monkeypatch
+):
+    """(c) SQLite, brief capture, at commit (Design B). The capture has stored its brief and holds
+    the writer lock; a reader then opens a read transaction on another connection and keeps it
+    past the busy timeout. The capture's commit fails (the generic 500, no brief). The call's
+    record does not depend on that commit: its reservation and settlement, with the usage row,
+    were committed in transactions of their own, once."""
+    if _is_postgres(base):
+        pytest.skip("SQLite's locks")
+    w = _org(base, "o2r")
+    opportunity_id, record_id = _capturable(w)
+    gate = _Gate()
+    monkeypatch.setattr(brief_service, "notify", gate.after(brief_service.notify))
+    capturing = _in_flight(lambda: _capture(w, opportunity_id, record_id), gate, "the capture")
+    reader = _SqliteHold(w, reader=True).take()
+    released_at = time.monotonic()
+    gate.release.set()
+    timer = reader.release_at(released_at + PAST_ONE_WAIT)
+    try:
+        captured = capturing.outcome()
+    finally:
+        timer.join()
+        reader.release()
+    _report("O-F123-2 capture (c) reader at commit", {
+        **_capture_answer_and_briefs(w, opportunity_id, _answer(captured)),
+        **_ledger(w),
+    }, {
+        "capture": (500, "internal_error", "An unexpected error occurred"),
+        "captured briefs": 0,
+        "reservations (state, reserved, settled)": [("settled", 0.0, 0.0)],
+        "usage rows": 1,
+    })
+
+
+def test_o2_sqlite_a_later_attempts_reservation_blocked_refuses_it_before_sending(
+    base: CreativeWorld, monkeypatch
+):
+    """The retry case, SQLite, brief capture, priced (Design B). The first attempt's reservation
+    commits, its call answers 503 (transient) and is settled at its worst case with its usage row.
+    During the service's back-off another connection takes the writer lock past the busy timeout.
+    The second attempt's reservation cannot commit, so it is refused before its call is sent: the
+    capture answers the existing 503 ``brief_generation_unavailable``; one call made, one
+    reservation (settled), one usage row; no brief."""
+    if _is_postgres(base):
+        pytest.skip("SQLite's writer lock")
+    w = _org(base, "o2t")
+    opportunity_id, record_id = _capturable(w)
+    holder = _SqliteHold(w)
+    timers: list[threading.Timer] = []
+
+    def back_off(_seconds: float) -> None:
+        holder.take()
+        timers.append(holder.release_at(holder.taken_at + PAST_ONE_WAIT))
+
+    priced, requests = _priced_capture_service([503], sleep=back_off)
+    _use_service(monkeypatch, priced)
+    try:
+        response = _capture(w, opportunity_id, record_id)
+    finally:
+        for timer in timers:
+            timer.join()
+        holder.release()
+    ledger = _ledger(w)
+    _report("O-F123-2 capture, a retry's reservation blocked", {
+        **_capture_answer_and_briefs(w, opportunity_id, _answer(response)),
+        "calls sent": len(requests),
+        "reservation states": [r[0] for r in ledger["reservations (state, reserved, settled)"]],
+        "the settled reservation was charged its worst case": [
+            r[1] == r[2] and r[1] > 0 for r in ledger["reservations (state, reserved, settled)"]],
+        "usage rows": ledger["usage rows"],
+    }, {
+        "capture": REFUSED_BEFORE_SENDING,
+        "captured briefs": 0,
+        "calls sent": 1,
+        "reservation states": ["settled"],
+        "the settled reservation was charged its worst case": [True],
+        "usage rows": 1,
+    })
+
+
+def test_o2_sqlite_an_unsettled_capture_reservation_is_expired_once_at_its_worst_case(
+    base: CreativeWorld, monkeypatch
+):
+    """SQLite, brief capture, priced (Design B): a request-path reservation (no job) whose
+    settlement cannot commit stays ``reserved`` at its worst case ``w`` (already counted by the
+    month's ``reserved_usd``), and the worker's reservation sweep expires it, once, charging
+    ``w``: the period's ``settled_usd`` grows by ``w`` once, however many sweeps run."""
+    if _is_postgres(base):
+        pytest.skip("SQLite's writer lock; the shared ledger's PostgreSQL recovery is pinned "
+                    "elsewhere")
+    w = _org(base, "o2x")
+    opportunity_id, record_id = _capturable(w)
+    priced, requests = _priced_capture_service([])
+    gate = _Gate()
+    _hold_the_provider_call(monkeypatch, gate, priced._provider)
+    _use_service(monkeypatch, priced)
+    capturing = _in_flight(lambda: _capture(w, opportunity_id, record_id), gate, "the capture")
+    holder = _SqliteHold(w).take()
+    gate.release.set()
+    timer = holder.release_at(holder.taken_at + PAST_ONE_WAIT)
+    try:
+        captured = capturing.outcome()
+    finally:
+        timer.join()
+        holder.release()
+
+    def period() -> tuple:
+        [row] = w.rows(LLMBudgetPeriod, workspace_id=w.ws)
+        return _amount(row["reserved_usd"]), _amount(row["settled_usd"])
+
+    before = (_ledger(w), period())
+    _sweep_with_the_worker(w)
+    once = (_ledger(w), period())
+    _sweep_with_the_worker(w)
+    twice = (_ledger(w), period())
+    [(_state, worst, _settled)] = before[0]["reservations (state, reserved, settled)"]
+    _report("O-F123-2 the sweep expires a capture's reservation", {
+        "capture": _answer(captured),
+        "calls sent": len(requests),
+        "worst case is priced": worst > 0,
+        "before the sweep": before,
+        "after one sweep": once,
+        "after two sweeps": twice,
+    }, {
+        "capture": (500, "internal_error", "An unexpected error occurred"),
+        "calls sent": 1,
+        "worst case is priced": True,
+        "before the sweep": ({"reservations (state, reserved, settled)": [
+            ("reserved", worst, None)], "usage rows": 0}, (worst, 0.0)),
+        "after one sweep": ({"reservations (state, reserved, settled)": [
+            ("expired", worst, worst)], "usage rows": 0}, (worst, worst)),
+        "after two sweeps": ({"reservations (state, reserved, settled)": [
+            ("expired", worst, worst)], "usage rows": 0}, (worst, worst)),
+    })
+
+
+def test_o2_sqlite_a_writer_present_before_the_generation_call_refuses_it_before_sending(
+    base: CreativeWorld, monkeypatch
+):
+    """(a), the writer first, SQLite, the generation job under the real worker (Design B).
+    Another connection holds the writer lock when the job reaches its model call, past the busy
+    timeout. The call's reservation cannot commit, so the attempt is refused before the call is
+    sent, with the job's existing transient refusal (``model_unavailable``, to be retried): no
+    model call, no reservation, no usage row, no draft."""
+    if _is_postgres(base):
+        pytest.skip("SQLite's writer lock; PostgreSQL's analogue is the period-row test")
+    w = _org(base, "o2h")
+    calls = _count_model_calls(monkeypatch)
+    brief_id = w.seed_brief(w.ws)
+    job_id = _generate(w, brief_id)
+    gate = _Gate()
+    _hold_the_model_call(monkeypatch, gate, after=False)
+    generating = _in_flight(w.drain, gate, "the generation")
+    holder = _SqliteHold(w).take()
+    gate.release.set()
+    timer = holder.release_at(holder.taken_at + PAST_ONE_WAIT)
+    try:
+        drained = generating.outcome()
+    finally:
+        timer.join()
+        holder.release()
+    summary = _job_summary(w, job_id)
+    observed = {"drained": drained, "job": summary["job"], "model calls": calls["model"],
+                "drafts": w.count(CreativeDraft, brief_id=brief_id), **_ledger(w, job_id=job_id)}
+    _retire_unfinished_jobs(w)
+    _report("O-F123-2 generation, a writer first", observed, {
+        "drained": 1,
+        "job": GENERATION_REFUSED_BEFORE_SENDING,
+        "model calls": 0,
+        "drafts": 0,
+        "reservations (state, reserved, settled)": [],
+        "usage rows": 0,
+    })
+
+
+def test_o2_sqlite_a_writer_holds_the_lock_across_the_generation_jobs_usage_write(
+    base: CreativeWorld, monkeypatch
+):
+    """(a), the writer during the call, SQLite, the generation job under the real worker
+    (Design B). The job's reservation is committed and its model call is in flight when another
+    connection takes the writer lock, released past one busy-timeout wait. The settlement cannot
+    commit; the attempt fails (transient) and waits for its retry, its reservation left at its
+    worst case (0 with the mock). The retry's meter releases that reservation at its worst case
+    (the shared ledger's existing rebind recovery) and makes its own call, settled. So each of the
+    two admitted calls is recorded exactly once: one released, one settled with its usage row."""
+    if _is_postgres(base):
+        pytest.skip("SQLite's writer lock; PostgreSQL's analogue is the period-row test")
+    monkeypatch.setattr(get_settings(), "job_retry_base_seconds", 0.2)
+    monkeypatch.setattr(get_settings(), "job_retry_max_seconds", 0.5)
+    w = _org(base, "o2g")
+    calls = _count_model_calls(monkeypatch)
+    brief_id = w.seed_brief(w.ws)
+    job_id = _generate(w, brief_id)
+    gate = _Gate()
+    _hold_the_provider_call(monkeypatch, gate)
+    generating = _in_flight(w.drain, gate, "the generation")
+    holder = _SqliteHold(w).take()
+    released_at = time.monotonic()
+    gate.release.set()
+    timer = holder.release_at(released_at + PAST_ONE_WAIT)
+    try:
+        drained = generating.outcome()
+    finally:
+        timer.join()
+        holder.release()
+    first = {**_job_summary(w, job_id), **_ledger(w, job_id=job_id)}
+    print(f"\nTIMING the first attempt ended {time.monotonic() - released_at:.2f} s after the "
+          f"call returned; job {first['job']}")
+    deadline = time.monotonic() + 20
+    while w.job(job_id)["status"] != "succeeded" and time.monotonic() < deadline:
+        w.drain()
+        time.sleep(0.2)
+    _report("O-F123-2 generation, a writer during the call", {
+        "drained": drained,
+        "after the first attempt": {k: first[k] for k in (
+            "job", "reservations (state, reserved, settled)", "usage rows")},
+        "after the retry": {k: v for k, v in {**_job_summary(w, job_id),
+                                              **_ledger(w, job_id=job_id)}.items()
+                            if k in ("job", "attempts", "reservations (state, reserved, settled)",
+                                     "usage rows")},
+        "model calls": calls["model"],
+        "drafts": w.count(CreativeDraft, brief_id=brief_id),
+    }, {
+        "drained": 1,
+        "after the first attempt": {
+            "job": ("retry_wait", "transient", "OperationalError"),
+            "reservations (state, reserved, settled)": [("reserved", 0.0, None)],
+            "usage rows": 0,
+        },
+        "after the retry": {
+            "job": GENERATION_STORED,
+            "attempts": 2,
+            "reservations (state, reserved, settled)": [("released", 0.0, 0.0),
+                                                        ("settled", 0.0, 0.0)],
+            "usage rows": 1,
+        },
+        "model calls": 2,
+        "drafts": 1,
+    })
+
+
+def test_o2_sqlite_a_writer_past_both_waits_during_the_generation_call_is_recovered_once(
+    base: CreativeWorld, monkeypatch
+):
+    """(a), past both waits, SQLite, the generation job under the real worker loop (Design B).
+    The job's reservation is committed and its call is in flight when another connection takes the
+    writer lock for 12.5 s. The settlement cannot commit, nor can the attempt's failure write: the
+    loop survives, and once the job's lease has expired and the lock is free, lease recovery
+    requeues it; the retry's meter releases the first call's reservation at its worst case and
+    makes its own call, settled. Each admitted call is recorded exactly once; the job ends with
+    its draft."""
+    if _is_postgres(base):
+        pytest.skip("SQLite's writer lock")
+    settings = get_settings()
+    monkeypatch.setattr(settings, "worker_lease_seconds", 3.0)
+    monkeypatch.setattr(settings, "worker_heartbeat_seconds", 1.0)
+    w = _org(base, "o2z")
+    calls = _count_model_calls(monkeypatch)
+    brief_id = w.seed_brief(w.ws)
+    job_id = _generate(w, brief_id)
+    gate = _Gate()
+    _hold_the_provider_call(monkeypatch, gate)
+    holder = _SqliteHold(w)
+    with _LoopWatch(w, monkeypatch) as loop:
+        gate.wait("the generation")
+        holder.take()
+        gate.release.set()
+        timer = holder.release_at(holder.taken_at + PAST_TWO_WAITS)
+        try:
+            status = _until_terminal(w, job_id, seconds=60.0)
+        finally:
+            timer.join()
+            holder.release()
+        alive = loop.alive()
+    summary = _job_summary(w, job_id)
+    _report("O-F123-2 generation, a writer past both waits", {
+        "terminal": status,
+        "the loop kept running": alive,
+        "job": summary["job"],
+        "attempts": summary["attempts"],
+        "model calls": calls["model"],
+        "drafts": w.count(CreativeDraft, brief_id=brief_id),
+        **_ledger(w, job_id=job_id),
+        "events": _job_events(w, job_id),
+    }, {
+        "terminal": "succeeded",
+        "the loop kept running": True,
+        "job": GENERATION_STORED,
+        "attempts": 2,
+        "model calls": 2,
+        "drafts": 1,
+        "reservations (state, reserved, settled)": [("released", 0.0, 0.0),
+                                                    ("settled", 0.0, 0.0)],
+        "usage rows": 1,
+        "events": ["claimed", "started", "lease_recovered", "claimed", "started", "succeeded"],
+    })
+
+
+def _nothing_held(db_file: str) -> str:
+    """``free`` when no connection holds any lock on the database (a ``BEGIN EXCLUSIVE`` with no
+    busy timeout succeeds: no reader's SHARED lock, no writer's RESERVED or PENDING lock)."""
+    raw = sqlite3.connect(db_file, timeout=0, isolation_level=None)
+    try:
+        raw.execute("BEGIN EXCLUSIVE")
+        raw.execute("ROLLBACK")
+        return "free"
+    except sqlite3.OperationalError as exc:
+        return "held" if "locked" in str(exc) else str(exc)
+    finally:
+        raw.close()
+
+
+@pytest.mark.parametrize("flow", ["capture-mock", "capture-priced", "generation-mock",
+                                  "generation-priced"])
+def test_o2_sqlite_nothing_is_held_at_any_reservation_settlement_or_call(
+    base: CreativeWorld, monkeypatch, flow: str
+):
+    """The precondition of Design B (coordinator ruling F123R-1 §3), SQLite. At every reservation
+    (each in a short transaction of its own on a second connection), every settlement, and every
+    provider call of a retrying call (the priced provider answers 503 twice: the service's
+    ``llm_max_retries`` = 2 retries, three attempts), no connection holds any lock: not the
+    caller's own session (the capture request's, the generation job's), not a read transaction,
+    not a writer. A ``BEGIN EXCLUSIVE`` with no busy timeout succeeds at each point. The journal
+    mode the application's engine factory leaves is the rollback journal (``delete``)."""
+    if _is_postgres(base):
+        pytest.skip("SQLite's locks")
+    w = _org(base, f"o2p{flow[0]}{flow[-1]}")
+    db_file = w.engine.url.database
+    seen: dict[str, list[str]] = {"reservation": [], "settlement": [], "provider call": []}
+
+    def probing(kind: str, real: Callable) -> Callable:
+        def probed(*args, **kwargs):
+            seen[kind].append(_nothing_held(db_file))
+            return real(*args, **kwargs)
+
+        return probed
+
+    monkeypatch.setattr(ledger, "reserve", probing("reservation", ledger.reserve))
+    monkeypatch.setattr(ledger, "settle", probing("settlement", ledger.settle))
+    priced = flow.endswith("priced")
+    from app.tests._llm_offline import offline_settings
+
+    # Every attempt of a retrying call: the priced service's own ``llm_max_retries`` + 1.
+    attempts = offline_settings().llm_max_retries + 1 if priced else 1
+    if flow.startswith("capture"):
+        service, _requests = _priced_capture_service([503] * (attempts - 1))
+    else:
+        service, _requests = _priced_creative_service([503] * (attempts - 1))
+    if priced:
+        _use_service(monkeypatch, service)
+        provider = service._provider
+    else:
+        provider = llm_module.get_llm_service()._provider
+    monkeypatch.setattr(provider, "generate", probing("provider call", provider.generate))
+    if flow.startswith("capture"):
+        opportunity_id, record_id = _capturable(w)
+        outcome = _answer(_capture(w, opportunity_id, record_id))
+        record = _ledger(w)
+    else:
+        brief_id = w.seed_brief(w.ws)
+        job_id = _generate(w, brief_id)
+        w.drain()
+        outcome = w.job(job_id)["status"]
+        record = _ledger(w, job_id=job_id)
+    with w.engine.connect() as conn:
+        journal = conn.exec_driver_sql("PRAGMA journal_mode").scalar()
+    _report(f"O-F123-2 precondition {flow}", {
+        "journal mode": journal,
+        "outcome": outcome,
+        **seen,
+        "reservations": len(record["reservations (state, reserved, settled)"]),
+        "usage rows": record["usage rows"],
+    }, {
+        "journal mode": "delete",
+        "outcome": (201,) if flow.startswith("capture") else "succeeded",
+        "reservation": ["free"] * attempts,
+        "settlement": ["free"] * attempts,
+        "provider call": ["free"] * attempts,
+        "reservations": attempts,
+        "usage rows": attempts,
+    })
 
 
 def _capture_accounting(w: CreativeWorld, opportunity_id: str, answer: tuple) -> tuple[dict, dict]:
@@ -603,162 +1302,6 @@ def _capture_accounting(w: CreativeWorld, opportunity_id: str, answer: tuple) ->
         "ledger reservations of the workspace": 1,
     }
     return observed, expected
-
-
-@pytest.mark.parametrize("released", [
-    "within the busy timeout",
-    pytest.param("past the busy timeout", marks=pytest.mark.xfail(strict=True, reason=O2_OPEN)),
-])
-def test_o2_sqlite_a_writer_holds_the_lock_across_the_captures_usage_write(
-    base: CreativeWorld, monkeypatch, released: str
-):
-    """(a) SQLite, brief capture. While the capture is in its model call another connection takes
-    the writer lock. The admitted call returns; the capture's first write (its usage rows) must
-    wait. The holder lets go within the busy timeout, or past it. Either way the admitted call's
-    usage row and reservation must be kept exactly once (and a brief stored only with a 201).
-    Within the timeout this holds today; past it the capture answers the generic 500 and its usage
-    rows go with the rollback (FX-A c3, F123 cap 028)."""
-    if _is_postgres(base):
-        pytest.skip("SQLite's writer lock; PostgreSQL's analogue is the period-row test")
-    w = _org(base, "o2c")
-    opportunity_id, gate, capturing = _capture_with_the_model_call_held(w, monkeypatch)
-    holder = _SqliteHold(w).take()
-    seconds = WITHIN_ONE_WAIT if released == "within the busy timeout" else PAST_ONE_WAIT
-    try:
-        with _Trace(w.engine) as trace:
-            released_at = time.monotonic()
-            gate.release.set()
-            timer = holder.release_at(released_at + seconds)
-            waited_at = _waits(w, trace, capturing)
-    finally:
-        gate.release.set()
-        timer.join()
-        holder.release()
-    response, _started, ended = capturing.outcome()
-    observed, expected = _capture_accounting(w, opportunity_id, _answer(response))
-    print(f"\nTIMING capture answered {ended - released_at:.2f} s after the call returned; "
-          f"holder released after {holder.released_at - released_at:.2f} s")
-    _report(f"O-F123-2 capture (a) {released}", {"the capture waited at": waited_at, **observed},
-            {"the capture waited at": "insert llm_budget_reservations", **expected})
-
-
-def test_o2_sqlite_the_capture_holds_the_lock_first_and_the_competing_writer_waits(
-    base: CreativeWorld, monkeypatch
-):
-    """(b) SQLite, brief capture. The capture has written its usage rows (it holds the writer lock)
-    and is held before its author re-read. Another writer, opened as the application opens SQLite,
-    asks for the lock and must wait; the capture commits (201, one brief, its usage row and
-    reservation once), then the other writer gets the lock."""
-    if _is_postgres(base):
-        pytest.skip("SQLite's writer lock")
-    w = _org(base, "o2b")
-    opportunity_id, record_id = _capturable(w)
-    gate = _Gate()
-    monkeypatch.setattr(brief_service, "_reread_author_role",
-                        gate.before(brief_service._reread_author_role))
-    capturing = _in_flight(lambda: _capture(w, opportunity_id, record_id), gate, "the capture")
-    competing = _Runner(_competing_writer(w.engine.url.database))
-    try:
-        competing.start()
-        time.sleep(1.5)
-        still_waiting = competing.is_alive()
-    finally:
-        gate.release.set()
-    captured = capturing.outcome()
-    other = competing.outcome()
-    observed, expected = _capture_accounting(w, opportunity_id, _answer(captured))
-    _report("O-F123-2 capture (b)", {
-        "the other writer was still waiting after 1.5 s": still_waiting,
-        "the other writer got the lock": other["got the lock"],
-        "it waited at least 1.5 s": other["waited"] >= 1.5,
-        **observed,
-    }, {
-        "the other writer was still waiting after 1.5 s": True,
-        "the other writer got the lock": True,
-        "it waited at least 1.5 s": True,
-        **{**expected, "capture": (201,), "captured briefs": 1},
-    })
-
-
-@pytest.mark.xfail(strict=True, reason=O2_OPEN)
-def test_o2_sqlite_a_reader_holds_the_captures_commit_past_the_busy_timeout(
-    base: CreativeWorld, monkeypatch
-):
-    """(c) SQLite, brief capture, at commit. The capture has written everything (its usage rows,
-    the brief, its audit row) and holds the writer lock; a reader then opens a read transaction on
-    another connection. The capture's commit needs every reader gone: it waits the busy timeout,
-    then fails. The admitted call's usage must still be kept exactly once. Today the capture
-    answers the generic 500 and its usage rows go with the rollback."""
-    if _is_postgres(base):
-        pytest.skip("SQLite's locks")
-    w = _org(base, "o2r")
-    opportunity_id, record_id = _capturable(w)
-    gate = _Gate()
-    monkeypatch.setattr(brief_service, "notify", gate.after(brief_service.notify))
-    capturing = _in_flight(lambda: _capture(w, opportunity_id, record_id), gate, "the capture")
-    reader = _SqliteHold(w, reader=True).take()
-    released_at = time.monotonic()
-    gate.release.set()
-    timer = reader.release_at(released_at + PAST_ONE_WAIT)
-    try:
-        captured = capturing.outcome()
-    finally:
-        timer.join()
-        reader.release()
-    observed, expected = _capture_accounting(w, opportunity_id, _answer(captured))
-    _report("O-F123-2 capture (c) reader at commit", observed, expected)
-
-
-@pytest.mark.parametrize("released", [
-    "past the usage write's wait",
-    pytest.param("past the after-rollback write's wait",
-                 marks=pytest.mark.xfail(strict=True, reason=O2_OPEN)),
-])
-def test_o2_sqlite_a_writer_holds_the_lock_across_the_generation_jobs_usage_write(
-    base: CreativeWorld, monkeypatch, released: str
-):
-    """(a) SQLite, the generation job under the real worker. While the job is in its model call
-    another connection takes the writer lock. The job's first write after the call (its usage rows)
-    fails after the busy timeout; the worker rolls the attempt back and re-writes the usage rows in
-    a fresh transaction (its after-rollback write), which waits the busy timeout again.
-
-    Released between the two waits (FX-A c3's case): the after-rollback write keeps the usage once
-    and the job waits for a retry. Released only after both: the after-rollback write fails too,
-    the worker fails the job for good (``after_rollback_write_failed``), and the admitted call's
-    usage must still be kept once; today it is not."""
-    if _is_postgres(base):
-        pytest.skip("SQLite's writer lock; PostgreSQL's analogue is the period-row test")
-    w = _org(base, "o2g")
-    brief_id = w.seed_brief(w.ws)
-    job_id = _generate(w, brief_id)
-    gate = _Gate()
-    _hold_the_model_call(monkeypatch, gate, after=False)
-    generating = _in_flight(w.drain, gate, "the generation")
-    holder = _SqliteHold(w).take()
-    seconds = PAST_ONE_WAIT if released == "past the usage write's wait" else PAST_TWO_WAITS
-    released_at = time.monotonic()
-    gate.release.set()
-    timer = holder.release_at(released_at + seconds)
-    try:
-        drained = generating.outcome()
-    finally:
-        timer.join()
-        holder.release()
-    ended = time.monotonic()
-    summary = _job_summary(w, job_id)
-    usage = _usage_of_job(w, job_id)
-    drafts = w.count(CreativeDraft, brief_id=brief_id)
-    _retire_unfinished_jobs(w)
-    print(f"\nTIMING the attempt ended {ended - released_at:.2f} s after the call returned; "
-          f"job {summary['job']}")
-    _report(f"O-F123-2 generation {released}", {
-        "drained": drained, "drafts": drafts, **usage,
-    }, {
-        "drained": 1, "drafts": 0,
-        "usage rows of the job": 1, "ledger reservations of the job": 1,
-    })
-    if released == "past the usage write's wait":
-        assert summary["job"] == ("retry_wait", "transient", "OperationalError"), summary
 
 
 @pytest.mark.parametrize("where", ["capture", "generation"])
@@ -876,6 +1419,82 @@ def test_o2_postgresql_the_priced_shared_ledger_settlement_waits_out_a_period_ro
     })
 
 
+LEDGER_TABLES = ("llm_budget_reservations", "llm_budget_periods", "llm_usage_events")
+
+
+def _ledger_writes(statements: list[str]) -> list[str]:
+    """``verb table`` of each write to a ledger table, in order."""
+    out = []
+    for q in statements:
+        words = q.split()
+        if not words or words[0] not in ("insert", "update", "delete"):
+            continue
+        table = words[2] if words[0] in ("insert", "delete") else words[1]
+        if table in LEDGER_TABLES:
+            out.append(f"{words[0]} {table}")
+    return out
+
+
+@pytest.mark.parametrize("flow", ["capture-mock", "capture-priced", "generation-mock",
+                                  "generation-priced"])
+def test_o2_postgresql_capture_and_generation_keep_their_ledger_paths(
+    base: CreativeWorld, monkeypatch, flow: str
+):
+    """PostgreSQL is unchanged by Design B (coordinator ruling F123R-1 §2). With the mock, nothing
+    is written to the ledger before the provider is asked, and the call's rows are written after
+    it (the same-session meter, in the caller's transaction). With the offline priced provider,
+    the reservation is written before the call and the settlement with the usage row after it
+    (the shared ledger). Printed: every statement, for the before/after statement-list diff."""
+    if not _is_postgres(base):
+        pytest.skip("PostgreSQL's paths")
+    w = _org(base, f"o2q{flow[0]}{flow[-1]}")
+    priced = flow.endswith("priced")
+    if priced:
+        service = (_priced_capture_service([]) if flow.startswith("capture")
+                   else _priced_creative_service([]))[0]
+        _use_service(monkeypatch, service)
+        provider = service._provider
+    else:
+        provider = llm_module.get_llm_service()._provider
+    if flow.startswith("generation"):
+        brief_id = w.seed_brief(w.ws)
+        job_id = _generate(w, brief_id)
+    else:
+        opportunity_id, record_id = _capturable(w)
+    with _Trace(w.engine) as trace:
+        real = provider.generate
+
+        def marked(*args, **kwargs):
+            with trace._lock:
+                trace.sent.append(PROVIDER_CALLED)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(provider, "generate", marked)
+        if flow.startswith("generation"):
+            assert w.drain() == 1
+            outcome = w.job(job_id)["status"]
+        else:
+            outcome = _answer(_capture(w, opportunity_id, record_id))
+    sent = trace.sent
+    called = sent.index(PROVIDER_CALLED)
+    print(f"\nPG STATEMENTS {flow}:\n" + "\n".join(f"  {q[:200]}" for q in sent))
+    _report(f"O-F123-2 PostgreSQL ledger path {flow}", {
+        "outcome": outcome,
+        "ledger writes before the call": _ledger_writes(sent[:called]),
+        "ledger writes after the call": _ledger_writes(sent[called + 1:]),
+    }, {
+        "outcome": (201,) if flow.startswith("capture") else "succeeded",
+        "ledger writes before the call": (
+            ["insert llm_budget_periods", "update llm_budget_periods",
+             "insert llm_budget_reservations"] if priced else []),
+        "ledger writes after the call": (
+            ["update llm_budget_reservations", "update llm_budget_periods",
+             "insert llm_usage_events"] if priced else
+            ["insert llm_budget_reservations", "insert llm_budget_periods",
+             "update llm_budget_periods", "insert llm_usage_events"]),
+    })
+
+
 # --------------------------------------------------------------------------- #
 # O-F123-2, the scout-run handler on SQLite (its own seeded world)
 # --------------------------------------------------------------------------- #
@@ -989,7 +1608,7 @@ def test_o2_sqlite_a_writer_holding_the_lock_when_a_scout_run_starts_writing_cos
         s.commit()
 
 
-@pytest.mark.xfail(strict=True, reason=O2_OPEN)
+@pytest.mark.xfail(strict=True, reason=SCOUT_LIMIT)
 def test_o2_sqlite_a_reader_holds_a_scout_runs_commit_past_its_after_rollback_write(
     scout_lite, monkeypatch
 ):
