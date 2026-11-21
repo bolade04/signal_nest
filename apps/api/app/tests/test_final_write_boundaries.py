@@ -582,8 +582,9 @@ def test_f2_a_withdrawal_in_flight_at_the_generation_boundary_is_waited_for_and_
     """(a') The job's model call has answered; nothing of it is written. The revocation is then
     held with its decision row flushed and uncommitted (PostgreSQL: the brief ``FOR UPDATE``;
     SQLite: the writer lock). The job is released and must wait (PostgreSQL: the brief lock at
-    version allocation; SQLite: its first write, the usage rows), the revocation commits, and the
-    job must read it and store nothing."""
+    version allocation; SQLite: its ``BEGIN IMMEDIATE`` before version allocation, the call's rows
+    being written in transactions of their own (O-F123-2, Design B)), the revocation commits, and
+    the job must read it and store nothing."""
     w = _org(base, "f2i")
     brief_id = w.seed_brief(w.ws)
     job_id = _generate(w, brief_id)
@@ -608,7 +609,7 @@ def test_f2_a_withdrawal_in_flight_at_the_generation_boundary_is_waited_for_and_
     }, {
         "the job waited at": (
             "recommendation_briefs FOR UPDATE" if _is_postgres(w)
-            else "insert llm_budget_reservations"
+            else "BEGIN IMMEDIATE"
         ),
         "revocation": (201,),
         "drained": 1,
@@ -758,8 +759,9 @@ def test_f3_a_change_in_flight_at_the_capture_boundary_is_waited_for_and_prevent
 
     Where it waits differs by engine and by provider: with the mock the usage rows are written in
     the request's own transaction right after the call, and their foreign keys take the
-    organization ``KEY SHARE`` on PostgreSQL, so the capture meets the change there; SQLite's writer
-    lock meets it at the same first write."""
+    organization ``KEY SHARE`` on PostgreSQL, so the capture meets the change there; on SQLite the
+    call's rows are written in transactions of their own (O-F123-2, Design B), so the capture meets
+    the change at its ``BEGIN IMMEDIATE`` before the author re-read."""
     w = _org(base, "f3i")
     opportunity_id, record_id = _capturable(w)
     model, held = _Gate(), _Gate()
@@ -781,7 +783,8 @@ def test_f3_a_change_in_flight_at_the_capture_boundary_is_waited_for_and_prevent
         **_capture_state(w, opportunity_id),
         "membership": _role(w, w.users["marketer"]),
     }, {
-        "the capture waited at": "insert llm_budget_reservations",
+        "the capture waited at": ("insert llm_budget_reservations" if _is_postgres(w)
+                                  else "BEGIN IMMEDIATE"),
         "change": CHANGED[change],
         "capture": REFUSED[change],
         "captured briefs (version, by the marketer)": [],
