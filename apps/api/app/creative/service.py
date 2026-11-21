@@ -24,7 +24,10 @@ it stands when the job's turn comes; app.llm.quota):
   recommendation briefs only;
 * the brief is the workspace's, and its controlling approval decision (5B: the
   highest ``decision_seq`` for its exact version) is ``approved`` — drafts are generated
-  "from an approved recommendation brief" (Phase 5C plan §1);
+  "from an approved recommendation brief" (Phase 5C plan §1). It is read again after the model
+  call, before the draft is stored, under the brief row's lock (G-R3-1 F-2; "Versions" below), so
+  a withdrawal committed during the call refuses the draft the same way (``brief_not_approved``)
+  and keeps the call's usage rows;
 * a revision's parent is a draft of the same brief and workspace;
 * the requester is still a workspace editor (owner, admin or marketer);
 * every generation ceiling is configured — a finite number greater than 0 — and none would be
@@ -76,7 +79,16 @@ price table; 0 for the mock) and the usage-ledger row of the attempt that produc
 **Versions.** A draft is never updated: a revision is a new row. ``draft_version`` is the
 brief's highest plus one, read under the brief row's lock (``SELECT … FOR UPDATE``) after the
 model call, so the lock is never held across it; the unique key turns any remaining clash
-into a retryable failure that stores nothing.
+into a retryable failure that stores nothing. Under the same lock, before the insert, the
+controlling decision on the exact ``(brief id, brief_version)`` the job loaded is read again
+(G-R3-1 F-2): a brief decision locks that row ``FOR UPDATE`` before it reads, so a withdrawal
+either committed before the lock was granted, and the draft is refused (``VALIDATION``
+``brief_not_approved``, the job ``failed``), or waits until the draft has committed, which then
+stands as written. A newer version of the brief changes nothing here: the approval read is the
+exact parent version's. On SQLite the brief lock is a plain read; the attempt's transaction holds
+the database's writer lock from its first write (the meter's usage rows, right after the call;
+:func:`app.db.sqlite_writer.hold_sqlite_writer_lock` takes it if nothing was written), and a brief
+decision takes it before its reads.
 
 **Audited in the same transaction**: ``creative_draft.created`` with ids, versions and flags
 only (no generated text, no author identity beyond the actor column).
@@ -130,6 +142,7 @@ from app.creative.schemas import (
     CreativeDraftOut,
     CreativeGeneratePayload,
 )
+from app.db.sqlite_writer import hold_sqlite_writer_lock
 from app.jobs.context import ExecutionContext
 from app.jobs.models import Job
 from app.jobs.registry import HandlerContext
@@ -793,7 +806,17 @@ def execute_generation(
         jurisdiction=jurisdiction,
     )
 
+    # G-R3-1 F-2: before the draft is stored, the exact parent version's approval is read again,
+    # under the brief row's lock (PostgreSQL: version allocation's FOR UPDATE, which a brief
+    # decision also takes before it reads) or the writer lock (SQLite: held since the meter's first
+    # write above; the call sends BEGIN IMMEDIATE only if the meter wrote nothing). A withdrawal
+    # committed first refuses the draft with the gate's own refusal; the admitted call's usage
+    # rows are kept by the after-rollback write. No lock is held across the model call by this.
+    hold_sqlite_writer_lock(db)
     version = _next_version(db, brief)
+    if not brief_is_approved(db, brief):
+        _log_not_generated(ws_id, brief.id, "refused", "brief_not_approved")
+        raise _fail(JobErrorCode.VALIDATION, "brief_not_approved")
     usage = response.usage
     draft = CreativeDraft(
         organization_id=org_id,

@@ -125,6 +125,14 @@ parent draft FK ``KEY SHARE``)          (the decision waits); a parent         s
                                                                                waits on a draft
                                                                                the decision
                                                                                holds)
+brief capture (G-R3-1 F-3; after the    the user (step 1) and the              no (that row is
+model call: the author's ``users``      organization (step 2): compatible.     the only one
+``KEY SHARE`` → organization ``KEY      The superseded brief: a decision on    both want in a
+SHARE`` → the author's role, read →     it (step 4, ``FOR UPDATE``) and the    conflicting mode;
+opportunity ``FOR UPDATE`` → inserts;   capture's foreign-key ``KEY SHARE``    it locks no
+its new row's foreign key takes the     exclude each other: one waits for      membership or
+brief version it supersedes ``KEY       the other                              draft)
+SHARE``)
 retention purge of opportunities        the subject (step 4), deleted with     no (the purge
 (… → brief → draft, but the walk        its opportunity                        locks no user,
 deletes children first: a draft row                                           organization or
@@ -223,8 +231,12 @@ write (the workspace ``FOR UPDATE``, then its audit row's foreign key on the act
 ``users`` row); that same user's organization deletion or account deletion (that ``users`` row
 ``FOR UPDATE``, then the organization); and a decision or an export emitting a notification (the
 organization ``KEY SHARE``, then the workspace ``KEY SHARE`` for its notification rows).
-PostgreSQL then aborts at least one of the three with a deadlock error. This is open: nothing in
-this module or in the emitter prevents it.
+A brief capture is a third party too, notifications on or off: it takes the organization
+``KEY SHARE`` and then the workspace ``KEY SHARE``, with the mock both through its usage rows'
+foreign keys right after the model call, and with a priced provider the organization at its re-read
+(G-R3-1 F-3, which opens the window before its version read) and the workspace through its own
+row's foreign key. PostgreSQL then aborts at least one of the three with a deadlock error. This is
+open: nothing in this module or in the emitter prevents it.
 
 **The latest decision controls.** Decisions are append-only; a change of mind is a new
 row. The controlling decision of a subject version is the row with the highest
@@ -521,6 +533,23 @@ def approver_membership_select(organization_id: str, user_id: str) -> Select:
             OrganizationMember.user_id == user_id,
         )
         .with_for_update(read=True)
+    )
+
+
+def member_role_select(organization_id: str, user_id: str) -> Select:
+    """``SELECT role FROM organization_members …`` with no lock of its own: a member's role as
+    committed now, for a writer that already holds the organization ``KEY SHARE`` (step 2).
+
+    Every writer of an existing membership row (a role change or removal, organization deletion,
+    account deletion) locks the organization ``FOR UPDATE`` before it touches the row, so under
+    step 2 the role read here can neither be changed nor be uncommitted: a change committed before
+    step 2 was granted is read, and a later one waits until the reader's transaction ends. The
+    export (G-R3-1 F-1, AD-EXPORT-ROLE-01) and brief capture (G-R3-1 F-3) re-read their actor's
+    role with it. Selects the column, so the identity map is untouched. Factored out so a test
+    can compile it against the PostgreSQL dialect."""
+    return select(OrganizationMember.role).where(
+        OrganizationMember.organization_id == organization_id,
+        OrganizationMember.user_id == user_id,
     )
 
 
@@ -1044,6 +1073,7 @@ __all__ = [
     "draft_lock_select",
     "is_draft_author",
     "list_draft_decisions",
+    "member_role_select",
     "record_draft_decision",
     "get_scoped_brief",
     "is_approved",

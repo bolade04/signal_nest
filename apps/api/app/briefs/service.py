@@ -55,6 +55,16 @@ trustworthy compliance record:
   prompt name and version, model, ``input_hash`` (computed by the LLM service), trace id and
   simulation flag come from the response; ``llm_usage_event_id`` is the usage-ledger row of
   the attempt that produced the brief; ``created_by_snapshot`` is the author as they are now.
+* **The author, re-read before the insert** (G-R3-1 F-3). The route's editors' gate reads the
+  author's role when the request starts; the model call can take a while. After the call and
+  before the opportunity lock, the author's membership and role are read again under protection
+  (:func:`_reread_author_role`: the author's ``users`` row and the organization ``KEY SHARE`` on
+  PostgreSQL, the writer lock on SQLite). A removal, or a demotion out of the editor roles, that
+  committed first refuses the brief (403 ``permission_denied``,
+  :class:`BriefAuthorNotPermittedError`); one that comes later waits until the brief has
+  committed, which then stands as written. Holding the organization, a capture is a third party
+  of the AD-NOTIF-LOCK-01 ring, notifications on or off, and with a priced provider this re-read
+  opens that window before the version read ("Known limit" in :mod:`app.approvals.service`).
 * **Versioning.** ``brief_version`` is the opportunity's highest version plus one and
   ``parent_brief_id`` the brief it supersedes, read after the opportunity row is locked
   (``SELECT ... FOR UPDATE`` on PostgreSQL), so concurrent captures serialize; a unique-key
@@ -87,6 +97,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.approvals.service import (
+    approver_organization_lock_select,
+    approver_user_lock_select,
+    member_role_select,
+)
 from app.audit.actions import AuditAction
 from app.audit.service import record_audit
 from app.briefs.models import RecommendationBrief
@@ -95,9 +110,10 @@ from app.campaign_context.models import Campaign
 from app.claims.engine import translate_competitor_weakness
 from app.core.actor_snapshot import account_snapshot
 from app.core.config import Settings
-from app.core.enums import NotificationEventCode
+from app.core.enums import NotificationEventCode, Role
 from app.core.errors import NotFoundError, SignalNestError, ValidationDomainError
 from app.core.logging import get_logger, log_event
+from app.db.sqlite_writer import hold_sqlite_writer_lock
 from app.intelligence.records import SignalIntelligenceRecord
 from app.jurisdiction.business_address import ACTION_CLARIFICATIONS, resolve_for_action
 from app.llm.base import LLMError
@@ -158,6 +174,26 @@ class BriefVersionConflictError(BriefNotProducedError):
 
     status_code = 409
     code = "conflict"
+
+
+class BriefAuthorNotPermittedError(BriefNotProducedError):
+    """The author may no longer capture a brief, as read again after the model call (G-R3-1 F-3):
+    their membership is gone or their role is no longer an editor's. Nothing is stored; 403
+    ``permission_denied``, with the tenant context's or the editors' gate's own message.
+
+    A :class:`BriefNotProducedError`, so the route commits the session before it answers: the
+    model call was admitted and its usage rows are kept, charged once (operator, 2026-11-20: "do
+    not invent refunds or erase usage because its output is refused")."""
+
+    status_code = 403
+    code = "permission_denied"
+
+
+#: The roles that may capture a brief, as the boundary re-reads them (G-R3-1 F-3): the route's
+#: editors (``app.briefs.routes.EDITORS``, a rank floor at MARKETER, admits exactly these three).
+CAPTURE_ROLES: frozenset[Role] = frozenset({Role.OWNER, Role.ADMIN, Role.MARKETER})
+#: The tenant context's answer to a non-member (``app.auth.dependencies``).
+NOT_A_MEMBER = "You are not a member of this organization."
 
 
 class BriefJurisdictionUnresolvedError(ValidationDomainError):
@@ -348,6 +384,41 @@ def _meter(db: Session, settings: Settings, opportunity: Opportunity) -> LLMMete
     )
 
 
+def _reread_author_role(db: Session, opportunity: Opportunity, author: User) -> None:
+    """The author's membership and role as they stand now, read again after the model call and
+    before the brief is stored (G-R3-1 F-3: "revalidate the author's required workspace membership
+    and generation authorization under appropriate protection"). Raises
+    :class:`BriefAuthorNotPermittedError` (403) unless the membership exists and its role is in
+    :data:`CAPTURE_ROLES`.
+
+    PostgreSQL: the author's ``users`` row, then the organization, ``KEY SHARE`` (a decision's
+    steps 1 and 2, in that order: the same rows, modes and order the brief's own insert takes
+    through its foreign keys), held to commit; then the role, with no lock of its own
+    (:func:`app.approvals.service.member_role_select`): every membership writer locks the
+    organization ``FOR UPDATE`` first, so a removal or demotion either committed before the
+    organization lock was granted and is read here, or waits until the brief has committed. Taken
+    before the opportunity lock, after the model call: nothing is held across the call. SQLite:
+    the writer lock, held since the meter's first write (the usage rows, right after the call), or
+    taken here if nothing was written; a membership writer meets it at its first write."""
+    hold_sqlite_writer_lock(db)
+    db.execute(approver_user_lock_select(author.id))
+    db.execute(approver_organization_lock_select(opportunity.organization_id))
+    stored = db.execute(member_role_select(opportunity.organization_id, author.id)).scalar()
+    role = None if stored is None else Role(stored)
+    if role is None or role not in CAPTURE_ROLES:
+        log_event(
+            logger,
+            "recommendation_brief_not_generated",
+            outcome="refused",
+            workspace_id=opportunity.workspace_id,
+            opportunity_id=opportunity.id,
+            reason="author_not_a_member" if role is None else "author_role_not_permitted",
+        )
+        if role is None:
+            raise BriefAuthorNotPermittedError(NOT_A_MEMBER)
+        raise BriefAuthorNotPermittedError(f"Role '{role.value}' is not permitted for this action.")
+
+
 def _next_version(db: Session, opportunity: Opportunity) -> tuple[int, str | None]:
     """``(brief_version, parent_brief_id)`` for a new brief, under the opportunity's lock."""
     # Serialize captures for one opportunity: lock its row (READ COMMITTED on PostgreSQL)
@@ -387,8 +458,9 @@ def create_brief(
     :class:`BriefJurisdictionUnresolvedError` (the record's existing location is not the
     workspace's or did not resolve; raised before any budget check or model call; a record
     with no location is not refused, its brief's ``jurisdiction_code`` is ``NULL``), and
-    :class:`BriefNotProducedError` subclasses (budget, model failure, withheld output, a
-    concurrent capture that took the version).
+    :class:`BriefNotProducedError` subclasses (budget, model failure, withheld output, the author
+    no longer a member or no longer an editor when re-read after the model call, a concurrent
+    capture that took the version).
     """
     record = intelligence_record
     if (
@@ -483,6 +555,9 @@ def create_brief(
     if usage_event_id is not None and db.get(LLMUsageEvent, usage_event_id) is None:
         usage_event_id = None
 
+    # G-R3-1 F-3: the author's membership and role, read again under protection, after the model
+    # call and before the opportunity lock and the insert.
+    _reread_author_role(db, opportunity, author)
     version, parent_id = _next_version(db, opportunity)
     brief = RecommendationBrief(
         organization_id=opportunity.organization_id,
@@ -558,7 +633,10 @@ def create_brief(
 
 __all__ = [
     "BRIEF_TASK",
+    "CAPTURE_ROLES",
     "JURISDICTION_UNRESOLVED_MESSAGE",
+    "NOT_A_MEMBER",
+    "BriefAuthorNotPermittedError",
     "BriefBudgetExhaustedError",
     "BriefGenerationUnavailableError",
     "BriefJurisdictionUnresolvedError",

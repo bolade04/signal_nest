@@ -73,7 +73,7 @@ def factory() -> Iterator[sessionmaker]:  # pragma: no cover - gated on PostgreS
 def _seed(make) -> None:  # pragma: no cover - gated on PostgreSQL
     from app.brands.models import Brand
     from app.locations.models import BusinessLocation
-    from app.organizations.models import Organization, Workspace
+    from app.organizations.models import Organization, OrganizationMember, Workspace
     from app.scouting_requests.models import ScoutRequest
     from app.signals.models import NormalizedSignal, RawSignal
 
@@ -82,6 +82,8 @@ def _seed(make) -> None:  # pragma: no cover - gated on PostgreSQL
         s.add(User(id="author-p", email="author@example.com", full_name="Author P",
                    hashed_password="x", is_active=True))
         s.flush()
+        # A real capture's author is an editor member (G-R3-1 F-3's re-read requires it).
+        s.add(OrganizationMember(organization_id="org-p", user_id="author-p", role="marketer"))
         s.add(Workspace(id="ws-p", organization_id="org-p", name="P", slug="ws-p"))
         s.flush()
         s.add(Brand(id="br-p", organization_id="org-p", workspace_id="ws-p", name="B"))
