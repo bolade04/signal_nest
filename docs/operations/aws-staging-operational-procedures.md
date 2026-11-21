@@ -319,8 +319,11 @@ bound rests on (stated in `app.llm.bound`); tiered or long-context input
 pricing (a request whose input bound exceeds the single-tier threshold is not
 made unless the schedule names the tier price); calls made outside the metered
 service (E6 probe); budget changes mid-month lowering below already-reserved
-amounts; SQLite, where the guarantee degrades to per-session (documented,
-tests pin the degraded behaviour).*
+amounts; SQLite wherever a Scout run (or the replay seed) spends, where the
+guarantee degrades to per-session (documented, tests pin the degraded
+behaviour); the brief capture and creative generation reserve first on SQLite
+(O-F123-2, Design B), and there a request-path reservation is expired only by
+a worker's sweep.*
 
 **The cost basis (`app.llm.bound.worst_case_cost`).** A call's worst case is a
 pure function of the request body exactly as the transport sends it (the
@@ -416,8 +419,11 @@ where it lives in the code, `app.llm.metering`, `app.llm.bound` and
    `app.llm.service`) are not in the ledger;
 3. a budget lowered mid-month below the amount already reserved is not
    retroactive: nothing is un-reserved, further reservations are refused;
-4. SQLite keeps the per-session behaviour (two runs bound before either
-   commits can together exceed the budget); the hard ceiling is PostgreSQL-only;
+4. on SQLite a Scout run (and the replay seed) keeps the per-session behaviour
+   (two runs bound before either commits can together exceed the budget), so
+   the hard ceiling is PostgreSQL-only; the brief capture and creative
+   generation reserve first on SQLite (O-F123-2, Design B), and there a
+   request-path reservation is expired only by a worker's sweep;
 5. a reply whose usage exceeds its bound (premise failure) is charged the bound,
    not the usage: the ledger stays within the budget and `bound_violations`
    says the invoice may exceed it;

@@ -47,12 +47,14 @@ both are programming errors and end the job non-retryably. A
 rows, the daily ceilings) and the output limit is
 ``min(llm_max_output_tokens, llm_max_output_tokens_per_call)``. The inputs are stored context
 only — the brief's text, the brand voice, the workspace's **active** approved claims and
-required disclaimers — never caller free text. Every model attempt's usage row is kept even
-when no draft results: with the mock on PostgreSQL the worker re-writes it after a rollback;
-with a priced provider on PostgreSQL, and with every provider on SQLite (O-F123-2, Design B),
-the attempt is reserved before the call and settled after it in transactions of their own, and
-on SQLite an attempt whose reservation cannot commit is not sent (``TRANSIENT``
-``model_unavailable``, retried).
+required disclaimers — never caller free text. Every model attempt is recorded even when no
+draft results: with the mock on PostgreSQL the worker re-writes it after a rollback; with a
+priced provider on PostgreSQL, and with every provider on SQLite (O-F123-2, Design B), the
+attempt is reserved before the call and settled after it in transactions of their own, and on
+SQLite an attempt whose reservation cannot commit is not sent (``TRANSIENT``
+``model_unavailable``, retried); on SQLite (and with a priced provider on PostgreSQL) an attempt
+whose settlement cannot commit is recorded by its reservation alone, charged at its worst case
+by recovery, with no usage row.
 
 **Screened, then reviewed.** The output is put in its persisted form and screened
 (:func:`app.llm.screening.screen_creative`): a link, contact detail, markup, instruction
