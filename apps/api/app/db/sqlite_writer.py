@@ -26,9 +26,10 @@ once, and the caller's transaction holds it until it commits or rolls back. Its 
   brief's approval, a deletion or an erasure is either committed and read by the decision, or
   waits until the decision has committed;
 * :func:`app.creative.service.execute_generation` and :func:`app.briefs.service.create_brief`
-  (G-R3-1 F-2 and F-3), after the model call and before the re-read their write rests on (the
-  parent brief's approval; the author's membership and role), so a withdrawal, a removal or a
-  demotion is either committed and read, or waits until the draft or the brief has committed.
+  (G-R3-1 F-2 and F-3; O-F123-1), after the model call and before the re-reads their write rests
+  on (the parent brief's approval, then the requester's membership and role; the author's
+  membership and role), so a withdrawal, a removal or a demotion is either committed and read, or
+  waits until the draft or the brief has committed.
 
 **The caller's transaction must not be open yet**, for the export, the erasures and the
 decisions: on each of their real entry points it is not (no statement before the call writes or

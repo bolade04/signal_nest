@@ -29,7 +29,10 @@ it stands when the job's turn comes; app.llm.quota):
   a withdrawal committed during the call refuses the draft the same way (``brief_not_approved``)
   and keeps the call's usage rows;
 * a revision's parent is a draft of the same brief and workspace;
-* the requester is still a workspace editor (owner, admin or marketer);
+* the requester is still a workspace editor (owner, admin or marketer). Their membership and role
+  are read again after the model call, before the draft is stored, under the same protection as
+  the approval (O-F123-1; "Versions" below), so a removal or a demotion committed during the call
+  refuses the draft the same way (``requester_not_permitted``) and keeps the call's usage rows;
 * every generation ceiling is configured — a finite number greater than 0 — and none would be
   breached (:mod:`app.llm.quota`; refused while any is unset or unusable), checked under the
   global and workspace generation locks before every provider attempt.
@@ -85,10 +88,17 @@ controlling decision on the exact ``(brief id, brief_version)`` the job loaded i
 either committed before the lock was granted, and the draft is refused (``VALIDATION``
 ``brief_not_approved``, the job ``failed``), or waits until the draft has committed, which then
 stands as written. A newer version of the brief changes nothing here: the approval read is the
-exact parent version's. On SQLite the brief lock is a plain read; the attempt's transaction holds
-the database's writer lock from its first write (the meter's usage rows, right after the call;
-:func:`app.db.sqlite_writer.hold_sqlite_writer_lock` takes it if nothing was written), and a brief
-decision takes it before its reads.
+exact parent version's. Then the requester's membership role is read again (O-F123-1), a column
+read with no lock of its own, before the insert: on PostgreSQL the job has held the organization
+``KEY SHARE`` since before the call, and every membership writer locks the organization ``FOR
+UPDATE`` first, so a removal or demotion requested during the call waits until the draft has
+committed and the read finds what the gate read; on SQLite nothing is held during the call, so a
+removal or demotion committed then is read here and refuses the draft (``AUTHORIZATION``
+``requester_not_permitted``, the job ``failed``), and one that comes later waits until the draft has
+committed, which then stands as written. On SQLite the brief lock is a plain read; the attempt's
+transaction holds the database's writer lock from its first write (the meter's usage rows, right
+after the call; :func:`app.db.sqlite_writer.hold_sqlite_writer_lock` takes it if nothing was
+written), a brief decision takes it before its reads, and a membership writer at its first write.
 
 **Audited in the same transaction**: ``creative_draft.created`` with ids, versions and flags
 only (no generated text, no author identity beyond the actor column).
@@ -676,6 +686,25 @@ def _requester(db: Session, organization_id: str, user_id: str) -> User:
     return user
 
 
+def _requester_still_permitted(db: Session, organization_id: str, user_id: str) -> bool:
+    """Whether the requester is still a member of the job's organization with a role in
+    :data:`GENERATOR_ROLES`, as committed now (O-F123-1: "protect the generation requester's
+    current membership and authorization at the final draft-write boundary").
+
+    Called after the model call, at the final boundary (``execute_generation``), where it is
+    protected: on PostgreSQL by the organization ``KEY SHARE`` held since the generation locks
+    (every membership writer locks the organization ``FOR UPDATE`` first), on SQLite by the
+    database's writer lock the attempt holds from its first write. The same column read as
+    :func:`_requester`'s, with no lock of its own; a deleted account has no membership left."""
+    role = db.scalar(
+        select(OrganizationMember.role).where(
+            OrganizationMember.organization_id == organization_id,
+            OrganizationMember.user_id == user_id,
+        )
+    )
+    return role is not None and Role(role) in GENERATOR_ROLES
+
+
 def _existing_usage_event(db: Session, usage_event_id: str | None) -> str | None:
     """The usage-ledger row of the attempt that produced the output, as the LLM service names
     it (``response.usage_event_id``, pre-assigned by the meter, Phase 5A) — once it exists
@@ -817,6 +846,13 @@ def execute_generation(
     if not brief_is_approved(db, brief):
         _log_not_generated(ws_id, brief.id, "refused", "brief_not_approved")
         raise _fail(JobErrorCode.VALIDATION, "brief_not_approved")
+    # O-F123-1: the requester's membership and role, read again under the same protection, after
+    # the model call and before the draft is stored. A removal or demotion committed first refuses
+    # the draft with the gate's own refusal; the admitted call's usage rows are kept by the
+    # after-rollback write, once. No lock of its own: nothing new is held, on either engine.
+    if not _requester_still_permitted(db, org_id, payload.requested_by):
+        _log_not_generated(ws_id, brief.id, "refused", "requester_not_permitted")
+        raise _fail(JobErrorCode.AUTHORIZATION, "requester_not_permitted")
     usage = response.usage
     draft = CreativeDraft(
         organization_id=org_id,
