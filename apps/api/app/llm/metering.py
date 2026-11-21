@@ -49,11 +49,13 @@ overhead constants the bound rests on (stated in `app.llm.bound`); tiered or lon
 context input pricing (a request whose input bound exceeds the single-tier threshold
 is not made unless the schedule names the tier price); calls made outside the metered
 service (E6 probe); budget changes mid-month lowering below already-reserved amounts;
-SQLite, where the guarantee degrades to per-session (documented, tests pin the
-degraded behaviour).
+SQLite wherever a Scout run spends, where the guarantee degrades to per-session
+(documented, tests pin the degraded behaviour; the brief capture and creative
+generation reserve first there, below).
 
 **How.** With a session factory (the durable worker gives the meter one) on a
-PostgreSQL bind, the meter runs the *shared-ledger* path: before every provider
+PostgreSQL bind, and on SQLite for a meter built ``reserve_first_on_sqlite`` (below),
+the meter runs the *shared-ledger* path: before every provider
 call it reserves the call's worst case in a short transaction of its own, on a
 second session, with one conditional ``UPDATE`` of the workspace's
 ``llm_budget_periods`` row (``reserved_usd + w <= budget``). The reservation is
@@ -115,17 +117,35 @@ its workspace or organization deleted writes nothing: it logs and counts
 (``llm_settlements_orphaned_total``), and never recreates a period, reservation or usage
 row.
 
-**SQLite (and any meter without a session factory): the same-session path.** A
-second connection cannot reserve while the run's own session holds the database's
-single write lock, so there the meter keeps today's behaviour: it reads committed
-month-to-date spend once, when it starts, checks ``month_to_date + spent + w <=
-budget`` in memory before each call, and writes its rows at run end in the run's
-transaction (usage rows, plus already-settled reservation rows and the period row
-so the ledger has the same shape on both dialects). Runs in flight together see
-each other's spend only once committed: with N such runs of one workspace the
-month can be exceeded by up to (N - 1) x the remainder each read at its start, plus
-one attempt's estimate error each. That is the per-session guarantee the SQLite
-tests pin; it is not the PostgreSQL guarantee.
+**SQLite: the same-session path for a Scout run (and any meter without a session
+factory).** A second connection cannot reserve while the run's own session holds the
+database's single write lock, and a Scout run's session takes it at its first write,
+before its first model call. So there the meter keeps the same-session behaviour: it
+reads committed month-to-date spend once, when it starts, checks ``month_to_date +
+spent + w <= budget`` in memory before each call, and writes its rows at run end in the
+run's transaction (usage rows, plus already-settled reservation rows and the period row
+so the ledger has the same shape on both dialects). Runs in flight together see each
+other's spend only once committed: with N such runs of one workspace the month can be
+exceeded by up to (N - 1) x the remainder each read at its start, plus one attempt's
+estimate error each. That is the per-session guarantee the SQLite tests pin; it is not
+the PostgreSQL guarantee.
+
+**SQLite: the brief capture and creative generation reserve first** (O-F123-2, Design B;
+the operator's answer of 2026-11-21: "Design B: reserve first"). Their sessions write
+nothing before the model call, so their meters (``reserve_first_on_sqlite``) take the
+shared-ledger path on SQLite too, the mock included: before every attempt its worst case
+(0 for the mock, whose reservation no budget refuses) is reserved and committed in a
+short transaction of its own on a second connection; if that reservation cannot commit
+within the busy timeout, the attempt is refused before the call is sent
+(:class:`~app.llm.base.LLMUnavailableError`, which the capture answers 503
+``brief_generation_unavailable`` and the generation job ``model_unavailable``, retried).
+After the call the reservation is settled, and the usage row written, in another short
+transaction; a reservation that cannot settle stays at its worst case and recovery
+charges it at that (below). This is an accounting-policy change for SQLite, for those two
+paths only: the month's consumed budget is the sum of reserved worst cases, as on
+PostgreSQL; a contended settlement is charged its worst case; mock calls have
+reservation rows. With the mock on PostgreSQL nothing changes: it is not reserved, and its
+rows are written by :meth:`LLMMeter.flush` in the caller's transaction.
 
 Failed attempts (same-session path): a run's rows are written in its own
 transaction. On the durable worker path they are also re-written after an attempt's
@@ -161,13 +181,20 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.errors import SignalNestError
 from app.core.logging import get_logger
 from app.llm import budget as ledger
-from app.llm.base import LLMError, LLMMalformedError, LLMResponse, LLMTimeoutError
+from app.llm.base import (
+    LLMError,
+    LLMMalformedError,
+    LLMResponse,
+    LLMTimeoutError,
+    LLMUnavailableError,
+)
 from app.llm.bound import Unbounded, worst_case_cost
 from app.llm.models import LLMUsageEvent
 
@@ -274,9 +301,14 @@ class LLMMeter:
     Bound to its workspace once the run has loaded its scout request. Two paths:
 
     * **Shared ledger** (``session_factory`` given and the bind is PostgreSQL, or
-      ``shared_ledger=True``): each call is reserved before it is made and settled
+      ``shared_ledger=True``, or the bind is SQLite and the meter was built
+      ``reserve_first_on_sqlite``): each call is reserved before it is made and settled
       after it, each in a short transaction of its own on a session from the factory;
       the usage row is written at settlement. :meth:`flush` then has nothing to write.
+      Built ``reserve_first_on_sqlite`` (the brief capture and creative generation,
+      O-F123-2 Design B), on SQLite the mock is reserved too, at 0 and with no budget
+      condition, and a reservation that cannot commit refuses the attempt before the
+      call with :class:`~app.llm.base.LLMUnavailableError`.
     * **Same session** (otherwise): attempts are kept in memory and written by
       :meth:`flush` in the run's own transaction. On the durable worker path
       (``app.jobs.handlers.execute_scout_request``), :meth:`flush` is also registered
@@ -303,6 +335,7 @@ class LLMMeter:
         attempt: int = 0,
         session_factory: SessionFactory | None = None,
         shared_ledger: bool | None = None,
+        reserve_first_on_sqlite: bool = False,
     ):
         self.settings = settings
         #: The durable job this run is. Its earlier attempts' usage rows count
@@ -316,6 +349,10 @@ class LLMMeter:
         #: (tests pin both paths on SQLite).
         self._shared_requested = shared_ledger
         self._shared = False
+        #: O-F123-2, Design B: on a SQLite bind, reserve every attempt (the mock at 0) in a
+        #: transaction of its own before the call. Decided at bind (``_reserve_first``).
+        self._reserve_first_on_sqlite = reserve_first_on_sqlite
+        self._reserve_first = False
         #: Off the worker path there is no job id: a per-meter token keys the attempts.
         self._run_key = job_id or f"run-{uuid.uuid4().hex}"
         #: The reservation awaiting settlement: (attempt_key, worst case) or None.
@@ -372,6 +409,13 @@ class LLMMeter:
             shared = (
                 self._session_factory is not None and db.get_bind().dialect.name == "postgresql"
             )
+        reserve_first = (
+            self._reserve_first_on_sqlite
+            and self._session_factory is not None
+            and db.get_bind().dialect.name == "sqlite"
+        )
+        if reserve_first:
+            shared = True
         if shared and self._session_factory is None:
             raise LLMMeterBindingError("a shared-ledger meter needs a session factory")
         # Read everything first, so a failing query leaves the meter unbound.
@@ -401,6 +445,7 @@ class LLMMeter:
         self.prior_attempts = prior_attempts
         self.attempts = prior_attempts
         self._shared = bool(shared)
+        self._reserve_first = reserve_first
         self._bound = True
         return self
 
@@ -506,6 +551,10 @@ class LLMMeter:
                 if admission is not None:
                     self._admitted = (admission, admission.admit_external("model")[0])
             self._worst = worst
+        elif self._reserve_first:
+            # O-F123-2, Design B (SQLite): the mock is reserved too, at 0 and with no budget
+            # condition (the mock is never limited), so its call has a record before it is sent.
+            self._reserve(Decimal(0), None, admission)
         elif admission is not None:
             # The mock is never reserved: its admission is a short transaction of its own.
             self._admitted = (admission, admission.admit_external("model")[0])
@@ -520,7 +569,14 @@ class LLMMeter:
             return None
         return admission
 
-    def _reserve(self, worst: Decimal, budget: Decimal, admission=None) -> None:
+    def _reserve(self, worst: Decimal, budget: Decimal | None, admission=None) -> None:
+        """Reserve this attempt's ``worst`` in a transaction of its own (see the module
+        docstring). ``budget`` ``None``: no budget condition (the mock on SQLite's
+        reserve-first path, which a vanished tenant leaves unreserved rather than refused).
+
+        On the reserve-first path (SQLite, O-F123-2 Design B) a reservation that cannot be
+        committed (``database is locked`` past the busy timeout) refuses the attempt before
+        the call is sent: :class:`~app.llm.base.LLMUnavailableError`."""
         assert self._workspace_id is not None and self._organization_id is not None
         key = self.attempt_key(self.attempts - self.prior_attempts)
         now = datetime.now(UTC)
@@ -539,7 +595,19 @@ class LLMMeter:
             )
 
         if admission is None:
-            reserved = self._in_own_transaction(reserve)
+            try:
+                reserved = self._in_own_transaction(reserve)
+            except OperationalError as exc:
+                if not self._reserve_first:
+                    raise
+                logger.warning(
+                    "llm.reservation_unavailable",
+                    extra={"extra_fields": {"error_class": type(exc).__name__}},
+                )
+                raise LLMUnavailableError(
+                    "The call's reservation could not be committed (the database is busy), "
+                    "so the call was not sent."
+                ) from None
         else:
             # Lock order: job, request (the admission's FOR SHARE), ledger row, then the
             # period row (``ledger.reserve``). Admission, ledger row and reservation commit
@@ -558,6 +626,8 @@ class LLMMeter:
             else:
                 self._admitted = (admission, admission_id)
         if not reserved:
+            if budget is None:
+                return  # the mock's tenant is gone: nothing reserved, nothing refused
             self._refuse("workspace_budget")
         self._pending = (key, worst)
 

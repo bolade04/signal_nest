@@ -48,7 +48,11 @@ rows, the daily ceilings) and the output limit is
 ``min(llm_max_output_tokens, llm_max_output_tokens_per_call)``. The inputs are stored context
 only — the brief's text, the brand voice, the workspace's **active** approved claims and
 required disclaimers — never caller free text. Every model attempt's usage row is kept even
-when no draft results (the worker re-writes them after a rollback).
+when no draft results: with the mock on PostgreSQL the worker re-writes it after a rollback;
+with a priced provider on PostgreSQL, and with every provider on SQLite (O-F123-2, Design B),
+the attempt is reserved before the call and settled after it in transactions of their own, and
+on SQLite an attempt whose reservation cannot commit is not sent (``TRANSIENT``
+``model_unavailable``, retried).
 
 **Screened, then reviewed.** The output is put in its persisted form and screened
 (:func:`app.llm.screening.screen_creative`): a link, contact detail, markup, instruction
@@ -96,9 +100,10 @@ committed and the read finds what the gate read; on SQLite nothing is held durin
 removal or demotion committed then is read here and refuses the draft (``AUTHORIZATION``
 ``requester_not_permitted``, the job ``failed``), and one that comes later waits until the draft has
 committed, which then stands as written. On SQLite the brief lock is a plain read; the attempt's
-transaction holds the database's writer lock from its first write (the meter's usage rows, right
-after the call; :func:`app.db.sqlite_writer.hold_sqlite_writer_lock` takes it if nothing was
-written), a brief decision takes it before its reads, and a membership writer at its first write.
+transaction takes the database's writer lock at :func:`app.db.sqlite_writer.hold_sqlite_writer_lock`
+(``BEGIN IMMEDIATE``), right before version allocation, having written nothing before (the meter
+reserves and settles each call in transactions of its own, O-F123-2 Design B); a brief decision
+takes it before its reads, and a membership writer at its first write.
 
 **Audited in the same transaction**: ``creative_draft.created`` with ids, versions and flags
 only (no generated text, no author identity beyond the actor column).
@@ -694,7 +699,8 @@ def _requester_still_permitted(db: Session, organization_id: str, user_id: str) 
     Called after the model call, at the final boundary (``execute_generation``), where it is
     protected: on PostgreSQL by the organization ``KEY SHARE`` held since the generation locks
     (every membership writer locks the organization ``FOR UPDATE`` first), on SQLite by the
-    database's writer lock the attempt holds from its first write. The same column read as
+    database's writer lock the attempt takes before version allocation
+    (:func:`app.db.sqlite_writer.hold_sqlite_writer_lock`). The same column read as
     :func:`_requester`'s, with no lock of its own; a deleted account has no membership left."""
     role = db.scalar(
         select(OrganizationMember.role).where(
@@ -708,8 +714,8 @@ def _requester_still_permitted(db: Session, organization_id: str, user_id: str) 
 def _existing_usage_event(db: Session, usage_event_id: str | None) -> str | None:
     """The usage-ledger row of the attempt that produced the output, as the LLM service names
     it (``response.usage_event_id``, pre-assigned by the meter, Phase 5A) — once it exists
-    (settled on PostgreSQL, flushed on SQLite); a row a vanished tenant prevented is not
-    referenced."""
+    (settled in its own transaction; flushed with the mock on PostgreSQL); a row a vanished
+    tenant prevented is not referenced."""
     if usage_event_id is None or db.get(LLMUsageEvent, usage_event_id) is None:
         return None
     return usage_event_id
@@ -790,6 +796,7 @@ def execute_generation(
         session_factory=sessionmaker(
             bind=db.get_bind(), autoflush=False, expire_on_commit=False, future=True
         ),
+        reserve_first_on_sqlite=True,
     ).bind(db, organization_id=org_id, workspace_id=ws_id, scout_request_id=None)
     ctx.after_rollback.append(meter.flush)
     try:
@@ -837,10 +844,11 @@ def execute_generation(
 
     # G-R3-1 F-2: before the draft is stored, the exact parent version's approval is read again,
     # under the brief row's lock (PostgreSQL: version allocation's FOR UPDATE, which a brief
-    # decision also takes before it reads) or the writer lock (SQLite: held since the meter's first
-    # write above; the call sends BEGIN IMMEDIATE only if the meter wrote nothing). A withdrawal
-    # committed first refuses the draft with the gate's own refusal; the admitted call's usage
-    # rows are kept by the after-rollback write. No lock is held across the model call by this.
+    # decision also takes before it reads) or the writer lock (SQLite: taken here with BEGIN
+    # IMMEDIATE; the meter's rows are in transactions of their own, O-F123-2 Design B). A
+    # withdrawal committed first refuses the draft with the gate's own refusal; the admitted
+    # call's usage rows are kept (committed at settlement, or, with the mock on PostgreSQL, by the
+    # after-rollback write). No lock is held across the model call by this.
     hold_sqlite_writer_lock(db)
     version = _next_version(db, brief)
     if not brief_is_approved(db, brief):
@@ -848,8 +856,8 @@ def execute_generation(
         raise _fail(JobErrorCode.VALIDATION, "brief_not_approved")
     # O-F123-1: the requester's membership and role, read again under the same protection, after
     # the model call and before the draft is stored. A removal or demotion committed first refuses
-    # the draft with the gate's own refusal; the admitted call's usage rows are kept by the
-    # after-rollback write, once. No lock of its own: nothing new is held, on either engine.
+    # the draft with the gate's own refusal; the admitted call's usage rows are kept once (as for
+    # F-2's refusal). No lock of its own: nothing new is held, on either engine.
     if not _requester_still_permitted(db, org_id, payload.requested_by):
         _log_not_generated(ws_id, brief.id, "refused", "requester_not_permitted")
         raise _fail(JobErrorCode.AUTHORIZATION, "requester_not_permitted")

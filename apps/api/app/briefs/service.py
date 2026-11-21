@@ -83,9 +83,14 @@ record id, then the opportunity's validation-evidence ids (pointers, never copie
 its audience). List items longer than the frozen item bound (500 characters; the screen
 admits up to 600 per text field) are capped with an ellipsis, never withheld.
 
-Failed model calls are still accounted for: when no brief can be produced the meter's usage
-rows are in the caller's session (``meter.flush``) and the route commits them before it
-answers, so spend is never lost with the error (:class:`BriefNotProducedError`).
+Failed model calls are still accounted for. With the mock on PostgreSQL the meter's usage rows
+are in the caller's session (``meter.flush``) and the route commits them before it answers, so
+spend is never lost with the error (:class:`BriefNotProducedError`). With a priced provider on
+PostgreSQL, and with every provider on SQLite (O-F123-2, Design B), each call is reserved before
+it is sent and settled after it in transactions of their own, so its record does not depend on
+the request's commit; on SQLite a call whose reservation cannot commit within the busy timeout
+is not sent (503 ``brief_generation_unavailable``), and one whose settlement cannot commit is
+charged its worst case by recovery.
 
 Transaction ownership follows the house rule: this service flushes; the caller commits.
 """
@@ -372,11 +377,13 @@ def _meter(db: Session, settings: Settings, opportunity: Opportunity) -> LLMMete
     """A meter for this one capture, bound to the opportunity's tenant.
 
     The session factory is built from the request's own bind (the durable handler's
-    pattern), so on PostgreSQL the shared ledger reserves and settles in short transactions
-    of its own and on SQLite the usage rows join the request's transaction at ``flush``.
+    pattern), so the shared ledger reserves and settles in short transactions of its own: on
+    PostgreSQL for a priced provider, and on SQLite for every provider, the mock at 0
+    (``reserve_first_on_sqlite``, O-F123-2 Design B). Only the mock on PostgreSQL writes its
+    usage rows into the request's transaction, at ``flush``.
     """
     factory = sessionmaker(bind=db.get_bind(), autoflush=False, expire_on_commit=False, future=True)
-    return LLMMeter(settings, session_factory=factory).bind(
+    return LLMMeter(settings, session_factory=factory, reserve_first_on_sqlite=True).bind(
         db,
         organization_id=opportunity.organization_id,
         workspace_id=opportunity.workspace_id,
@@ -398,8 +405,9 @@ def _reread_author_role(db: Session, opportunity: Opportunity, author: User) -> 
     organization ``FOR UPDATE`` first, so a removal or demotion either committed before the
     organization lock was granted and is read here, or waits until the brief has committed. Taken
     before the opportunity lock, after the model call: nothing is held across the call. SQLite:
-    the writer lock, held since the meter's first write (the usage rows, right after the call), or
-    taken here if nothing was written; a membership writer meets it at its first write."""
+    the writer lock, taken here (``BEGIN IMMEDIATE``): the meter reserves and settles the call in
+    transactions of its own (O-F123-2, Design B), so the request has written nothing yet; a
+    membership writer meets it at its first write."""
     hold_sqlite_writer_lock(db)
     db.execute(approver_user_lock_select(author.id))
     db.execute(approver_organization_lock_select(opportunity.organization_id))
@@ -549,8 +557,8 @@ def create_brief(
         screened.output, screened.warnings, _evidence_refs(db, opportunity, record.id)
     )
 
-    # The usage row exists by now (settled on PostgreSQL, flushed on SQLite); a row a
-    # vanished tenant prevented is not referenced.
+    # The usage row exists by now (settled in its own transaction; flushed with the mock on
+    # PostgreSQL); a row a vanished tenant prevented is not referenced.
     usage_event_id = response.usage_event_id
     if usage_event_id is not None and db.get(LLMUsageEvent, usage_event_id) is None:
         usage_event_id = None

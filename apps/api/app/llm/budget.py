@@ -41,9 +41,11 @@ reserved call, keyed by attempt).
   stays the charge, so ``reserved_usd`` never exceeds the budget. A settlement for a
   reservation whose workspace or organization was deleted only logs and counts
   (``llm_settlements_orphaned_total``); it never recreates a row.
-* :func:`record_settled` - the same-session path (SQLite, or no session factory):
-  writes a reservation row that is already settled, plus the period and usage rows,
-  idempotently per attempt key. Nothing precedes the call on this path.
+* :func:`record_settled` - the same-session path (a Scout run on SQLite, or no session
+  factory): writes a reservation row that is already settled, plus the period and usage
+  rows, idempotently per attempt key. Nothing precedes the call on this path. The brief
+  capture and creative generation reserve first on SQLite too (O-F123-2, Design B;
+  :mod:`app.llm.metering`), through :func:`reserve` and :func:`settle`.
 * :func:`release_for_job`, :func:`release_expired`, :func:`release_terminal` and
   :func:`sweep` - recovery. The expiry sweep leaves a reservation alone while its job
   still holds a live lease (``jobs.lease_expires_at`` in the future on a claimed or
@@ -275,7 +277,7 @@ def reserve(
     job_id: str | None,
     attempt_key: str,
     worst_usd: Decimal,
-    budget_usd: Decimal,
+    budget_usd: Decimal | None,
     expires_at: datetime,
     now: datetime,
 ) -> bool:
@@ -284,6 +286,8 @@ def reserve(
     Returns ``True`` with the reservation row added (``reserved``) when the period's
     ``reserved_usd + worst_usd <= budget_usd`` held at the moment of the update;
     ``False``, with nothing changed, otherwise. The caller commits (or rolls back).
+    ``budget_usd`` ``None`` reserves with no budget condition: only a mock call on SQLite's
+    reserve-first path passes it (O-F123-2, Design B; the mock is never limited).
     """
     period_start = period_start_for(now)
     if not _parent_exists(db, workspace_id, organization_id):
@@ -296,13 +300,15 @@ def reserve(
         period_start=period_start,
         now=now,
     )
+    conditions = [
+        LLMBudgetPeriod.workspace_id == workspace_id,
+        LLMBudgetPeriod.period_start == period_start,
+    ]
+    if budget_usd is not None:
+        conditions.append(LLMBudgetPeriod.reserved_usd + worst_usd <= budget_usd)
     result = db.execute(
         update(LLMBudgetPeriod)
-        .where(
-            LLMBudgetPeriod.workspace_id == workspace_id,
-            LLMBudgetPeriod.period_start == period_start,
-            LLMBudgetPeriod.reserved_usd + worst_usd <= budget_usd,
-        )
+        .where(*conditions)
         .values(reserved_usd=LLMBudgetPeriod.reserved_usd + worst_usd, updated_at=now),
         execution_options={"synchronize_session": False},
     )
