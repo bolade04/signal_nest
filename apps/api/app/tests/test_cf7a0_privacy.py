@@ -89,7 +89,8 @@ def test_the_retention_bindings_are_stated_and_not_yet_wired() -> None:
     }
     rooted = {model.__tablename__ for roots in _ROOTS.values() for model, _ in roots}
     assert not rooted & set(MEDIA_TABLES)
-    assert not set(MEDIA_CLASSES) & set(_ROOTS)
+    # A media class purges no table yet (M0-B binds the roots with the object erasure).
+    assert all(_ROOTS.get(data_class, ()) == () for data_class in MEDIA_CLASSES)
     with pytest.raises(TypeError):
         MEDIA_RETENTION_BINDINGS["media_assets"] = RetentionClass.AUDIT_LOGS  # read-only
 

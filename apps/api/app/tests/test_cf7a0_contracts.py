@@ -93,21 +93,16 @@ def test_no_route_serves_a_media_surface() -> None:
     assert not published & set(schemas.__all__)
 
 
-def test_the_schemas_module_is_imported_by_no_router() -> None:
-    importers = []
-    for path in sorted((API_DIR / "app").rglob("*.py")):
-        rel = path.relative_to(API_DIR)
-        if "tests" in rel.parts:
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module == "app.media.schemas":
-                importers.append(str(rel))
-            if isinstance(node, ast.Import) and any(
-                a.name == "app.media.schemas" for a in node.names
-            ):
-                importers.append(str(rel))
-    assert importers == []
+def test_the_router_mounts_no_media_module() -> None:
+    """The mounting point (``app/api/router.py``) imports nothing from ``app.media``: M0-A may
+    build its routes unmounted on these schemas; M0-B mounts them here, behind the flag."""
+    tree = ast.parse((API_DIR / "app" / "api" / "router.py").read_text(encoding="utf-8"))
+    imported = [
+        node.module for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module
+    ] + [a.name for node in ast.walk(tree) if isinstance(node, ast.Import) for a in node.names]
+    assert imported, "the router imports its route modules"
+    assert not [m for m in imported if m == "app.media" or m.startswith("app.media.")]
 
 
 # --------------------------------------------------------------------------- #
