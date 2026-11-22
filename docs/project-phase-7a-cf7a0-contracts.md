@@ -407,6 +407,8 @@ without a schema change except, for S-3, a `MediaObjectState` widening.
 | R-10 | Whether a workspace override may enable `media_assets` | yes, as for the Phase 5 flags (O-3's pattern) |
 | R-11 | The audit actions for M0-A (section 9) | a freeze amendment adding `media_asset.uploaded`, `media_asset.rejected`, `media_asset.url_issued` |
 | R-12 | Limitation L-1 (section 15): a media duration set before M0-B makes the sweep raise, and two existing retention tests fail on it | (a) CF-7A-0 registers both media classes in `retention.py`'s `_ROOTS` with no roots (no table is purged by them until M0-B binds roots with the object erasure; no media row can exist before M0-B mounts the routes); or (b) the media classes are registered in `RetentionClass` by M0-B with its purge, as 5E-CF declared `retention_notifications_days` before 5E-W1 registered its class (production would then not require the media durations until M0-B); or (c) a refusal status for a class with no roots, with a ruling on the two tests that assume every class purges |
+| R-13 | The PostgreSQL full-chain step-down proof (`test_postgres_migration_proof.py::test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard`) steps down one revision at a time from the head; a new head needs a new step, which is new assertions, not an exact-value update (class ruling CF7A0-1) | add CF-7A-0's step (the four media tables go, the CHECK narrows, the backstop stays), as #326 added 5E-CF's; the test fails at this head until then |
+| R-14 | `test_workspace_capability_override_migration.py::test_the_5e_cf_downgrade_refuses_while_an_override_names_the_capability` addresses 5E-CF's revision as `"head"`; naming it (`NA_WIDENING`) is the same revision at N3, so the edit does not fail against N3's product code and is outside class ruling CF7A0-1 | name the revision, as the other 5E-CF tests now do; the test fails at this head until then |
 
 ## 14. Acceptance examples this freeze serves
 
@@ -443,6 +445,8 @@ activate anything.
 5. The organization export index lists four more tables (empty).
 6. The database gains four empty tables; a downgrade below `91a796f09399` refuses while an
    override names `media_assets` or a media table holds a row.
+
+**Existing tests failing at this head, by design, pending rulings:** the two retention sweep tests (R-12), the PostgreSQL full-chain step-down proof (R-13) and the 5E-CF refusal test (R-14). Each has a trial edit, measured to pass, in the lane's evidence; none is committed without a ruling.
 
 **Limitations:**
 - **L-1.** `retention.py` has no purge roots for the media classes (M0-B's file). With a media
