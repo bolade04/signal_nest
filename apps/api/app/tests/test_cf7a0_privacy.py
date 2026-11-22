@@ -5,7 +5,10 @@
   classes; the object-storage entry exists with its layout, prefix, class and erasure duty.
 * **Retention:** ``media_uploads`` and ``media_records`` are classes with unset durations;
   production refuses to start while either is unset, staging and the migration actor do not;
-  the sweep refuses both (``policy_unset``) without opening a session.
+  the sweep refuses both (``policy_unset``) without opening a session. With a media duration
+  set (coordinator ruling CF7A0-2, R-12: the classes are listed with no purge roots until M0-B),
+  the sweep and its dry run run, purge nothing for the media classes and write no media row, on
+  SQLite and on PostgreSQL. M0-B replaces that test when it binds the real roots.
 * **Account deletion** (the attester rule, stated in the contract and holding by the keys):
   through the real route, the account's media asset and rights record are kept, with
   ``created_by`` and ``attested_by`` cleared and the rights content intact; the verifier then
@@ -17,7 +20,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import insert
@@ -34,6 +37,7 @@ from app.privacy.inventory import (
 )
 from app.privacy.retention import _ROOTS
 from app.privacy.verification import verify_organization_erased, verify_subject_erased
+from app.tests._auth2_support import require_postgres
 from app.tests._platform_support import production_vector_kwargs
 from app.tests._privacy_support import (
     ALICE,
@@ -196,8 +200,14 @@ def _media_rows(org: str, ws: str, tag: str, account: str) -> dict[str, dict]:
     }
 
 
-def _add_media(env: PrivacyEnv) -> None:
+def _add_media(env: PrivacyEnv, *, at: datetime | None = None) -> None:
     worlds = (_media_rows(ORG_A, WS_A, "a", CAROL), _media_rows(ORG_B, WS_B, "b", BOB))
+    if at is not None:  # every row created (and, where it has one, updated) at ``at``
+        for rows in worlds:
+            for key, row in rows.items():
+                row["created_at"] = at
+                if key in ("asset", "upload", "stored"):
+                    row["updated_at"] = at
     with env.engine.begin() as conn:
         for rows in worlds:
             conn.execute(insert(MediaAsset.__table__), [rows["asset"]])
@@ -270,3 +280,47 @@ def test_the_organization_export_lists_the_media_tables(env) -> None:
         rows = tables[table]["rows"]
         assert rows and {row["organization_id"] for row in rows} == {ORG_A}, table
     assert [row["id"] for row in tables["media_rights"]["rows"]] == ["cf7a0-a-rights"]
+
+
+# --------------------------------------------------------------------------- #
+# Coordinator ruling CF7A0-2 (R-12): with a media duration set, the sweep purges nothing
+# --------------------------------------------------------------------------- #
+MEDIA_MODELS = (MediaAsset, MediaObject, MediaProvenanceRecord, MediaRightsRecord)
+
+
+@pytest.fixture(params=["sqlite", "postgresql"])
+def sweep_env(request, tmp_path) -> Iterator[PrivacyEnv]:
+    if request.param == "postgresql":
+        require_postgres()
+        with privacy_world(None) as e:
+            yield e
+    else:
+        with privacy_world(tmp_path / "cf7a0-sweep.db") as e:
+            yield e
+
+
+def test_with_a_media_duration_set_the_sweep_runs_and_purges_nothing_for_media(sweep_env):
+    """Today's behaviour, pinned (ruling CF7A0-2, R-12 condition (c)): ``retention.py`` lists the
+    media classes with no purge roots, so a sweep with their durations set runs to completion,
+    selects and deletes nothing for them, and writes no media row, even rows far older than the
+    cut-off. M0-B must bind the real roots (the media tables, and the stored objects with every
+    version, per AE-M0-4) before any media route is mounted, and then replaces this test."""
+    env = sweep_env
+    _add_media(env, at=datetime.now(UTC) - timedelta(days=400))
+    before = {model.__tablename__: env.rows(model) for model in MEDIA_MODELS}
+    assert all(before.values())
+    settings = Settings(
+        _env_file=None, retention_media_uploads_days=1, retention_media_records_days=1
+    )
+
+    dry = retention.sweep(env.session, classes=MEDIA_CLASSES, settings=settings, dry_run=True)
+    assert [(o.data_class, o.status, o.candidates) for o in dry] == [
+        ("media_uploads", "dry_run", 0),
+        ("media_records", "dry_run", 0),
+    ]
+    swept = retention.sweep(env.session, classes=MEDIA_CLASSES, settings=settings)
+    assert [(o.data_class, o.status, o.complete, o.deleted) for o in swept] == [
+        ("media_uploads", "purged", True, {}),
+        ("media_records", "purged", True, {}),
+    ]
+    assert {model.__tablename__: env.rows(model) for model in MEDIA_MODELS} == before
