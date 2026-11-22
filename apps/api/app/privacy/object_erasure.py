@@ -146,6 +146,17 @@ def organization_prefix(organization_id: str) -> str:
     return require_segment(organization_id, label="organization id")
 
 
+def _unsafe(key: str) -> bool:
+    """A key with an empty, ``.`` or ``..`` segment, a backslash or a NUL: M0-B never asks a store
+    to act on one (a filesystem store could resolve it elsewhere); its scope stays incomplete."""
+    return (
+        not isinstance(key, str)
+        or "\\" in key
+        or "\x00" in key
+        or any(s in ("", ".", "..") for s in key.split("/"))
+    )
+
+
 def _parent(key: str) -> str:
     parent, _, _ = key.rpartition("/")
     return parent
@@ -211,7 +222,8 @@ class ObjectErasureReport:
     failed_deletions: int = 0
     failed_aborts: int = 0
     failed_listings: int = 0
-    #: Keys outside the scope's tenant prefix, never touched (a root kept for review).
+    #: Entries M0-B refused to act on: a root whose stored key is outside its tenant prefix, or a
+    #: listed key with an unsafe segment. Never touched; the scope stays incomplete.
     refused_keys: int = 0
     #: What the fresh listings after the deletions still found in the scope.
     remaining_versions: int = 0
@@ -349,7 +361,8 @@ def erase_scopes(
     prefixes = {p for scope in scopes.values() for p in scope.listing_prefixes()}
 
     def owner_of(key: str) -> str | None:
-        """The scope that owns ``key`` exactly, else the one with an area above it."""
+        """The scope that owns ``key`` exactly, else the one with an area above it (keys are
+        literal strings, as in S3: a key is under a prefix when it starts with ``prefix/``)."""
         if key in exact:
             return exact[key]
         parent = _parent(key)
@@ -370,6 +383,9 @@ def erase_scopes(
         name = owner_of(key)
         if name is None:
             continue  # not ours: never deleted, whatever the store returned
+        if _unsafe(key):
+            reports[name].refused_keys += 1  # ours, but never passed to the store: incomplete
+            continue
         try:
             store.delete_version(key, version_id)
         except Exception:
@@ -383,6 +399,9 @@ def erase_scopes(
     for (key, _upload_id), upload in sorted(before.uploads.items()):
         name = owner_of(key)
         if name is None:
+            continue
+        if _unsafe(key):
+            reports[name].refused_keys += 1
             continue
         try:
             store.abort_multipart_upload(upload)
