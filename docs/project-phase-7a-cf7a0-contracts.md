@@ -191,6 +191,17 @@ The authorities are in `apps/api/app/core/enums.py` (bare vocabularies, Phase 5 
   `TableEntry.retention_class` stays `None` until M0-B adds the purge roots
   (`app/privacy/retention.py`, M0-B's file) with the object erasure: the existing inventory test
   requires every class named in a `TableEntry` to have a purge root.
+- **Purge roots registered empty (coordinator ruling CF7A0-2, R-12).** `app/privacy/retention.py`
+  lists `MEDIA_UPLOADS` and `MEDIA_RECORDS` in `_ROOTS` with **no roots**: with a media duration
+  set, the sweep and its dry run run and purge nothing for the media classes, and write no
+  media row (pinned on both engines by
+  `test_cf7a0_privacy.py::test_with_a_media_duration_set_the_sweep_runs_and_purges_nothing_for_media`).
+  This is a placeholder, not a purge. **M0-B must register the media classes' real roots before
+  any media route is mounted:** the four media tables per `MEDIA_RETENTION_BINDINGS`, and, for
+  `media_uploads`, the stored objects with every object version, delete marker and in-progress
+  multipart upload (AE-M0-4). The gate test that fails while those roots are empty is `apps/api/app/tests/test_media_retention_purge.py::test_the_media_classes_have_real_roots`
+  (section 11). Until then no media table is purged by age, which is safe only because no
+  media row can be written before M0-B mounts the routes.
 - `media_intermediates` and `media_approved_packages` arrive with CF-7A-1 and CF-7A-2.
 - **No indefinite exception (MD-6).** No media class is exempt from the purge or from erasure.
 
@@ -358,7 +369,7 @@ integration checks that no new test file matches zero lists.
 
 **Authored by the M0-A lane (testing M0-B's code):**
 - `apps/api/app/tests/test_media_erasure_objects.py` — AE-M0-4 (version-aware erasure, multipart abort, report counts, organization B untouched, the attester rule)
-- `apps/api/app/tests/test_media_retention_purge.py` — AE-M0-5 (the purge refuses while unset; the bound roots; object erasure with the purge)
+- `apps/api/app/tests/test_media_retention_purge.py` — AE-M0-5 (the purge refuses while unset; the bound roots; object erasure with the purge). **M0-B's gate (ruling CF7A0-2, R-12):** it contains `test_the_media_classes_have_real_roots`, which fails while `_ROOTS[MEDIA_UPLOADS]` or `_ROOTS[MEDIA_RECORDS]` is empty or misses a table that `MEDIA_RETENTION_BINDINGS` binds to its class, and while a `media_uploads` purge leaves a stored object, any version of it or a delete marker. No media route may be mounted before it passes
 - `apps/api/app/tests/test_media_verification.py` — AE-M0-4 (`privacy/verification.py` checks the three listings independently)
 - `apps/api/app/tests/test_media_capability_gate.py` — AE-M0-6 (every mounted media route answers capability-off)
 
@@ -377,7 +388,13 @@ and `test_storage_adapter_{compat,fakes,presign,streaming,versions}.py`. The pla
 lane that changes the pinned set): `test_cross_organization_isolation.py` (every new
 customer-facing route gets a cross-organization probe in the PR that mounts it, LANE-BRIEF-COMMON
 §10), `test_auth2_leakage.py` and `test_e7_role_policy_matrix.py` (operation counts, recomputed
-from code when routes are mounted).
+from code when routes are mounted). CF-7A-0's own placeholders are replaced by M0-B when it
+binds the purge and mounts the routes:
+`test_cf7a0_privacy.py::test_with_a_media_duration_set_the_sweep_runs_and_purges_nothing_for_media`,
+`::test_the_retention_bindings_are_stated_and_not_yet_wired`,
+`::test_the_media_tables_have_their_stated_entries`, and
+`test_cf7a0_contracts.py::test_no_route_serves_a_media_surface` and
+`::test_the_router_mounts_no_media_module`.
 
 ## 12. The malware-scanning approach (proposed; the review decides)
 
@@ -411,9 +428,9 @@ without a schema change except, for S-3, a `MediaObjectState` widening.
 | R-9 | Whether `media_provenance` and `media_rights` join CF-1's append-only guard and the PostgreSQL backstop | not at CF-7A-0 (it needs edits to pinned sets beyond class ruling CF7A0-1) |
 | R-10 | Whether a workspace override may enable `media_assets` | yes, as for the Phase 5 flags (O-3's pattern) |
 | R-11 | The audit actions for M0-A (section 9) | a freeze amendment adding `media_asset.uploaded`, `media_asset.rejected`, `media_asset.url_issued` |
-| R-12 | Limitation L-1 (section 15): a media duration set before M0-B makes the sweep raise, and two existing retention tests fail on it | (a) CF-7A-0 registers both media classes in `retention.py`'s `_ROOTS` with no roots (no table is purged by them until M0-B binds roots with the object erasure; no media row can exist before M0-B mounts the routes); or (b) the media classes are registered in `RetentionClass` by M0-B with its purge, as 5E-CF declared `retention_notifications_days` before 5E-W1 registered its class (production would then not require the media durations until M0-B); or (c) a refusal status for a class with no roots, with a ruling on the two tests that assume every class purges |
-| R-13 | The PostgreSQL full-chain step-down proof (`test_postgres_migration_proof.py::test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard`) steps down one revision at a time from the head; a new head needs a new step, which is new assertions, not an exact-value update (class ruling CF7A0-1) | add CF-7A-0's step (the four media tables go, the CHECK narrows, the backstop stays), as #326 added 5E-CF's; the test fails at this head until then |
-| R-14 | `test_workspace_capability_override_migration.py::test_the_5e_cf_downgrade_refuses_while_an_override_names_the_capability` addresses 5E-CF's revision as `"head"`; naming it (`NA_WIDENING`) is the same revision at N3, so the edit does not fail against N3's product code and is outside class ruling CF7A0-1 | name the revision, as the other 5E-CF tests now do; the test fails at this head until then |
+| R-12 | **GRANTED (coordinator ruling CF7A0-2), option (a), done.** Was: limitation L-1, a media duration set before M0-B made the sweep raise, and two existing retention tests failed on it. **Review check (condition (e)):** that `retention.py` changes only by the two empty entries; that the contract obliges M0-B to register the real roots, objects and every version included, before any media route mounts (section 5); and that the ownership table names the gate test (section 11) | Options put to the ruling were: (a) CF-7A-0 registers both media classes in `retention.py`'s `_ROOTS` with no roots (no table is purged by them until M0-B binds roots with the object erasure; no media row can exist before M0-B mounts the routes); or (b) the media classes are registered in `RetentionClass` by M0-B with its purge, as 5E-CF declared `retention_notifications_days` before 5E-W1 registered its class (production would then not require the media durations until M0-B); or (c) a refusal status for a class with no roots, with a ruling on the two tests that assume every class purges |
+| R-13 | **GRANTED (coordinator ruling CF7A0-2), done:** the step for `91a796f09399` is added, new assertions only. Was: the PostgreSQL full-chain step-down proof (`test_postgres_migration_proof.py::test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard`) steps down one revision at a time from the head; a new head needs a new step, which is new assertions, not an exact-value update (class ruling CF7A0-1) | CF-7A-0's step: the four media tables go, nothing else does, the backstop stays, the spent and stale tokens are refused; every existing assertion unchanged |
+| R-14 | **GRANTED (coordinator ruling CF7A0-2, which waives the "fails at N3" condition for this edit), done.** Was: `test_workspace_capability_override_migration.py::test_the_5e_cf_downgrade_refuses_while_an_override_names_the_capability` addresses 5E-CF's revision as `"head"`; naming it (`NA_WIDENING`) is the same revision at N3, so the edit does not fail against N3's product code and is outside class ruling CF7A0-1 | the test names `53fdde95354a` (`NA_WIDENING`), as the other 5E-CF tests do |
 
 ## 14. Acceptance examples this freeze serves
 
@@ -446,23 +463,19 @@ activate anything.
 3. Production refuses to start until `RETENTION_MEDIA_UPLOADS_DAYS` and
    `RETENTION_MEDIA_RECORDS_DAYS` are set (it already refuses while any of the eight existing
    durations is unset).
-4. The retention sweep reports two more classes, `policy_unset`.
+4. The retention sweep reports two more classes: `policy_unset` while their durations are unset;
+   with a duration set, `purged` (or `dry_run`) with nothing selected or deleted, until M0-B binds
+   the roots.
 5. The organization export index lists four more tables (empty).
 6. The database gains four empty tables; a downgrade below `91a796f09399` refuses while an
    override names `media_assets` or a media table holds a row.
 
-**Existing tests failing at this head, by design, pending rulings:** the two retention sweep tests (R-12), the PostgreSQL full-chain step-down proof (R-13) and the 5E-CF refusal test (R-14). Each has a trial edit, measured to pass, in the lane's evidence; none is committed without a ruling.
-
 **Limitations:**
-- **L-1.** `retention.py` has no purge roots for the media classes (M0-B's file). With a media
-  duration set, `sweep()` raises `KeyError` at that class after the classes before it have run,
-  and deletes nothing of it; a dry run raises the same way. While the durations are unset (the
-  default, and the only state before D-7) the sweep reports `policy_unset`. Two existing tests
-  set every duration and sweep every class
-  (`test_privacy_retention.py::test_platform_classes_purge_only_rows_past_the_cutoff` and
-  `::test_dry_run_counts_and_changes_nothing`), so they fail on L-1 at this head. Neither a
-  `retention.py` change nor an edit of those tests is within CF-7A-0's brief; decision R-12 asks
-  for the ruling.
+- **L-1.** The media classes have no purge roots yet (section 5; ruling CF7A0-2, R-12). With a
+  media duration set the sweep reports the classes purged and deletes nothing for them, so media
+  retention is not enforced until M0-B binds the real roots, which it must do before any media
+  route is mounted. (Before the ruling, the sweep raised `KeyError` there, and two existing
+  retention tests failed; both pass now.)
 - **L-2.** `ck_media_object_sha256` and `ck_media_provenance_inputs_hash` check length and case,
   not that every character is hexadecimal (a portable CHECK cannot); the request schema and the
   writer do.
