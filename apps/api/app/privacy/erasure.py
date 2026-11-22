@@ -46,6 +46,18 @@ write, as :func:`app.privacy.retention.purge_batch` does. The helpers (:func:`de
 ``anonymise_*`` functions) do not mark: on a migrated PostgreSQL database they reach a guarded
 row only inside a marked transaction.
 
+**Stored objects (Phase 7A M0-B; AE-M0-4).** :func:`erase_organization` first erases every
+object version, delete marker and in-progress multipart upload under ``{organization_id}/`` in the
+media store (:func:`app.privacy.object_erasure.erase_organization_objects`), before any database
+write, and does not rely on the media rows to find them. If that step is incomplete it raises
+:class:`~app.privacy.object_erasure.ObjectErasureIncompleteError` (503) and writes nothing, so the
+organization stays as the handle a retry erases the rest from; a retry counts only what it
+removes. If the store cannot list versions (the adapter before M0-A0, under which no media route
+is mounted and no media object can have been written) the step reports ``unavailable`` and the
+database erasure proceeds; the report says so and never says complete. Account deletion erases
+each organization it deletes the same way. The attester rule (contract §6, R-5) is unchanged: it
+is the walk's ``SET NULL`` of ``media_rights.attested_by`` and ``media_assets.created_by``.
+
 Locks: account deletion locks the user row, then each of its organizations in id order
 (``SELECT … FOR UPDATE``); organization deletion locks the organization and re-reads the
 actor's role under the lock, as every membership mutation does
@@ -106,6 +118,12 @@ from app.privacy.matching import (
     mention,
     prefilter,
     same_address,
+)
+from app.privacy.object_erasure import (
+    ObjectErasureIncompleteError,
+    ObjectErasureReport,
+    ObjectErasureStatus,
+    erase_organization_objects,
 )
 from app.privacy.writer import mark_privacy_writer
 
@@ -481,6 +499,9 @@ class OrganizationErasure:
     organization_id: str
     workspace_ids: tuple[str, ...]
     counts: ErasureCounts
+    #: The organization's objects in the media store (M0-B, AE-M0-4): what was removed, and
+    #: whether it is ``complete`` or ``unavailable`` (an incomplete step raises instead).
+    objects: ObjectErasureReport | None = None
 
 
 def _require_no_active_jobs(db: Session, organization_id: str) -> None:
@@ -499,14 +520,22 @@ def _require_no_active_jobs(db: Session, organization_id: str) -> None:
         )
 
 
-def erase_organization(db: Session, *, organization_id: str) -> OrganizationErasure:
+def erase_organization(
+    db: Session, *, organization_id: str, object_store: object | None = None
+) -> OrganizationErasure:
     """Delete one organization and everything that belongs to it; anonymise its audit.
 
     The caller has locked the organization and checked authority. Refuses (409) while a
     job of the organization is claimed or running, so no worker writes into a scope that
-    is being deleted.
+    is being deleted. Then erases the organization's stored objects, every version included
+    (module docstring; ``object_store=None`` is the application's store), and raises
+    :class:`~app.privacy.object_erasure.ObjectErasureIncompleteError` before any database write
+    if that is incomplete.
     """
     _require_no_active_jobs(db, organization_id)
+    objects = erase_organization_objects(organization_id, object_store=object_store)
+    if objects.status is ObjectErasureStatus.INCOMPLETE:
+        raise ObjectErasureIncompleteError(objects)
     mark_privacy_writer(db)  # the PostgreSQL append-only backstop's exception (D-N4 item 37)
     workspace_ids = tuple(
         db.execute(
@@ -527,7 +556,7 @@ def erase_organization(db: Session, *, organization_id: str) -> OrganizationEras
     )
     counts.merge(delete_rows(db, Organization.__table__, [organization_id]))
     db.flush()
-    return OrganizationErasure(organization_id, workspace_ids, counts)
+    return OrganizationErasure(organization_id, workspace_ids, counts, objects)
 
 
 def _verify_current_password(user: User, current_password: str) -> tuple[int, str]:
@@ -564,6 +593,7 @@ def delete_organization(
     organization_id: str,
     current_password: str,
     confirm_organization_name: str,
+    object_store: object | None = None,
 ) -> OrganizationErasure:
     """Delete an organization on its OWNER's request (``POST /organizations/{id}/delete``).
 
@@ -590,7 +620,7 @@ def delete_organization(
             "Type the organization's name exactly to confirm.",
             code="organization_name_mismatch",
         )
-    return erase_organization(db, organization_id=organization_id)
+    return erase_organization(db, organization_id=organization_id, object_store=object_store)
 
 
 # --------------------------------------------------------------------------- #
@@ -685,7 +715,7 @@ def invitations_accepted_by(db: Session, *, user_id: str) -> dict[str, AcceptedI
 
 
 def delete_account(
-    db: Session, *, user: User, current_password: str
+    db: Session, *, user: User, current_password: str, object_store: object | None = None
 ) -> AccountErasure:
     """Delete the signed-in account on its own request (``POST /account/delete``).
 
@@ -698,8 +728,10 @@ def delete_account(
     invitations it accepted and clear their address from the audit records about them;
     anonymise audit records that name it; delete the user row and everything that depends on
     it (memberships, sessions, account tokens), clearing the attribution columns that point
-    at it. Only when its email address is verified (:class:`EmailScope`, read from the row
-    under the lock) are the other invitations addressed to that address deleted and the
+    at it (so a media rights record keeps its content and loses the attester, R-5). Each deleted
+    organization's stored objects are erased first (:func:`erase_organization`; ``object_store``
+    is passed to it). Only when its email address is verified (:class:`EmailScope`, read from
+    the row under the lock) are the other invitations addressed to that address deleted and the
     other audit values naming it cleared too. Flushes, never commits.
     """
     epoch, current_hash = _verify_current_password(user, current_password)
@@ -729,7 +761,9 @@ def delete_account(
     deleted: list[OrganizationErasure] = []
     for impact in impacts:
         if impact.outcome is MembershipOutcome.ORGANIZATION_DELETED:
-            erased = erase_organization(db, organization_id=impact.organization_id)
+            erased = erase_organization(
+                db, organization_id=impact.organization_id, object_store=object_store
+            )
             counts.merge(erased.counts)
             deleted.append(erased)
     accepted = invitations_accepted_by(db, user_id=user_id)
