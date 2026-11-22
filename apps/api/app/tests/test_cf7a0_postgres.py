@@ -39,6 +39,12 @@ from app.core.enums import (
     MediaProvenanceOrigin,
     MediaRightsBasis,
 )
+from app.media.models import (
+    MediaAsset,
+    MediaObject,
+    MediaProvenanceRecord,
+    MediaRightsRecord,
+)
 from app.tests._auth2_support import pg_database, require_postgres
 from app.tests.test_postgres_migration_proof import (
     _alembic,
@@ -124,6 +130,16 @@ def _partition(definition: str) -> dict[str, frozenset[str]]:
     partition = {k: frozenset(re.findall(r"'([^']*)'::character varying", v)) for k, v in limbs}
     assert len(partition) == len(limbs), "a kind appears in two limbs"
     return partition
+
+
+def _model_check(table: str, name: str) -> str:
+    models = (MediaAsset, MediaObject, MediaProvenanceRecord, MediaRightsRecord)
+    model = next(m for m in models if m.__tablename__ == table)
+    (check,) = [
+        c for c in model.__table__.constraints
+        if c.__class__.__name__ == "CheckConstraint" and c.name == name
+    ]
+    return str(check.sqltext)
 
 
 def _insert(url: str, table: str, row: dict) -> None:
@@ -288,3 +304,25 @@ def test_downgrade_refuses_before_ddl_then_steps_down_and_up(migrated: str) -> N
     assert _version(migrated) == [CF7A0]
     result = _run(["check"], migrated)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_every_vocabulary_check_of_the_models_equals_the_migrated_one_on_postgresql(
+    migrated: str,
+) -> None:
+    """The model side of ``PP5-CHK-001`` on PostgreSQL (review W7A-REV-CF7A0-DATA r1, C1).
+    PostgreSQL rewrites a CHECK's text, so each vocabulary is compared by its literal set and the
+    partition by its limbs: the models' renderings, which ``create_all`` fixtures use, against the
+    migrated database's."""
+    for table, name, column, _authority in VOCABULARIES:
+        model_values = set(re.findall(r"'([^']*)'", _model_check(table, name)))
+        assert _literals(_checks(migrated, table)[name], column) == model_values, name
+    model_partition = {
+        kind: frozenset(re.findall(r"'([^']*)'", types))
+        for kind, types in re.findall(
+            r"\(kind = '([^']+)' AND content_type IN \(([^)]*)\)\)",
+            _model_check("media_objects", "ck_media_object_kind_content_type"),
+        )
+    }
+    assert model_partition
+    in_db = _partition(_checks(migrated, "media_objects")["ck_media_object_kind_content_type"])
+    assert in_db == model_partition

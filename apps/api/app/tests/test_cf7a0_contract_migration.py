@@ -292,6 +292,22 @@ def test_the_shape_checks_equal_the_models(migrated: Path) -> None:
         assert _norm(_checks(migrated, table)[name]) == _norm(_model_check(table, name)), name
 
 
+def test_every_check_of_the_models_equals_the_migrated_one(migrated: Path) -> None:
+    """The model side of ``PP5-CHK-001`` (review W7A-REV-CF7A0-DATA r1, C1): every CHECK the models
+    declare, the vocabularies and the partition as well as the shapes, has the migrated database's
+    exact text. Fixtures built by ``create_all`` use the models' CHECKs, and ``alembic check``
+    never compares CHECKs, so a model that drifted from the migration would otherwise go unseen.
+    CF-3 closed the same gap (``test_cf3_contract_migration.py``,
+    ``test_the_vocabulary_checks_of_the_models_equal_the_migrated_ones``)."""
+    compared = 0
+    for table, names in EXPECTED_CHECKS.items():
+        in_db = _checks(migrated, table)
+        for name in sorted(names):
+            assert _norm(in_db[name]) == _norm(_model_check(table, name)), (table, name)
+            compared += 1
+    assert compared == sum(len(names) for names in EXPECTED_CHECKS.values()) == 12
+
+
 def test_the_comparison_fails_both_negative_controls_and_a_swapped_limb() -> None:
     authority = {m.value for m in MediaObjectState}
     removed = authority - {MediaObjectState.ABORTED.value}
