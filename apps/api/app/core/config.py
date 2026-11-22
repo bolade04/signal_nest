@@ -21,8 +21,10 @@ from functools import lru_cache
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import AliasChoices, Field, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.core.enums import MediaContentType
 
 AppMode = Literal["local", "full"]
 Environment = Literal["development", "staging", "production", "test"]
@@ -35,6 +37,20 @@ CREATIVE_GENERATION_CEILINGS: tuple[str, ...] = (
     "llm_daily_cost_ceiling_usd_per_workspace",
     "llm_max_calls_per_workspace_per_day",
     "llm_max_output_tokens_per_call",
+)
+#: The Phase 7A media upload settings (CF-7A-0, media plan v3 M0). Each defaults to None (not
+#: configured) and no value is chosen here; M0-A must refuse every upload while any is unset
+#: (``Settings.media_upload_settings_unset``). The last four carry M0-A0's caller limits
+#: (``check_asset``'s ``max_pixels``, ``decode_timeout_seconds``,
+#: ``font_parse_timeout_seconds`` and ``max_memory_bytes``), which refuse when absent.
+MEDIA_UPLOAD_SETTINGS: tuple[str, ...] = (
+    "media_upload_max_bytes",
+    "media_allowed_types",
+    "media_signed_url_ttl_seconds",
+    "media_image_max_pixels",
+    "media_image_decode_timeout_seconds",
+    "media_font_parse_timeout_seconds",
+    "media_decoder_max_memory_bytes",
 )
 MailBackend = Literal["memory", "console", "ses"]
 GeocoderBackend = Literal["fixture", "aws_location"]
@@ -577,6 +593,40 @@ class Settings(BaseSettings):
     notifications_analytics_enabled: bool = False
     # --- Project Phase 5E: notifications and analytics (W21 5E-CF) — END -------
 
+    # --- Phase 7A: media assets (CF-7A-0) — BEGIN ------------------------------
+    #: Master switch for the media asset library, uploads and signed GETs (dark by
+    #: default; media plan v3 §3.0, D-1). Bound to ``Capability.MEDIA_ASSETS``, which is
+    #: ``workspace_enableable`` (O-3's pattern, CF-7A-0's proposal), so availability is the
+    #: capability resolver's per-workspace decision, never this raw flag. CF-7A-0 adds the
+    #: flag, the capability and the contracts only: no route is mounted (M0-B mounts the
+    #: M0-A routes behind it). Enabling customer uploads also needs D-10 (MD-4) and D-7 (O-5).
+    media_assets_enabled: bool = False
+    #: The media upload settings (``MEDIA_UPLOAD_SETTINGS``). **None has a value**: ``None``
+    #: means "not configured", and M0-A must refuse every upload while any is unset (fail
+    #: closed; AE-M0-1, AE-M0-9). When set, each integer must be an int greater than 0 and
+    #: each duration a finite number greater than 0.
+    #: Largest declared upload, in bytes; a file one byte over it is refused before any
+    #: presign is issued, and parts summing to more are refused at completion (AE-M0-1, -10).
+    media_upload_max_bytes: int | None = None
+    #: The declared content types uploads may use: a non-empty subset of
+    #: ``MediaContentType`` (release 1's raster images and fonts). It narrows, never widens.
+    media_allowed_types: list[str] | None = None
+    #: Lifetime of a media signed GET, in seconds. Clamped to the existing
+    #: ``s3_signed_url_ttl_seconds`` ceiling (``media_signed_url_ceiling_seconds``); a request
+    #: above the ceiling is issued at the ceiling (AE-M0-8).
+    media_signed_url_ttl_seconds: int | None = None
+    #: M0-A0's image limit: the most pixels an image header may declare; larger images are
+    #: refused before full decode (AE-M0-9).
+    media_image_max_pixels: int | None = None
+    #: M0-A0's image limit: seconds a decode and re-encode may run before it is stopped.
+    media_image_decode_timeout_seconds: float | None = None
+    #: M0-A0's font limit: seconds a font parse may run before it is stopped.
+    media_font_parse_timeout_seconds: float | None = None
+    #: M0-A0's decoder memory ceiling, in bytes (the isolated decoder process's address
+    #: space on Linux; WOFF declared and inflated sizes are checked against it).
+    media_decoder_max_memory_bytes: int | None = None
+    # --- Phase 7A: media assets (CF-7A-0) — END --------------------------------
+
     # --- LLM -----------------------------------------------------------------
     llm_provider: LLMProvider = "mock"
     llm_model: str | None = None
@@ -657,6 +707,12 @@ class Settings(BaseSettings):
     #: becomes required in production, through ``RetentionClass.NOTIFICATIONS`` (5E-W1),
     #: whose sweep refuses the class (``policy_unset``) while this is unset.
     retention_notifications_days: int | None = None
+    #: Phase 7A media (CF-7A-0, media plan v3 §2.6, MD-6: "with durations governed by O-5").
+    #: ``media_uploads``: customer upload originals and their stored objects; ``media_records``:
+    #: provenance and rights records. Unset like their siblings (D-7); production refuses to
+    #: start while either is unset, through ``RetentionClass``. Their purge is M0-B's.
+    retention_media_uploads_days: int | None = None
+    retention_media_records_days: int | None = None
     #: Root rows one purge batch deletes (with their dependents). 1..10000.
     retention_purge_batch_size: int = 500
     #: Batches per class per sweep, and links per workspace job chain. >= 1.
@@ -1273,6 +1329,78 @@ class Settings(BaseSettings):
         this is non-empty (fail closed)."""
         return tuple(name for name in CREATIVE_GENERATION_CEILINGS if getattr(self, name) is None)
 
+    # --- Phase 7A media settings (CF-7A-0) ---------------------------------------
+    @field_validator(
+        "media_upload_max_bytes",
+        "media_signed_url_ttl_seconds",
+        "media_image_max_pixels",
+        "media_decoder_max_memory_bytes",
+        "media_image_decode_timeout_seconds",
+        "media_font_parse_timeout_seconds",
+        mode="before",
+    )
+    @classmethod
+    def _media_number_is_not_a_bool(cls, value: object) -> object:
+        """``True`` would otherwise be read as 1: a configuration mistake, never a limit."""
+        if isinstance(value, bool):
+            raise ValueError("must be a number, not a boolean")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_media_assets(self) -> Settings:
+        """A configured media setting must be usable: an integer setting a real int (not a
+        bool) greater than 0, a duration a finite number greater than 0 (``nan`` would never
+        stop anything), and the allowed types a non-empty, duplicate-free subset of
+        ``MediaContentType``. Unset (None) is valid everywhere: it means "not configured", and
+        M0-A refuses every upload until all are set."""
+        errors: list[str] = []
+        for name in (
+            "media_upload_max_bytes",
+            "media_signed_url_ttl_seconds",
+            "media_image_max_pixels",
+            "media_decoder_max_memory_bytes",
+        ):
+            value = getattr(self, name)
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            ):
+                errors.append(f"{name} must be an integer greater than 0 when set")
+        for name in ("media_image_decode_timeout_seconds", "media_font_parse_timeout_seconds"):
+            value = getattr(self, name)
+            if value is not None and (
+                isinstance(value, bool) or not (math.isfinite(value) and value > 0)
+            ):
+                errors.append(f"{name} must be a finite number greater than 0 when set")
+        if self.media_allowed_types is not None:
+            types = self.media_allowed_types
+            accepted = {t.value for t in MediaContentType}
+            if not types:
+                errors.append("media_allowed_types must not be empty when set")
+            if len(set(types)) != len(types):
+                errors.append("media_allowed_types must not repeat a type")
+            unknown = sorted(t for t in set(types) if t not in accepted)
+            if unknown:
+                errors.append(
+                    "media_allowed_types may name only release 1's media content types; "
+                    f"not accepted: {', '.join(unknown)}"
+                )
+        if errors:
+            raise ValueError("Invalid configuration:\n  - " + "\n  - ".join(errors))
+        return self
+
+    def media_upload_settings_unset(self) -> tuple[str, ...]:
+        """The media upload settings that are not configured. M0-A must refuse every upload
+        while this is non-empty (fail closed)."""
+        return tuple(name for name in MEDIA_UPLOAD_SETTINGS if getattr(self, name) is None)
+
+    def media_signed_url_ceiling_seconds(self) -> int | None:
+        """The longest lifetime a media signed GET may have: ``media_signed_url_ttl_seconds``
+        clamped to ``s3_signed_url_ttl_seconds``. ``None`` while the media setting is unset:
+        then no media URL may be issued."""
+        if self.media_signed_url_ttl_seconds is None:
+            return None
+        return min(self.media_signed_url_ttl_seconds, self.s3_signed_url_ttl_seconds)
+
     # --- Privacy: retention validation (P6-PRIV-1) — privacy block ------------
     @model_validator(mode="after")
     def _validate_retention(self) -> Settings:
@@ -1286,8 +1414,9 @@ class Settings(BaseSettings):
         from app.privacy.inventory import RetentionClass
 
         errors: list[str] = []
-        # Every class the purge knows (``RetentionClass``, eight since Project Phase 5E's
-        # ``notifications``, D-N4 item 30) needs its duration in production. Every
+        # Every class the purge knows (``RetentionClass``: eight since Project Phase 5E's
+        # ``notifications``, D-N4 item 30; ten since Phase 7A CF-7A-0's ``media_uploads`` and
+        # ``media_records``) needs its duration in production. Every
         # ``retention_<class>_days`` setting is bounded, also one declared before its class is
         # registered.
         required = [data_class.setting_name for data_class in RetentionClass]

@@ -378,3 +378,116 @@ class ExportFormat(StrEnum):
     TEXT_PLAIN = "text/plain"
     TEXT_MARKDOWN = "text/markdown"
     JSON = "json"
+
+
+# --- Phase 7A media assets (CF-7A-0, media plan v3 §3 M0) ----------------------------
+# The closed vocabularies of the four M0 media tables (``app.media.models``). Each is held by
+# a database CHECK built from these members and compared, in both directions, with the
+# migrated database under the ``PP5-CHK-001`` control (``test_cf7a0_contract_migration``). A
+# later freeze (CF-7A-1, CF-7A-2) widens a set only with its own widening migration.
+
+
+class MediaAssetKind(StrEnum):
+    """What a logical media asset is (release 1, media plan v3 M0 and §2.4).
+
+    Release 1 accepts uploads of exactly these two kinds: raster images, which are decoded
+    and re-encoded on upload, and fonts, which are parsed and validated. **SVG is excluded**,
+    not rasterised: no kind and no content type admits it (CF-7A-0's proposal; the plan leaves
+    "excluded or rasterised on upload" to the CF-7A-0 review).
+    """
+
+    RASTER_IMAGE = "raster_image"
+    FONT = "font"
+
+
+class MediaContentType(StrEnum):
+    """The declared and stored content types release 1 accepts, by kind.
+
+    The raster types are the three the decode-and-re-encode path supports; the font types are
+    TrueType, OpenType and WOFF 1. WOFF 2, font collections, GIF, SVG and every other type are
+    refused. ``media_allowed_types`` (``Settings``) may narrow this set, never widen it.
+    """
+
+    IMAGE_PNG = "image/png"
+    IMAGE_JPEG = "image/jpeg"
+    IMAGE_WEBP = "image/webp"
+    FONT_TTF = "font/ttf"
+    FONT_OTF = "font/otf"
+    FONT_WOFF = "font/woff"
+
+
+#: The partition of :class:`MediaContentType` by :class:`MediaAssetKind`: every content type
+#: belongs to exactly one kind. ``ck_media_object_kind_content_type`` is built from it, so a
+#: stored object's type always matches its asset's kind.
+MEDIA_CONTENT_TYPES_BY_KIND: Mapping[MediaAssetKind, frozenset[MediaContentType]] = (
+    MappingProxyType(
+        {
+            MediaAssetKind.RASTER_IMAGE: frozenset(
+                {
+                    MediaContentType.IMAGE_PNG,
+                    MediaContentType.IMAGE_JPEG,
+                    MediaContentType.IMAGE_WEBP,
+                }
+            ),
+            MediaAssetKind.FONT: frozenset(
+                {
+                    MediaContentType.FONT_TTF,
+                    MediaContentType.FONT_OTF,
+                    MediaContentType.FONT_WOFF,
+                }
+            ),
+        }
+    )
+)
+
+
+class MediaAssetState(StrEnum):
+    """The lifecycle of a logical media asset (CF-7A-0 proposal).
+
+    ``pending``: created with its upload session; no object has been promoted yet.
+    ``active``: its checked, sanitised object is stored under the asset prefix.
+    ``withdrawn``: taken out of use (for example by a takedown); new uses are refused.
+    Deletion is not a state: an erased asset's rows and objects are gone.
+    """
+
+    PENDING = "pending"
+    ACTIVE = "active"
+    WITHDRAWN = "withdrawn"
+
+
+class MediaObjectState(StrEnum):
+    """The lifecycle of one stored object or upload record (CF-7A-0 proposal).
+
+    An upload record starts ``upload_pending`` under the tenant upload prefix and ends in
+    exactly one of: ``promoted`` (checked and promoted; its upload-prefix object is deleted
+    with every version), ``rejected`` (refused at completion and never promoted; its
+    upload-prefix object is deleted with every version) or ``aborted`` (abandoned or
+    expired; an in-progress multipart upload is aborted). The promoted, sanitised bytes are a
+    separate ``stored`` object under the asset prefix.
+    """
+
+    UPLOAD_PENDING = "upload_pending"
+    PROMOTED = "promoted"
+    REJECTED = "rejected"
+    ABORTED = "aborted"
+    STORED = "stored"
+
+
+class MediaProvenanceOrigin(StrEnum):
+    """How a stored media object was made (the provenance record, MD-4).
+
+    Release 1's M0 has one origin: a customer upload, checked and sanitised. Generation and
+    rendering origins join at CF-7A-1 and CF-7A-2 with their own widening migrations.
+    """
+
+    CUSTOMER_UPLOAD = "customer_upload"
+
+
+class MediaRightsBasis(StrEnum):
+    """On what basis a rights record asserts the right to use an asset (MD-4).
+
+    Release 1's M0 has one basis: the uploading customer's attestation. A licence basis (the
+    licensed default font set, library music) joins at CF-7A-1 with its own columns.
+    """
+
+    CUSTOMER_ATTESTATION = "customer_attestation"

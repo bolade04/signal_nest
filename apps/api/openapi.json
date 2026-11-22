@@ -1828,7 +1828,8 @@
           "recommendation_briefs",
           "creative_generation",
           "content_export",
-          "notifications_analytics"
+          "notifications_analytics",
+          "media_assets"
         ],
         "title": "Capability",
         "type": "string"
@@ -3639,6 +3640,10 @@
             "title": "Creative Generation Enabled",
             "type": "boolean"
           },
+          "media_assets_enabled": {
+            "title": "Media Assets Enabled",
+            "type": "boolean"
+          },
           "notifications_analytics_enabled": {
             "title": "Notifications Analytics Enabled",
             "type": "boolean"
@@ -3663,7 +3668,8 @@
           "recommendation_briefs_enabled",
           "creative_generation_enabled",
           "content_export_enabled",
-          "notifications_analytics_enabled"
+          "notifications_analytics_enabled",
+          "media_assets_enabled"
         ],
         "title": "FeatureFlagsOut",
         "type": "object"

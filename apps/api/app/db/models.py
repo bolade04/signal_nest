@@ -42,6 +42,12 @@ from app.llm.models import (  # noqa: F401
     LLMUsageEvent,
 )
 from app.locations.models import BusinessLocation, GeoCoverageRule  # noqa: F401
+from app.media.models import (  # noqa: F401
+    MediaAsset,
+    MediaObject,
+    MediaProvenanceRecord,
+    MediaRightsRecord,
+)
 from app.notifications.models import Notification, NotificationPreference  # noqa: F401
 from app.opportunities.models import (  # noqa: F401
     Opportunity,

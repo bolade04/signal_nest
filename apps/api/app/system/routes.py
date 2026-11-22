@@ -99,6 +99,11 @@ class FeatureFlagsOut(BaseModel):
     #: resolver, and the customer UI reads the workspace-effective reflection.
     notifications_analytics_enabled: bool
 
+    #: The RAW global media-assets flag (Phase 7A, CF-7A-0), reflected like the Phase 5
+    #: flags (media plan v3 §3.0). It does not decide availability for a workspace: the
+    #: media gates (M0-A, mounted by M0-B) decide through the capability resolver.
+    media_assets_enabled: bool
+
 
 class RuntimeSummaryOut(BaseModel):
     app_mode: str
@@ -158,6 +163,7 @@ def system_capabilities(_user: User = Depends(get_current_user)) -> RuntimeSumma
             creative_generation_enabled=settings.creative_generation_enabled,
             content_export_enabled=settings.content_export_enabled,
             notifications_analytics_enabled=settings.notifications_analytics_enabled,
+            media_assets_enabled=settings.media_assets_enabled,
         ),
     )
 

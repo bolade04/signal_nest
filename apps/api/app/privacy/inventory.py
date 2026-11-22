@@ -18,8 +18,10 @@ one of them being wrong cannot silently agree with itself.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from types import MappingProxyType
 
 
 class RetentionClass(StrEnum):
@@ -32,6 +34,13 @@ class RetentionClass(StrEnum):
     with its duration unset and fail closed. O-5 durations remain unruled; do not invent
     them." Its setting has no default like every other; while it is unset the sweep reports
     ``policy_unset`` and deletes nothing.
+
+    ``MEDIA_UPLOADS`` and ``MEDIA_RECORDS`` are Phase 7A's (CF-7A-0, media plan v3 §2.6; MD-6:
+    "with durations governed by O-5 ... Do not create an indefinite compliance-retention
+    exception"). Their durations are unset (D-7), so production refuses to start and the sweep
+    reports ``policy_unset``. Which tables each purges is stated in
+    :data:`MEDIA_RETENTION_BINDINGS`; the purge itself (its roots in
+    ``app.privacy.retention``, with the version-aware object erasure) is M0-B's.
     """
 
     AUTH_SESSIONS = "auth_sessions"
@@ -42,6 +51,8 @@ class RetentionClass(StrEnum):
     JOB_HISTORY = "job_history"
     AUDIT_LOGS = "audit_logs"
     NOTIFICATIONS = "notifications"
+    MEDIA_UPLOADS = "media_uploads"
+    MEDIA_RECORDS = "media_records"
 
     @property
     def setting_name(self) -> str:
@@ -166,6 +177,27 @@ TABLES: dict[str, TableEntry] = {
             retention_class=RetentionClass.NOTIFICATIONS,
         ),
         TableEntry("notification_preferences", Category.ACCOUNT, exported=False),
+        # Phase 7A media (CF-7A-0; dark: no rows until M0-A's services write them). All four
+        # carry organization and workspace keys (CASCADE): deleted with the workspace or the
+        # organization, never kept as compliance records (MD-6). Exported with the
+        # organization (rows only; the stored bytes are the object store's, below). The
+        # retention class of each is fixed by contract in ``MEDIA_RETENTION_BINDINGS`` and
+        # becomes ``retention_class`` here when M0-B adds the purge roots; until then it is
+        # None, and the sweep refuses both media classes while their durations are unset.
+        # ``media_assets``: the logical asset (kind, state, the customer's display name, the
+        # uploading account - set null when that account is deleted).
+        TableEntry("media_assets", _TENANT),
+        # ``media_objects``: stored objects and upload records (key, size, content type,
+        # sha256, storage version id, state). No personal data beyond what the bytes hold.
+        TableEntry("media_objects", _TENANT),
+        # ``media_provenance``: how each stored object was made (origin, inputs hash, parent
+        # object, processor, scanner, job). No account and no rights field (MD-4).
+        TableEntry("media_provenance", _TENANT),
+        # ``media_rights``: the MD-4 rights record (the customer's attestation: text version,
+        # attesting account, instant). Its own classification, distinct from provenance
+        # (MD-4). Account deletion sets ``attested_by`` null and keeps the rights content; no
+        # snapshot of the account is stored.
+        TableEntry("media_rights", Category.COMPLIANCE),
         TableEntry("workspaces", _TENANT),
         TableEntry("workspace_capability_overrides", _TENANT),
         TableEntry("brands", _TENANT),
@@ -284,7 +316,67 @@ TABLES: dict[str, TableEntry] = {
 }
 
 
+#: Phase 7A (CF-7A-0): the retention class each media table is purged by, fixed by contract.
+#: ``TableEntry.retention_class`` stays None for these tables until M0-B adds their purge roots
+#: (``app.privacy.retention._ROOTS``) together with the object erasure; M0-B then moves each
+#: binding into its ``TableEntry``. Until then, with a media duration set, the sweep cannot
+#: purge the class (CF-7A-0 contract, limitation L-1).
+MEDIA_RETENTION_BINDINGS: Mapping[str, RetentionClass] = MappingProxyType(
+    {
+        "media_assets": RetentionClass.MEDIA_UPLOADS,
+        "media_objects": RetentionClass.MEDIA_UPLOADS,
+        "media_provenance": RetentionClass.MEDIA_RECORDS,
+        "media_rights": RetentionClass.MEDIA_RECORDS,
+    }
+)
+
+
+@dataclass(frozen=True)
+class ObjectStoreEntry:
+    """A store outside the database that holds tenant data (Phase 7A, CF-7A-0; MD-6:
+    "Include object storage in privacy inventory and erasure before customer uploads ship")."""
+
+    name: str
+    category: Category
+    #: The key layout, relative to the bucket (or the LocalStorage root).
+    key_layout: str
+    #: The prefix an organization's erasure must empty, every version included.
+    erasure_prefix: str
+    #: The retention class that purges its objects (duration unset, D-7).
+    retention_class: RetentionClass
+    #: What erasure must remove there (implemented and verified by M0-B).
+    erasure: str
+
+
+#: Object storage entries (CF-7A-0). Nothing writes under these prefixes until M0-A and M0-B
+#: ship; ``docs/operations/data-inventory.md`` still states that no product path writes
+#: customer data to object storage.
+OBJECT_STORES: dict[str, ObjectStoreEntry] = {
+    e.name: e
+    for e in (
+        ObjectStoreEntry(
+            name="media",
+            category=Category.TENANT_CONTENT,
+            key_layout=(
+                "{organization_id}/{workspace_id}/media/uploads/{object_id} (upload records); "
+                "{organization_id}/{workspace_id}/media/assets/{asset_id}/{object_id} "
+                "(stored objects)"
+            ),
+            erasure_prefix="{organization_id}/",
+            retention_class=RetentionClass.MEDIA_UPLOADS,
+            erasure=(
+                "every object version and delete marker under the prefix, and every "
+                "in-progress multipart upload there aborted (media plan v3 §2.6, AE-M0-4)"
+            ),
+        ),
+    )
+}
+
+
 __all__ = [
+    "MEDIA_RETENTION_BINDINGS",
+    "OBJECT_STORES",
+    "ObjectStoreEntry",
     "PLATFORM_CLASSES",
     "TABLES",
     "WORKSPACE_CLASSES",

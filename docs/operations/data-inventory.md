@@ -114,6 +114,22 @@ automatically be classified as containing no personal data." It supersedes the p
 - **Verification.** The E10 verifier reads every text and JSON column, these states included,
   so a remaining `WHOLE` mention of an erased account in a claim's audit text is a finding.
 
+### Media assets (Phase 7A CF-7A-0; no rows until M0-A's services write them)
+
+The four media tables carry `organization_id` and `workspace_id` keys (CASCADE). They are
+exported with the organization (rows only) and are never kept as compliance records after their
+organization (MD-6). Their time-based classes are fixed by contract (`MEDIA_RETENTION_BINDINGS`
+in `app/privacy/inventory.py`) and take effect when M0-B adds the media purge; until then the
+classes' durations are unset and the sweep refuses them. The stored bytes are in object storage
+(see [Outside the database](#outside-the-database--stated-limitations-and-operating-procedure)).
+
+| Table | Columns that can hold personal or confidential data | On account deletion | On organization deletion | Retention class |
+|---|---|---|---|---|
+| `media_assets` | `display_name` (customer text, for example a file name); `created_by` (the uploading account) | `created_by`: set null (row kept) | delete | `media_uploads` (bound by M0-B; duration unset) |
+| `media_objects` | **none** besides what the stored bytes hold: `storage_key`, `size_bytes`, `content_type`, `sha256`, `version_id`, `state` | — | delete | `media_uploads` (bound by M0-B; duration unset) |
+| `media_provenance` | **none**: origin, inputs hash, parent object, processor, scanner, job | — | delete | `media_records` (bound by M0-B; duration unset) |
+| `media_rights` | `attested_by` (the attesting account), `attested_at`; the attestation text version | `attested_by`: set null; the rights content (basis, text version, instant) is kept; no snapshot of the account exists | delete | `media_records` (bound by M0-B; duration unset) |
+
 ### Tenant business content (customer-provided; may contain personal data of sole traders)
 
 All of these are deleted on organization deletion and untouched by account deletion (the one
@@ -191,7 +207,7 @@ and creates none (it only logs and counts `llm_settlements_orphaned_total`).
 
 ## Retention durations (undecided)
 
-Eight data classes carry a time-based purge. Each duration is a setting with **no
+Ten data classes carry a time-based purge. Each duration is a setting with **no
 default**; the values are `O-5` / `P6-D05`, reserved to the operator and legal, and this
 repository does not choose them. The decision material is in the lane's
 `DECISION-MEMO.md` (evidence set `P6-W1-PRIV-01`).
@@ -206,10 +222,12 @@ repository does not choose them. The decision material is in the lane's
 | `job_history` | `RETENTION_JOB_HISTORY_DAYS` | terminal `jobs` (+ `job_events`) | `updated_at` |
 | `audit_logs` | `RETENTION_AUDIT_LOGS_DAYS` | `audit_logs`, `approvals`, `exports` | `created_at` |
 | `notifications` | `RETENTION_NOTIFICATIONS_DAYS` | `notifications` (in-app feed rows; preferences are not purged by age) | `created_at` |
+| `media_uploads` | `RETENTION_MEDIA_UPLOADS_DAYS` | `media_assets`, `media_objects` and their stored objects (Phase 7A; the purge is M0-B's) | not yet fixed (M0-B) |
+| `media_records` | `RETENTION_MEDIA_RECORDS_DAYS` | `media_provenance`, `media_rights` (Phase 7A; the purge is M0-B's) | not yet fixed (M0-B) |
 
 **Unset is not a default.** A class whose duration is unset is *undecided*: the purge
 refuses it and deletes nothing (the sweep reports `policy_unset` and exits non-zero).
-`environment=production` **refuses to start** until all eight are set explicitly
+`environment=production` **refuses to start** until all ten are set explicitly
 (1–36500 days); development, test and staging may leave them unset. The cut-off is the
 start of the current UTC day (database clock) minus the duration, so a purge never
 removes a row earlier than the policy allows.
@@ -222,6 +240,14 @@ but it is purged by the sweep itself, never by a workspace job: `enqueue_purge` 
 `run_purge_job` refuse it and no `JobType` can dispatch it (5E exit criterion 6). While
 `RETENTION_NOTIFICATIONS_DAYS` is unset the sweep reports `policy_unset` and deletes nothing,
 and production refuses to start, as for the other seven.
+
+**Media (Phase 7A CF-7A-0).** MD-6: "choose (b), with durations governed by O-5. Include
+object storage in privacy inventory and erasure before customer uploads ship. Do not create
+an indefinite compliance-retention exception." The `media_uploads` and `media_records`
+classes have no default duration and none is chosen (D-7). While their durations are unset
+the sweep reports `policy_unset` and deletes nothing, and production refuses to start. Their
+purge roots, with the version-aware object erasure, are M0-B's; until M0-B, a media duration
+that is set makes the sweep stop with an error at that class, deleting nothing of it.
 
 ## Members of a deleted organization
 
@@ -240,7 +266,7 @@ mechanism, with the procedure an operator follows.
 | **RDS automated backups / snapshots** | a full copy of every table at backup time | deleted rows persist in backups until those age out (`data_sql` module default `backup_retention_period` = 7 days; the root's configured value is not asserted here) and in any manual snapshot until it is deleted | after **any restore**, re-apply every erasure completed after the backup's timestamp, using the `privacy.account.deleted` / `privacy.organization.deleted` log events (they carry the pseudonymous subject id); manual snapshots must be covered by the same policy. This requires log retention ≥ backup retention — an operator item |
 | **Application logs (CloudWatch)** | pseudonymous user ids on security events (`security.*`, `privacy.*`), request metadata; no passwords, tokens or emails by the logging contract | log events are not edited or deleted per subject; they expire with the log group (the `ecs` module's staging baseline is 30 days) | treat log-group retention as the deletion bound; state it in the privacy notice |
 | **Redis** | job-available notifications and short-lived advisory locks; the cache adapter exists but no product path stores tenant data in it | — | none needed; TTL-bound |
-| **Object storage (S3 adapter)** | no product path writes customer data to object storage on `origin/main` | — | re-assess if a feature starts storing objects |
+| **Object storage (S3 adapter)** | no product path writes customer data to object storage on `origin/main`. Phase 7A CF-7A-0 states the media entry for when one does (`OBJECT_STORES` in `app/privacy/inventory.py`: keys under `{organization_id}/{workspace_id}/media/`; an organization's erasure must remove every object version and delete marker under `{organization_id}/` and abort its in-progress multipart uploads); M0-B implements it before uploads can be enabled | — | re-assess when M0-A and M0-B start storing objects |
 | **Amazon SES** | account mail (reset and verification links) in transit; the SES **account-level suppression list** can hold an address that bounced or complained | SES content is not stored by the application; a suppressed address is not removed by account deletion | on an erasure request, check the SES suppression list for the address and remove it (operator, AWS-side) |
 | **Third-party LLM provider** | prompt text sent for classification | see `docs/operations/llm-data-processing.md` (`P6-PRIV-2`) | per that document |
 | **The user's browser** | the bearer token and the selected workspace in `localStorage` | cleared by sign-out and by the deletion flow in the web app | none |

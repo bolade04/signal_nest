@@ -449,6 +449,16 @@ const capabilityRegistryItems = [
     workspace_disableable: true,
     future_activation_phase: '5E',
   },
+  {
+    // Phase 7A CF-7A-0: the media asset library, uploads and signed GETs; enableable per
+    // workspace (O-3's pattern, CF-7A-0's proposal), dark by default.
+    capability: 'media_assets',
+    label: 'Media Assets',
+    global_flag_attr: 'media_assets_enabled',
+    workspace_enableable: true,
+    workspace_disableable: true,
+    future_activation_phase: '7A',
+  },
   // Typed against the API's registry item, so a capability value the API does not define
   // fails type-check (the operations page test reads labels only).
 ] as const satisfies readonly CapabilityRegistryItem[];
@@ -1677,7 +1687,7 @@ export const handlers = [
       is_local_mode: true,
       all_configured: true,
       // Every registered capability ships dark by default, mirroring the server
-      // flags (`config.py`: all seven default False). Tests that need a
+      // flags (`config.py`: all eight default False). Tests that need a
       // capability ON install a per-test `server.use(...)` override rather than
       // changing this shared default — so the dark path is what renders unless a
       // test explicitly opts out of it.
@@ -1689,6 +1699,7 @@ export const handlers = [
         creative_generation_enabled: false,
         content_export_enabled: false,
         notifications_analytics_enabled: false,
+        media_assets_enabled: false,
       },
     }),
   ),
