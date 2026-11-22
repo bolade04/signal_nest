@@ -83,11 +83,12 @@ Unique index `uq_media_objects_id_workspace (id, workspace_id)` is the target of
 instant. `attested_by` is not required, because account deletion clears it (section 6).
 
 **Distinct records (MD-4).** `media_provenance` has no rights column and `media_rights` no
-provenance column. M1 owns the schema test that pins this (AE-M1-3).
+provenance column. CF-7A-0's `test_cf7a0_contracts.py` pins both column sets now; M1 owns
+AE-M1-3's schema test when it widens them.
 
 **Workspace consistency.** Every reference between media rows is a composite key that includes
-`workspace_id`, onto a unique `(id, workspace_id)` index (the CF-3 `campaign_locations` pattern,
-operator decision O-8). A cross-workspace object, rights record or provenance record cannot be
+`workspace_id`, onto a unique index of its target that begins with `(id, workspace_id)` (for an
+object, `(id, workspace_id, kind)`; the CF-3 `campaign_locations` pattern, operator decision O-8). A cross-workspace object, rights record or provenance record cannot be
 stored. The one exception is `media_provenance.parent_object_id`: a composite `SET NULL` key would
 also clear the row's `workspace_id`, so it is a plain key, and the writer (M0-A) must keep it
 inside the workspace.
@@ -205,14 +206,17 @@ The authorities are in `apps/api/app/core/enums.py` (bare vocabularies, Phase 5 
   remove every object version and delete marker under the prefix and abort every in-progress
   multipart upload there (plan §2.6; AE-M0-4). It replaces nothing yet:
   `docs/operations/data-inventory.md` keeps "no product path writes customer data to object
-  storage", which stays true until M0-A and M0-B ship; M0-B replaces that row.
+  storage", which stays true until M0-A and M0-B ship, and now points to this entry; M0-B
+  replaces that row.
 - **Account deletion — the attester rule.** `media_rights.attested_by` and
   `media_assets.created_by` are `SET NULL` keys, and no snapshot of the account is stored. The
   existing deletion walk (`app.privacy.erasure.delete_rows`, which follows declared keys) therefore
   sets them to NULL and keeps each row: **a rights record keeps its rights content (basis, text
   version, instant) and loses the account's identity** (AE-M0-4, last bullet). This differs from
   the Phase 5 records only in that there is no snapshot to anonymise. The rule holds at this head
-  by construction; M0-B owns its end-to-end test and the verification check (decision R-5).
+  by construction, and `test_cf7a0_privacy.py` shows it through the real account-deletion route
+  (with the verifier then finding nothing); M0-B owns AE-M0-4's test with stored objects and
+  its verification listings (decision R-5).
 - **Organization deletion.** Every media row is deleted through its organization and workspace
   keys (CASCADE). Media rows are not compliance records kept after their organization (MD-6), so
   nothing is retained. The stored objects are M0-B's version-aware prefix erasure, which does not
@@ -309,8 +313,9 @@ the capability.
   (AE-M0-6), and a foreign workspace's asset the uniform non-enumerating 404 with no URL minted
   and no issuance audited (AE-M0-3).
 - **Contract regeneration.** The Phase 5 freezes regenerated `apps/api/openapi.json` and
-  `apps/web/src/api/schema.d.ts` at freeze time; CF-7A-0 does too. The only change is the new
-  required `FeatureFlagsOut.media_assets_enabled`.
+  `apps/web/src/api/schema.d.ts` at freeze time; CF-7A-0 does too. The two changes are the new
+  required `FeatureFlagsOut.media_assets_enabled` and the `media_assets` member of the
+  `Capability` enum (the operator capability surfaces).
 - **Audit actions.** Signed-GET issuance and upload outcomes need `AuditAction` members, which
   are a closed registry with pinned counts (`test_cf1_audit_action_registry.py`). CF-7A-0 adds
   none; proposed names for a freeze amendment: `media_asset.uploaded`, `media_asset.rejected`,
