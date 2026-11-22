@@ -1200,6 +1200,8 @@ def test_dark_state_shipped_defaults_resolve_every_capability_disabled(factory) 
         Capability.CREATIVE_GENERATION: DecisionSource.GLOBAL_CONFIGURATION,
         Capability.CONTENT_EXPORT: DecisionSource.GLOBAL_CONFIGURATION,
         Capability.NOTIFICATIONS_ANALYTICS: DecisionSource.GLOBAL_CONFIGURATION,
+        # Phase 7A CF-7A-0: flag-bound, no environment ceiling.
+        Capability.MEDIA_ASSETS: DecisionSource.GLOBAL_CONFIGURATION,
     }
     assert set(expected) == set(iter_capabilities())
     with factory() as s:

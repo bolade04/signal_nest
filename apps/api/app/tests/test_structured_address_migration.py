@@ -51,7 +51,8 @@ API_DIR = Path(__file__).resolve().parents[2]
 REVISION = "6f8a80cf1785"
 BACKSTOP = "d0a8bce8de6a"
 CLAIM_KINDS = "1574637e56d3"
-CODE_HEAD = "53fdde95354a"
+NA_WIDENING = "53fdde95354a"
+CODE_HEAD = "91a796f09399"
 D1_REPAIR = "d5f616c0ec97"
 CF3 = "c3f8e1a6d2b9"
 MIGRATION = next((API_DIR / "alembic" / "versions").glob(f"*-{REVISION}_*.py"))
@@ -272,7 +273,8 @@ def test_the_revision_follows_the_repair_below_the_single_head() -> None:
 
     script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
     assert [r.revision for r in script.get_revisions("heads")] == [CODE_HEAD]
-    assert script.get_revision(CODE_HEAD).down_revision == CLAIM_KINDS
+    assert script.get_revision(CODE_HEAD).down_revision == NA_WIDENING
+    assert script.get_revision(NA_WIDENING).down_revision == CLAIM_KINDS
     assert script.get_revision(CLAIM_KINDS).down_revision == BACKSTOP
     assert script.get_revision(BACKSTOP).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == D1_REPAIR

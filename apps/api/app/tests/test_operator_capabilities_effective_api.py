@@ -233,6 +233,8 @@ class TestDarkByDefault:
             "creative_generation": ("global_configuration", None),
             "content_export": ("global_configuration", None),
             "notifications_analytics": ("global_configuration", None),
+            # Phase 7A CF-7A-0: flag-bound, no environment ceiling.
+            "media_assets": ("global_configuration", None),
         }
         items = h.effective().json()["items"]
         assert {item["capability"] for item in items} == set(expected)

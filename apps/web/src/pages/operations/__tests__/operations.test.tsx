@@ -44,11 +44,12 @@ describe('operations page — operator access', () => {
 
     expect(await screen.findByText('Capability activation')).toBeInTheDocument();
 
-    // All seven registered capabilities render with the dark default explained:
+    // All eight registered capabilities render with the dark default explained:
     // disabled; scheduling by its engaged environment ceiling (FU-267-C1), the
-    // other six by the global configuration. (Recommendation Briefs joined the
+    // other seven by the global configuration. (Recommendation Briefs joined the
     // registry at Project Phase 5 CF-1, Creative Generation at CF-2, Content Export
-    // at CF-3, Notifications and Analytics at 5E-CF under operator ruling O-12(B).)
+    // at CF-3, Notifications and Analytics at 5E-CF under operator ruling O-12(B),
+    // Media Assets at Phase 7A CF-7A-0.)
     for (const label of [
       'Opportunity Feedback',
       'Scout Scheduling',
@@ -57,11 +58,13 @@ describe('operations page — operator access', () => {
       'Creative Generation',
       'Content Export',
       'Notifications and Analytics',
+      // Phase 7A CF-7A-0.
+      'Media Assets',
     ]) {
       expect(await screen.findByText(label)).toBeInTheDocument();
     }
-    expect(screen.getAllByText('Disabled')).toHaveLength(7);
-    expect(screen.getAllByText('Global configuration')).toHaveLength(6);
+    expect(screen.getAllByText('Disabled')).toHaveLength(8);
+    expect(screen.getAllByText('Global configuration')).toHaveLength(7);
     const scheduling = await capabilityRow(screen, 'Scout Scheduling');
     expect(within(scheduling).getByText('Safety ceiling')).toBeInTheDocument();
     expect(within(scheduling).getByText(/environment ceiling: engaged/i)).toBeInTheDocument();

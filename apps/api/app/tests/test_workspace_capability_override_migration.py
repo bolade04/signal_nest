@@ -36,7 +36,7 @@ import pytest
 API_DIR = Path(__file__).resolve().parents[2]
 # Revision immediately before the workspace_capability_overrides migration.
 PREV = "4945b98229e6"
-HEAD = "53fdde95354a"  # 5E-CF: the CHECK admits notifications_analytics (above D-N4 item 36)
+HEAD = "91a796f09399"  # CF-7A-0: the CHECK admits media_assets (above 5E-CF)
 TABLE = "workspace_capability_overrides"
 
 
@@ -316,6 +316,8 @@ def test_postgres_workspace_deletion_cascades_override() -> None:  # pragma: no 
 # --------------------------------------------------------------------------- #
 #: The revision below the 5E-CF widening (D-N4 item 36's closed claim kinds).
 CLAIM_KINDS = "1574637e56d3"
+#: The 5E-CF widening itself (no longer the head since CF-7A-0, which follows it).
+NA_WIDENING = "53fdde95354a"
 CHECK_NAME = "ck_workspace_capability_override_capability"
 NEW_CAPABILITY = "notifications_analytics"
 _INSERT_OVERRIDE = (
@@ -358,7 +360,8 @@ def test_the_5e_cf_widening_is_the_single_head_above_the_claim_kinds() -> None:
 
     script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
     assert [r.revision for r in script.get_revisions("heads")] == [HEAD]
-    assert script.get_revision(HEAD).down_revision == CLAIM_KINDS
+    assert script.get_revision(HEAD).down_revision == NA_WIDENING
+    assert script.get_revision(NA_WIDENING).down_revision == CLAIM_KINDS
 
 
 def test_the_head_check_admits_every_registered_capability(db_path) -> None:
@@ -373,7 +376,7 @@ def test_the_head_check_admits_every_registered_capability(db_path) -> None:
 
 
 def test_the_5e_cf_downgrade_refuses_while_an_override_names_the_capability(db_path) -> None:
-    assert _alembic(db_path, "upgrade", "head").returncode == 0
+    assert _alembic(db_path, "upgrade", NA_WIDENING).returncode == 0
     _sql(db_path, _INSERT_OVERRIDE, ("ov-na", "ws-1", NEW_CAPABILITY))
 
     refused = _alembic(db_path, "downgrade", "-1")
@@ -382,7 +385,7 @@ def test_the_5e_cf_downgrade_refuses_while_an_override_names_the_capability(db_p
     assert f"name '{NEW_CAPABILITY}'; clear them before downgrading" in (
         refused.stdout + refused.stderr
     )
-    assert _version(db_path) == [HEAD]  # nothing changed
+    assert _version(db_path) == [NA_WIDENING]  # nothing changed
     assert NEW_CAPABILITY in _capability_check(db_path)
     assert _sql(db_path, f"SELECT capability FROM {TABLE}") == [(NEW_CAPABILITY,)]
 
@@ -390,14 +393,16 @@ def test_the_5e_cf_downgrade_refuses_while_an_override_names_the_capability(db_p
 def test_the_5e_cf_downgrade_narrows_to_the_cf3_set_and_the_upgrade_restores_it(db_path) -> None:
     from app.capabilities.registry import persisted_values
 
-    assert _alembic(db_path, "upgrade", "head").returncode == 0
+    assert _alembic(db_path, "upgrade", NA_WIDENING).returncode == 0
     _sql(db_path, _INSERT_OVERRIDE, ("ov-export", "ws-1", "content_export"))
 
     down = _alembic(db_path, "downgrade", "-1")
 
     assert down.returncode == 0, down.stdout + down.stderr
     assert _version(db_path) == [CLAIM_KINDS]
-    assert _capability_check(db_path) == set(persisted_values()) - {NEW_CAPABILITY}
+    assert _capability_check(db_path) == set(persisted_values()) - {
+        NEW_CAPABILITY, "media_assets"
+    }
     assert _sql(db_path, f"SELECT id, capability FROM {TABLE}") == [("ov-export", "content_export")]
     with pytest.raises(sqlite3.IntegrityError):
         _sql(db_path, _INSERT_OVERRIDE, ("ov-na", "ws-2", NEW_CAPABILITY))
@@ -413,7 +418,7 @@ def test_the_5e_cf_downgrade_narrows_to_the_cf3_set_and_the_upgrade_restores_it(
 
 
 def test_postgres_5e_cf_widening_round_trips() -> None:
-    """On PostgreSQL (a database of its own): the head CHECK admits the capability, the
+    """On PostgreSQL (a database of its own): 5E-CF's CHECK admits the capability, the
     downgrade refuses before any DDL while an override names it, then narrows the CHECK to
     the CF-3 set, and the upgrade restores it with no drift."""
     import sqlalchemy as sa
@@ -454,9 +459,9 @@ def test_postgres_5e_cf_widening_round_trips() -> None:
             engine.dispose()
 
     with pg_database("sn_5ecf") as url:
-        _pg_alembic(url, "upgrade", "head")
-        assert _pg_version(url) == [HEAD]
-        assert check_values(url) == set(persisted_values())
+        _pg_alembic(url, "upgrade", NA_WIDENING)
+        assert _pg_version(url) == [NA_WIDENING]
+        assert check_values(url) == set(persisted_values()) - {"media_assets"}
         engine = create_engine(url)
         try:
             with engine.begin() as conn:
@@ -477,7 +482,7 @@ def test_postgres_5e_cf_widening_round_trips() -> None:
         assert f"name '{NEW_CAPABILITY}'; clear them before downgrading" in (
             refused.stdout + refused.stderr
         )
-        assert _pg_version(url) == [HEAD] and NEW_CAPABILITY in check_values(url)
+        assert _pg_version(url) == [NA_WIDENING] and NEW_CAPABILITY in check_values(url)
 
         engine = create_engine(url)
         try:
@@ -488,7 +493,7 @@ def test_postgres_5e_cf_widening_round_trips() -> None:
         token = _confirmation(url, "-1")
         _pg_alembic(url, "-x", f"confirm={token}", "downgrade", "-1")
         assert _pg_version(url) == [CLAIM_KINDS]
-        assert check_values(url) == set(persisted_values()) - {NEW_CAPABILITY}
+        assert check_values(url) == set(persisted_values()) - {NEW_CAPABILITY, "media_assets"}
         with pytest.raises(IntegrityError):
             insert(url, "ov-na", "ws-2", NEW_CAPABILITY)
 

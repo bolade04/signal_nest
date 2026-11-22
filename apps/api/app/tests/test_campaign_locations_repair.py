@@ -79,10 +79,13 @@ ADDR = "6f8a80cf1785"
 BACKSTOP = "d0a8bce8de6a"
 #: D-N4 item 36: the closed claim kinds (data only), which follows the backstop.
 CLAIM_KINDS = "1574637e56d3"
-#: The code head (Project Phase 5E 5E-CF: the capability-override CHECK admits
-#: 'notifications_analytics'), which follows the claim kinds. The repair cases upgrade to the
+#: Project Phase 5E 5E-CF (the capability-override CHECK admits 'notifications_analytics'),
+#: which follows the claim kinds.
+NA_WIDENING = "53fdde95354a"
+#: The code head (Phase 7A CF-7A-0: the media asset tables; the CHECK admits
+#: 'media_assets'), which follows the 5E-CF widening. The repair cases upgrade to the
 #: repair itself, so they see exactly what it does.
-HEAD = "53fdde95354a"
+HEAD = "91a796f09399"
 CF3 = "c3f8e1a6d2b9"
 CF2 = "a7d2e9f4c1b8"
 MIGRATION = next((API_DIR / "alembic" / "versions").glob(f"*-{REPAIR}_*.py"))
@@ -530,7 +533,8 @@ def test_the_repair_follows_cf3_below_the_single_head_and_is_data_only() -> None
     # claim kinds, which follows D-N4 item 37's append-only backstop, which follows W21 ADDR's
     # structured business address, which follows the repair.
     assert [r.revision for r in script.get_revisions("heads")] == [HEAD]
-    assert script.get_revision(HEAD).down_revision == CLAIM_KINDS
+    assert script.get_revision(HEAD).down_revision == NA_WIDENING
+    assert script.get_revision(NA_WIDENING).down_revision == CLAIM_KINDS
     assert script.get_revision(CLAIM_KINDS).down_revision == BACKSTOP
     assert script.get_revision(BACKSTOP).down_revision == ADDR
     assert script.get_revision(ADDR).down_revision == REPAIR

@@ -297,7 +297,7 @@ def test_inventory_and_retention_of_the_two_tables():
     # CF-1 added no retention class and decided no duration. The only class added since is
     # Project Phase 5E's ``notifications`` (D-N4 item 30, 5E-W1), itself unset: eight, all
     # unset.
-    assert len(RetentionClass) == 8
+    assert len(RetentionClass) == 10  # + media_uploads, media_records (CF-7A-0)
     settings = Settings(_env_file=None)
     assert all(getattr(settings, c.setting_name) is None for c in RetentionClass)
 

@@ -42,6 +42,8 @@ def test_capability_value_set_is_closed_and_exact() -> None:
         # Project Phase 5E notifications and analytics, added at W21 5E-CF (operator
         # ruling O-12(B), 2026-11-12, which amends O-4's three-flag limit; O-3's pattern).
         "notifications_analytics",
+        # Phase 7A media assets, added at CF-7A-0 (O-3's pattern, CF-7A-0's proposal).
+        "media_assets",
     }
 
 
@@ -59,6 +61,7 @@ def test_iter_capabilities_is_deterministic_declaration_order() -> None:
         Capability.CREATIVE_GENERATION,
         Capability.CONTENT_EXPORT,
         Capability.NOTIFICATIONS_ANALYTICS,
+        Capability.MEDIA_ASSETS,
     )
     # Stable across repeated calls.
     assert iter_capabilities() == iter_capabilities()
@@ -174,6 +177,7 @@ _ACTIVATION_PHASE = {
     Capability.CREATIVE_GENERATION: "5C",
     Capability.CONTENT_EXPORT: "5E",
     Capability.NOTIFICATIONS_ANALYTICS: "5E",
+    Capability.MEDIA_ASSETS: "7A",
 }
 
 
@@ -210,6 +214,7 @@ def test_persisted_values_are_sorted_and_match_enum() -> None:
         "connector_rss",
         "content_export",
         "creative_generation",
+        "media_assets",
         "notifications_analytics",
         "opportunity_feedback",
         "recommendation_briefs",

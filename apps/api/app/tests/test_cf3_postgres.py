@@ -46,9 +46,9 @@ ADDR = "6f8a80cf1785"
 BACKSTOP = "d0a8bce8de6a"
 #: D-N4 item 36's closed claim kinds (data only), which follows the backstop.
 CLAIM_KINDS = "1574637e56d3"
-#: The code head (5E-CF: the capability-override CHECK admits 'notifications_analytics'), which
-#: follows the claim kinds.
-HEAD = "53fdde95354a"
+#: The code head (Phase 7A CF-7A-0: the media asset tables; the capability-override CHECK
+#: admits 'media_assets'), which follows 5E-CF's widening for 'notifications_analytics'.
+HEAD = "91a796f09399"
 CF2 = "a7d2e9f4c1b8"
 NEW_TABLES = {"campaign_locations", "exports", "notifications", "notification_preferences"}
 

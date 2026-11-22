@@ -58,9 +58,9 @@ from app.db.base import Base
 from app.tests._auth2_support import pg_database, require_postgres
 
 API_DIR = Path(__file__).resolve().parents[2]
-#: The code head (Project Phase 5E 5E-CF, operator ruling O-12(B): the capability-override CHECK
-#: admits ``notifications_analytics``; no table or column changes).
-HEAD = "53fdde95354a"
+#: The code head (Phase 7A CF-7A-0: the four media tables; the capability-override CHECK
+#: admits ``media_assets``). It follows 5E-CF's widening (``53fdde95354a``).
+HEAD = "91a796f09399"
 #: One below head (D-N4 item 36, W21: the closed claim kinds; data only: the ``prohibited`` alias
 #: becomes ``blocked``, so no table or column changes).
 CLAIM_KINDS = "1574637e56d3"

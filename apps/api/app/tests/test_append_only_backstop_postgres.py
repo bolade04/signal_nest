@@ -128,8 +128,9 @@ API_DIR = Path(__file__).resolve().parents[2]
 REVISION = "d0a8bce8de6a"
 BELOW = "6f8a80cf1785"
 #: The single head above this revision: D-N4 item 36's closed claim kinds (data only), then
-#: Project Phase 5E 5E-CF's capability-CHECK widening (``notifications_analytics``; no table).
-CODE_HEAD = "53fdde95354a"
+#: Project Phase 5E 5E-CF's capability-CHECK widening (``notifications_analytics``; no table),
+#: then Phase 7A CF-7A-0's media asset tables.
+CODE_HEAD = "91a796f09399"
 REVISION_FILE = (
     API_DIR
     / "alembic"

@@ -141,7 +141,7 @@ def test_single_head(db_path) -> None:
     # Exactly one head line — no divergent branches.
     heads = [ln for ln in result.stdout.splitlines() if ln.strip()]
     assert len(heads) == 1, result.stdout
-    assert "53fdde95354a" in heads[0]  # 5E-CF: the capability CHECK admits notifications_analytics
+    assert "91a796f09399" in heads[0]  # CF-7A-0: the media asset tables (above 5E-CF)
 
 
 def test_downgrade_is_surgical_and_preserves_business_data(db_path) -> None:

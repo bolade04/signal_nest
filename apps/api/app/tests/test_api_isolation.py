@@ -130,16 +130,17 @@ def test_system_capabilities_is_coarse_summary_only(client: TestClient, auth: di
     assert body["is_local_mode"] is True
     assert "capabilities" not in body
     # Read-only product-capability reflections are exposed (never backend
-    # topology). All seven registered capabilities ship dark, so all reflect
+    # topology). All eight registered capabilities ship dark, so all reflect
     # False. This stays EXACT-EQUALITY on purpose: it is the closed-set
     # disclosure control for a customer-facing endpoint, and it is what fails
-    # loudly if an eighth value is ever reflected into `features`. Do not relax
+    # loudly if a ninth value is ever reflected into `features`. Do not relax
     # it to a subset or per-key check. `recommendation_briefs_enabled` was added
     # at Project Phase 5 CF-1, `creative_generation_enabled` at CF-2,
     # `content_export_enabled` at CF-3 and `notifications_analytics_enabled` at
     # 5E-CF (the fourth Phase 5 flag: operator ruling O-12(B), which amends O-4's
     # three-flag limit), each per operator decision O-4 (ALT_expose_all), in the
-    # same commit as its flag.
+    # same commit as its flag; `media_assets_enabled` at Phase 7A CF-7A-0 (media plan
+    # v3 §3.0), likewise.
     assert body["features"] == {
         "opportunity_feedback_enabled": False,
         "scout_scheduling_enabled": False,
@@ -148,6 +149,7 @@ def test_system_capabilities_is_coarse_summary_only(client: TestClient, auth: di
         "creative_generation_enabled": False,
         "content_export_enabled": False,
         "notifications_analytics_enabled": False,
+        "media_assets_enabled": False,
     }
     blob = resp.text.lower()
     for forbidden in ("password", "api_key", "secret", "redis://", "postgresql://"):
@@ -164,6 +166,7 @@ def test_system_capabilities_is_coarse_summary_only(client: TestClient, auth: di
         "creative_generation_enabled",
         "content_export_enabled",
         "notifications_analytics_enabled",
+        "media_assets_enabled",
     ],
 )
 def test_system_capabilities_reflects_each_flag_independently(
