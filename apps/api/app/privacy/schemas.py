@@ -178,6 +178,12 @@ class AccountExportOut(BaseModel):
     #: W21 ADDR: the confirmations the account made that a location's business town lies within
     #: its area (the coverage rule, its location and the instant; never the address).
     locality_confirmations_made: list[dict[str, Any]]
+    #: Phase 7A CF-7A-0: the media assets the account uploaded (id, workspace, kind, state, its
+    #: own display name and the instant; never a storage key or the stored bytes).
+    media_assets_uploaded: list[dict[str, Any]]
+    #: Phase 7A CF-7A-0: the rights attestations the account made (id, workspace, the asset,
+    #: the basis, the attestation wording's version and the instant).
+    media_rights_attested: list[dict[str, Any]]
 
 
 class ExportedTableOut(BaseModel):

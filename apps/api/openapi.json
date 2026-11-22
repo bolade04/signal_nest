@@ -190,6 +190,22 @@
             "title": "Locality Confirmations Made",
             "type": "array"
           },
+          "media_assets_uploaded": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Media Assets Uploaded",
+            "type": "array"
+          },
+          "media_rights_attested": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Media Rights Attested",
+            "type": "array"
+          },
           "memberships": {
             "items": {
               "additionalProperties": true,
@@ -264,7 +280,9 @@
           "exports_performed",
           "notifications_received",
           "notification_preferences",
-          "locality_confirmations_made"
+          "locality_confirmations_made",
+          "media_assets_uploaded",
+          "media_rights_attested"
         ],
         "title": "AccountExportOut",
         "type": "object"

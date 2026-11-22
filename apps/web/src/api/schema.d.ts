@@ -2711,6 +2711,14 @@ export interface components {
             locality_confirmations_made: {
                 [key: string]: unknown;
             }[];
+            /** Media Assets Uploaded */
+            media_assets_uploaded: {
+                [key: string]: unknown;
+            }[];
+            /** Media Rights Attested */
+            media_rights_attested: {
+                [key: string]: unknown;
+            }[];
             /** Memberships */
             memberships: {
                 [key: string]: unknown;

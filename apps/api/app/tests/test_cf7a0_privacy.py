@@ -15,6 +15,9 @@
   finds nothing naming the account.
 * **Organization deletion** removes every media row of the organization and none of another's;
   the **organization export** lists the four tables, scoped to the organization.
+* **Account export** (ruling CF7A0-3, DATA C3): the account's own uploads and attestations, with
+  the stated fields, on SQLite and on PostgreSQL; another organization's and another account's
+  are absent.
 """
 
 from __future__ import annotations
@@ -324,3 +327,61 @@ def test_with_a_media_duration_set_the_sweep_runs_and_purges_nothing_for_media(s
         ("media_records", "purged", True, {}),
     ]
     assert {model.__tablename__: env.rows(model) for model in MEDIA_MODELS} == before
+
+
+# --------------------------------------------------------------------------- #
+# Coordinator ruling CF7A0-3 (DATA C3 (i)): the account export lists the account's own media
+# --------------------------------------------------------------------------- #
+ASSET_FIELDS = {"id", "workspace_id", "kind", "state", "display_name", "created_at"}
+RIGHTS_FIELDS = {
+    "id", "workspace_id", "asset_id", "basis", "attestation_text_version", "attested_at",
+}
+
+
+@pytest.fixture(params=["sqlite", "postgresql"])
+def export_env(request, tmp_path) -> Iterator[PrivacyEnv]:
+    if request.param == "postgresql":
+        require_postgres()
+        with privacy_world(None) as e:
+            yield e
+    else:
+        with privacy_world(tmp_path / "cf7a0-export.db") as e:
+            yield e
+
+
+def test_the_account_export_lists_its_uploads_and_attestations_and_no_one_elses(export_env):
+    """As CF-1, CF-2 and CF-3 did for their account-linked records: the account export lists
+    the media assets the account uploaded (``created_by``) and the rights attestations it made
+    (``attested_by``), with exactly the stated fields; another organization's, and another
+    account's in the same organization, are absent; no storage key is exported."""
+    env = export_env
+    _add_media(env)
+    exports = {}
+    for account in (CAROL, BOB, ALICE):
+        r = env.client.get(f"{API}/account/export", headers=env.auth(account))
+        assert r.status_code == 200, r.text
+        assert "/media/" not in r.text  # never a storage key
+        exports[account] = r.json()
+
+    carol = exports[CAROL]
+    (asset,) = carol["media_assets_uploaded"]
+    assert set(asset) == ASSET_FIELDS
+    assert (asset["id"], asset["workspace_id"], asset["kind"], asset["state"]) == (
+        "cf7a0-a-asset", WS_A, "raster_image", "active"
+    )
+    assert asset["display_name"] == "a logo" and asset["created_at"]
+    (rights,) = carol["media_rights_attested"]
+    assert set(rights) == RIGHTS_FIELDS
+    assert (rights["id"], rights["workspace_id"], rights["asset_id"]) == (
+        "cf7a0-a-rights", WS_A, "cf7a0-a-asset"
+    )
+    assert (rights["basis"], rights["attestation_text_version"]) == (
+        "customer_attestation", "attest-1"
+    )
+    assert rights["attested_at"]
+
+    # Organization B's uploader sees only B's rows; the account that uploaded nothing, none.
+    assert [a["id"] for a in exports[BOB]["media_assets_uploaded"]] == ["cf7a0-b-asset"]
+    assert [r["id"] for r in exports[BOB]["media_rights_attested"]] == ["cf7a0-b-rights"]
+    assert exports[ALICE]["media_assets_uploaded"] == []
+    assert exports[ALICE]["media_rights_attested"] == []
