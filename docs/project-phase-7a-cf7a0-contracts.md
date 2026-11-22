@@ -204,7 +204,7 @@ resolves to. (Ruling CF7A0-3, CONTROLS C-2; no new setting.)
 - **No value is chosen** (plan: "Values written `<configured …>` are settings that default to
   unset and refuse when unset. They are never invented here."). The M0-A0 lane's E8-L item 3
   needs "the ceilings CF-7A-0 proposes"; CF-7A-0 proposes none and leaves them to the operator
-  or the review (decision R-8), with the reference points in section 13.
+  (decision R-8), with the reference points in section 13.
 - `Settings` grows from 155 to 165 fields: the flag, these seven and the two retention durations
   (section 5). `docs/operations/aws-staging-secret-inventory.md` classifies all ten as
   non-secret configuration.
@@ -223,7 +223,11 @@ resolves to. (Ruling CF7A0-3, CONTROLS C-2; no new setting.)
   `media_objects` → `media_uploads`; `media_provenance` and `media_rights` → `media_records`. Each
   `TableEntry.retention_class` stays `None` until M0-B adds the purge roots
   (`app/privacy/retention.py`, M0-B's file) with the object erasure: the existing inventory test
-  requires every class named in a `TableEntry` to have a purge root.
+  requires every class named in a `TableEntry` to have a purge root. M0-B then moves the
+  `media_uploads` bindings (`media_assets`, `media_objects`) into their `TableEntry`.
+  `media_provenance` and `media_rights` keep `retention_class=None` while they cascade (the
+  `CASCADE`-dependent convention of `recommendation_briefs`), so the inventory's partition test
+  holds with `_ROOTS[MEDIA_RECORDS]` empty.
 - **The records go with their asset or object (ruling CF7A0-3, DATA C2).** `media_provenance` and
   `media_rights` are `CASCADE` dependents of their object and asset. They are removed with them
   under `media_uploads`, and a `media_records` purge never selects the provenance record of an
@@ -293,8 +297,8 @@ resolves to. (Ruling CF7A0-3, CONTROLS C-2; no new setting.)
 
 ## 7. The CSP directive set (stated; M0-B changes the files)
 
-At N3 the SPA policy (`apps/web/vite.config.ts:25-45`, pinned by
-`apps/web/scripts/assert-csp-build.mjs:76-82`) is:
+At N3 the SPA policy (`apps/web/vite.config.ts:31-47`, pinned by
+`apps/web/scripts/assert-csp-build.mjs:73-80`) is:
 
 ```
 default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self';

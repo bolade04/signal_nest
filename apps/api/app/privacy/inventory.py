@@ -318,9 +318,12 @@ TABLES: dict[str, TableEntry] = {
 
 #: Phase 7A (CF-7A-0): the retention class each media table is purged by, fixed by contract.
 #: ``TableEntry.retention_class`` stays None for these tables until M0-B adds their purge roots
-#: (``app.privacy.retention._ROOTS``) together with the object erasure; M0-B then moves each
-#: binding into its ``TableEntry``. Until then, with a media duration set, the sweep cannot
-#: purge the class (CF-7A-0 contract, limitation L-1).
+#: (``app.privacy.retention._ROOTS``) together with the object erasure; M0-B then moves the
+#: ``media_uploads`` bindings (``media_assets``, ``media_objects``) into their ``TableEntry``.
+#: ``media_provenance`` and ``media_rights`` keep ``retention_class=None`` while they cascade (the
+#: ``CASCADE``-dependent convention of ``recommendation_briefs``), so the inventory's partition
+#: test holds with ``_ROOTS[MEDIA_RECORDS]`` empty. Until then, with a media duration set, the
+#: sweep cannot purge the class (CF-7A-0 contract, limitation L-1).
 #: ``media_provenance`` and ``media_rights`` are ``CASCADE`` dependents of their object and
 #: asset. They are removed with them under ``media_uploads``, and a ``media_records`` purge never
 #: selects the provenance record of an existing object or the rights record of an existing asset;
