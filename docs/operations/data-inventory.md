@@ -119,16 +119,17 @@ automatically be classified as containing no personal data." It supersedes the p
 The four media tables carry `organization_id` and `workspace_id` keys (CASCADE). They are
 exported with the organization (rows only) and are never kept as compliance records after their
 organization (MD-6). Their time-based classes are fixed by contract (`MEDIA_RETENTION_BINDINGS`
-in `app/privacy/inventory.py`) and take effect when M0-B adds the media purge; until then the
-classes' durations are unset and the sweep refuses them. The stored bytes are in object storage
+in `app/privacy/inventory.py`); M0-B added the `media_uploads` purge, which erases the stored
+objects with the rows. The classes' durations are unset, and the sweep refuses both while either
+is unset. The stored bytes are in object storage
 (see [Outside the database](#outside-the-database--stated-limitations-and-operating-procedure)).
 
 | Table | Columns that can hold personal or confidential data | On account deletion | On organization deletion | Retention class |
 |---|---|---|---|---|
-| `media_assets` | `display_name` (customer text, for example a file name); `created_by` (the uploading account) | `created_by`: set null (row kept) | delete | `media_uploads` (bound by M0-B; duration unset) |
-| `media_objects` | **none** besides what the stored bytes hold: `storage_key`, `size_bytes`, `content_type`, `sha256`, `version_id`, `state` | — | delete | `media_uploads` (bound by M0-B; duration unset) |
-| `media_provenance` | **none**: origin, inputs hash, parent object, processor, scanner, job | — | delete | `media_records` (bound by M0-B; duration unset). A `CASCADE` dependent of its object: removed with it under `media_uploads`; a `media_records` purge never selects the provenance record of an existing object |
-| `media_rights` | `attested_by` (the attesting account), `attested_at`; the attestation text version | `attested_by`: set null; the rights content (basis, text version, instant) is kept; no snapshot of the account exists | delete | `media_records` (bound by M0-B; duration unset). A `CASCADE` dependent of its asset: removed with it under `media_uploads`; a `media_records` purge never selects the rights record of an existing asset |
+| `media_assets` | `display_name` (customer text, for example a file name); `created_by` (the uploading account) | `created_by`: set null (row kept) | delete, after its stored objects are erased | `media_uploads` (a root; duration unset) |
+| `media_objects` | **none** besides what the stored bytes hold: `storage_key`, `size_bytes`, `content_type`, `sha256`, `version_id`, `state` | — | delete, after its stored objects are erased | `media_uploads` (upload records are roots; a stored object goes with its asset; duration unset) |
+| `media_provenance` | **none**: origin, inputs hash, parent object, processor, scanner, job | — | delete | `media_records` (no root in M0; duration unset). A `CASCADE` dependent of its object: removed with it under `media_uploads`; a `media_records` purge never selects the provenance record of an existing object |
+| `media_rights` | `attested_by` (the attesting account), `attested_at`; the attestation text version | `attested_by`: set null; the rights content (basis, text version, instant) is kept; no snapshot of the account exists | delete | `media_records` (no root in M0; duration unset). A `CASCADE` dependent of its asset: removed with it under `media_uploads`; a `media_records` purge never selects the rights record of an existing asset |
 
 ### Tenant business content (customer-provided; may contain personal data of sole traders)
 
@@ -222,8 +223,8 @@ repository does not choose them. The decision material is in the lane's
 | `job_history` | `RETENTION_JOB_HISTORY_DAYS` | terminal `jobs` (+ `job_events`) | `updated_at` |
 | `audit_logs` | `RETENTION_AUDIT_LOGS_DAYS` | `audit_logs`, `approvals`, `exports` | `created_at` |
 | `notifications` | `RETENTION_NOTIFICATIONS_DAYS` | `notifications` (in-app feed rows; preferences are not purged by age) | `created_at` |
-| `media_uploads` | `RETENTION_MEDIA_UPLOADS_DAYS` | `media_assets`, `media_objects` and their stored objects, with their `CASCADE` dependents `media_provenance` and `media_rights` (Phase 7A; the purge is M0-B's) | not yet fixed (M0-B) |
-| `media_records` | `RETENTION_MEDIA_RECORDS_DAYS` | `media_provenance`, `media_rights`, but never the provenance record of an existing object or the rights record of an existing asset: those go with it under `media_uploads` (Phase 7A; the purge is M0-B's) | not yet fixed (M0-B) |
+| `media_uploads` | `RETENTION_MEDIA_UPLOADS_DAYS` | `media_assets` (any state) and upload records (`media_objects` that are not `stored`), with every version, delete marker and in-progress upload of their stored objects, and their `CASCADE` dependents (the asset's stored objects, `media_provenance`, `media_rights`) (Phase 7A, M0-B) | `created_at` |
+| `media_records` | `RETENTION_MEDIA_RECORDS_DAYS` | none in M0: every `media_provenance` and `media_rights` row goes with its existing object or asset under `media_uploads`, and a `media_records` purge never selects one (Phase 7A, M0-B) | — (no root in M0) |
 
 **Unset is not a default.** A class whose duration is unset is *undecided*: the purge
 refuses it and deletes nothing (the sweep reports `policy_unset` and exits non-zero).
@@ -245,12 +246,15 @@ and production refuses to start, as for the other seven.
 object storage in privacy inventory and erasure before customer uploads ship. Do not create
 an indefinite compliance-retention exception." The `media_uploads` and `media_records`
 classes have no default duration and none is chosen (D-7). While their durations are unset
-the sweep reports `policy_unset` and deletes nothing, and production refuses to start. Their
-purge roots, with the version-aware object erasure, are M0-B's. Until M0-B binds them (ruling
-CF7A0-2, R-12), both classes are registered with no purge roots: a media duration that is set
-makes the sweep report the class `purged` (or `dry_run`) with nothing selected or deleted, so
-media retention is not enforced until then; M0-B must register the real roots, stored objects
-and every version included, before any media route is mounted. `media_provenance` and
+the sweep reports `policy_unset` and deletes nothing, and production refuses to start; while
+**either** is unset, the sweep refuses **both**. M0-B bound the purge roots with the
+version-aware object erasure (replacing CF-7A-0's empty roots, ruling CF7A0-2, R-12): an asset or
+an upload record whose `created_at` is past the cut-off is a root. Its stored objects are erased
+first, every version, delete marker and in-progress multipart upload included, and its rows are
+deleted only when a fresh listing finds nothing left. A root whose objects cannot all be erased
+keeps its rows, and the sweep reports the class incomplete (`complete: false`, `kept`, `objects`)
+for the next run to retry. Measured from `created_at`, an asset still in use is purged once it is
+older than the duration (D-7's decision material must say so). `media_provenance` and
 `media_rights` are `CASCADE` dependents of their object and asset. They are removed with them
 under `media_uploads`, and a `media_records` purge never selects the provenance record of an
 existing object or the rights record of an existing asset; for M0's rows,
@@ -275,7 +279,7 @@ mechanism, with the procedure an operator follows.
 | **RDS automated backups / snapshots** | a full copy of every table at backup time | deleted rows persist in backups until those age out (`data_sql` module default `backup_retention_period` = 7 days; the root's configured value is not asserted here) and in any manual snapshot until it is deleted | after **any restore**, re-apply every erasure completed after the backup's timestamp, using the `privacy.account.deleted` / `privacy.organization.deleted` log events (they carry the pseudonymous subject id); manual snapshots must be covered by the same policy. This requires log retention ≥ backup retention — an operator item |
 | **Application logs (CloudWatch)** | pseudonymous user ids on security events (`security.*`, `privacy.*`), request metadata; no passwords, tokens or emails by the logging contract | log events are not edited or deleted per subject; they expire with the log group (the `ecs` module's staging baseline is 30 days) | treat log-group retention as the deletion bound; state it in the privacy notice |
 | **Redis** | job-available notifications and short-lived advisory locks; the cache adapter exists but no product path stores tenant data in it | — | none needed; TTL-bound |
-| **Object storage (S3 adapter)** | no product path writes customer data to object storage on `origin/main`. Phase 7A CF-7A-0 states the media entry for when one does (`OBJECT_STORES` in `app/privacy/inventory.py`: keys under `{organization_id}/{workspace_id}/media/`; an organization's erasure must remove every object version and delete marker under `{organization_id}/` and abort its in-progress multipart uploads); M0-B implements it before uploads can be enabled | — | re-assess when M0-A and M0-B start storing objects |
+| **Object storage (S3 adapter)** | no product path writes customer data to object storage on `origin/main`. Phase 7A CF-7A-0 states the media entry for when one does (`OBJECT_STORES` in `app/privacy/inventory.py`: keys under `{organization_id}/{workspace_id}/media/`; an organization's erasure must remove every object version and delete marker under `{organization_id}/` and abort its in-progress multipart uploads). M0-B implements that erasure, the media purge and the verification listing (`app/privacy/object_erasure.py`; `verify_organization_objects_erased` in `app/privacy/verification.py`) through M0-A0's version-aware storage operations; with the adapter before M0-A0, which has none, the erasure reports `unavailable` and the purge keeps every root. This row stays true while no media route is mounted and changes when M0-A's routes are mounted | — | re-assess when M0-A's routes are mounted |
 | **Amazon SES** | account mail (reset and verification links) in transit; the SES **account-level suppression list** can hold an address that bounced or complained | SES content is not stored by the application; a suppressed address is not removed by account deletion | on an erasure request, check the SES suppression list for the address and remove it (operator, AWS-side) |
 | **Third-party LLM provider** | prompt text sent for classification | see `docs/operations/llm-data-processing.md` (`P6-PRIV-2`) | per that document |
 | **The user's browser** | the bearer token and the selected workspace in `localStorage` | cleared by sign-out and by the deletion flow in the web app | none |
