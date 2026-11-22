@@ -376,7 +376,7 @@ def test_the_head_check_admits_every_registered_capability(db_path) -> None:
 
 
 def test_the_5e_cf_downgrade_refuses_while_an_override_names_the_capability(db_path) -> None:
-    assert _alembic(db_path, "upgrade", "head").returncode == 0
+    assert _alembic(db_path, "upgrade", NA_WIDENING).returncode == 0
     _sql(db_path, _INSERT_OVERRIDE, ("ov-na", "ws-1", NEW_CAPABILITY))
 
     refused = _alembic(db_path, "downgrade", "-1")
@@ -385,7 +385,7 @@ def test_the_5e_cf_downgrade_refuses_while_an_override_names_the_capability(db_p
     assert f"name '{NEW_CAPABILITY}'; clear them before downgrading" in (
         refused.stdout + refused.stderr
     )
-    assert _version(db_path) == [HEAD]  # nothing changed
+    assert _version(db_path) == [NA_WIDENING]  # nothing changed
     assert NEW_CAPABILITY in _capability_check(db_path)
     assert _sql(db_path, f"SELECT capability FROM {TABLE}") == [(NEW_CAPABILITY,)]
 
