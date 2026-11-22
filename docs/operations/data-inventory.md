@@ -127,8 +127,8 @@ classes' durations are unset and the sweep refuses them. The stored bytes are in
 |---|---|---|---|---|
 | `media_assets` | `display_name` (customer text, for example a file name); `created_by` (the uploading account) | `created_by`: set null (row kept) | delete | `media_uploads` (bound by M0-B; duration unset) |
 | `media_objects` | **none** besides what the stored bytes hold: `storage_key`, `size_bytes`, `content_type`, `sha256`, `version_id`, `state` | — | delete | `media_uploads` (bound by M0-B; duration unset) |
-| `media_provenance` | **none**: origin, inputs hash, parent object, processor, scanner, job | — | delete | `media_records` (bound by M0-B; duration unset) |
-| `media_rights` | `attested_by` (the attesting account), `attested_at`; the attestation text version | `attested_by`: set null; the rights content (basis, text version, instant) is kept; no snapshot of the account exists | delete | `media_records` (bound by M0-B; duration unset) |
+| `media_provenance` | **none**: origin, inputs hash, parent object, processor, scanner, job | — | delete | `media_records` (bound by M0-B; duration unset). A `CASCADE` dependent of its object: removed with it under `media_uploads`; a `media_records` purge never selects the provenance record of an existing object |
+| `media_rights` | `attested_by` (the attesting account), `attested_at`; the attestation text version | `attested_by`: set null; the rights content (basis, text version, instant) is kept; no snapshot of the account exists | delete | `media_records` (bound by M0-B; duration unset). A `CASCADE` dependent of its asset: removed with it under `media_uploads`; a `media_records` purge never selects the rights record of an existing asset |
 
 ### Tenant business content (customer-provided; may contain personal data of sole traders)
 
@@ -222,8 +222,8 @@ repository does not choose them. The decision material is in the lane's
 | `job_history` | `RETENTION_JOB_HISTORY_DAYS` | terminal `jobs` (+ `job_events`) | `updated_at` |
 | `audit_logs` | `RETENTION_AUDIT_LOGS_DAYS` | `audit_logs`, `approvals`, `exports` | `created_at` |
 | `notifications` | `RETENTION_NOTIFICATIONS_DAYS` | `notifications` (in-app feed rows; preferences are not purged by age) | `created_at` |
-| `media_uploads` | `RETENTION_MEDIA_UPLOADS_DAYS` | `media_assets`, `media_objects` and their stored objects (Phase 7A; the purge is M0-B's) | not yet fixed (M0-B) |
-| `media_records` | `RETENTION_MEDIA_RECORDS_DAYS` | `media_provenance`, `media_rights` (Phase 7A; the purge is M0-B's) | not yet fixed (M0-B) |
+| `media_uploads` | `RETENTION_MEDIA_UPLOADS_DAYS` | `media_assets`, `media_objects` and their stored objects, with their `CASCADE` dependents `media_provenance` and `media_rights` (Phase 7A; the purge is M0-B's) | not yet fixed (M0-B) |
+| `media_records` | `RETENTION_MEDIA_RECORDS_DAYS` | `media_provenance`, `media_rights`, but never the provenance record of an existing object or the rights record of an existing asset: those go with it under `media_uploads` (Phase 7A; the purge is M0-B's) | not yet fixed (M0-B) |
 
 **Unset is not a default.** A class whose duration is unset is *undecided*: the purge
 refuses it and deletes nothing (the sweep reports `policy_unset` and exits non-zero).
@@ -246,8 +246,17 @@ object storage in privacy inventory and erasure before customer uploads ship. Do
 an indefinite compliance-retention exception." The `media_uploads` and `media_records`
 classes have no default duration and none is chosen (D-7). While their durations are unset
 the sweep reports `policy_unset` and deletes nothing, and production refuses to start. Their
-purge roots, with the version-aware object erasure, are M0-B's; until M0-B, a media duration
-that is set makes the sweep stop with an error at that class, deleting nothing of it.
+purge roots, with the version-aware object erasure, are M0-B's. Until M0-B binds them (ruling
+CF7A0-2, R-12), both classes are registered with no purge roots: a media duration that is set
+makes the sweep report the class `purged` (or `dry_run`) with nothing selected or deleted, so
+media retention is not enforced until then; M0-B must register the real roots, stored objects
+and every version included, before any media route is mounted. `media_provenance` and
+`media_rights` are `CASCADE` dependents of their object and asset. They are removed with them
+under `media_uploads`, and a `media_records` purge never selects the provenance record of an
+existing object or the rights record of an existing asset; for M0's rows,
+`retention_media_records_days` therefore neither shortens nor lengthens a record's life beyond
+its asset's (D-7 decision material must say so). `media_records` gains independent roots only
+for records that do not cascade (CF-7A-1/2).
 
 ## Members of a deleted organization
 
@@ -346,7 +355,9 @@ sessions, tokens' metadata, the invitations, feedback, overrides and audit event
 produced, the recommendation briefs it authored, the creative drafts it generated, the
 approval decisions it made and — Project Phase 5E, W21 CF-3 — the exports it made, its own
 in-app notifications and its notification preferences, and — W21 ADDR — the business-town
-confirmations it made, without the address), which one account's activity bounds;
+confirmations it made, without the address, and — Phase 7A CF-7A-0 — the media assets it
+uploaded and the rights attestations it made, without a storage key or the stored bytes),
+which one account's activity bounds;
 it does not carry tenant tables (a brief's model-derived content and a draft's generated text
 are in the organization export, not the author's), and no `llm_usage_events` row.
 

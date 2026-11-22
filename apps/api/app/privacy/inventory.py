@@ -321,6 +321,12 @@ TABLES: dict[str, TableEntry] = {
 #: (``app.privacy.retention._ROOTS``) together with the object erasure; M0-B then moves each
 #: binding into its ``TableEntry``. Until then, with a media duration set, the sweep cannot
 #: purge the class (CF-7A-0 contract, limitation L-1).
+#: ``media_provenance`` and ``media_rights`` are ``CASCADE`` dependents of their object and
+#: asset. They are removed with them under ``media_uploads``, and a ``media_records`` purge never
+#: selects the provenance record of an existing object or the rights record of an existing asset;
+#: for M0's rows, ``retention_media_records_days`` therefore neither shortens nor lengthens a
+#: record's life beyond its asset's (D-7 decision material must say so). ``media_records`` gains
+#: independent roots only for records that do not cascade (CF-7A-1/2). (Ruling CF7A0-3, DATA C2.)
 MEDIA_RETENTION_BINDINGS: Mapping[str, RetentionClass] = MappingProxyType(
     {
         "media_assets": RetentionClass.MEDIA_UPLOADS,
