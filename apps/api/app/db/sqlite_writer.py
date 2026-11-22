@@ -26,19 +26,19 @@ once, and the caller's transaction holds it until it commits or rolls back. Its 
   brief's approval, a deletion or an erasure is either committed and read by the decision, or
   waits until the decision has committed;
 * :func:`app.creative.service.execute_generation` and :func:`app.briefs.service.create_brief`
-  (G-R3-1 F-2 and F-3), after the model call and before the re-read their write rests on (the
-  parent brief's approval; the author's membership and role), so a withdrawal, a removal or a
-  demotion is either committed and read, or waits until the draft or the brief has committed.
+  (G-R3-1 F-2 and F-3; O-F123-1), after the model call and before the re-reads their write rests
+  on (the parent brief's approval, then the requester's membership and role; the author's
+  membership and role), so a withdrawal, a removal or a demotion is either committed and read, or
+  waits until the draft or the brief has committed.
 
-**The caller's transaction must not be open yet**, for the export, the erasures and the
-decisions: on each of their real entry points it is not (no statement before the call writes or
-opens a transaction), so ``BEGIN IMMEDIATE`` is sent;
-``app/tests/test_approvals_decision_serialization_sqlite.py`` pins that for every one of them. The
-generation and the capture call it after their first write (the meter's usage rows, written in
-their own transaction right after the model call), which already holds the lock, so it sends
-nothing; it sends ``BEGIN IMMEDIATE`` only when that write did not happen.
-``app/tests/test_final_write_boundaries.py`` pins, on their real paths, that the lock is held when
-their re-read runs. See :func:`hold_sqlite_writer_lock` for what an already-open transaction does
+**The caller's transaction must not be open yet**: on each caller's real entry point it is not
+(no statement before the call writes or opens a transaction), so ``BEGIN IMMEDIATE`` is sent;
+``app/tests/test_approvals_decision_serialization_sqlite.py`` pins that for the export, the
+erasures and the decisions. The generation and the capture call it after the model call, and
+their transaction has written nothing by then: on SQLite the meter reserves and settles each call
+in transactions of its own (O-F123-2, Design B). ``app/tests/test_final_write_boundaries.py`` and
+``app/tests/test_f123_residuals.py`` pin, on their real paths, that the lock is held when their
+re-reads run. See :func:`hold_sqlite_writer_lock` for what an already-open transaction does
 and does not hold.
 
 **What it costs.** The lock is the whole database's, not a row's: while a caller holds it, the
