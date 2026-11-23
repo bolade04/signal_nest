@@ -29,15 +29,19 @@ left in it. A delete that returns without deleting (M0-A0's ``LocalStorage.delet
 ignores a version id other than ``"null"``) is therefore still caught. A report is never
 complete over a failed or skipped deletion.
 
-**Safe to retry.** Each run lists what is there now and counts only what it removed, so a second
-run after a partial failure removes the rest and counts nothing twice. Removal is confirmed by the
-same fresh listing, not assumed from a call: an entry this run asked to delete or abort counts as
-removed when a fresh listing that ran to its end no longer shows it (a delete that returned
-without deleting is not counted; one that was applied and then raised is counted, and its error
-still makes the run incomplete). Where the fresh listing over an entry failed, the run is
-incomplete and only a call that returned counts. An object (a key) is counted by the run that
-leaves no version and no delete marker of it, so the counts summed over runs are what was
-removed (AE-M0-4).
+**Safe to retry.** Each run lists what is there now and, except in the cases named at the end of
+this paragraph, counts only what it removed, so a second run after a partial failure removes the
+rest and counts nothing twice. Removal is confirmed by the same fresh listing, not assumed from a
+call: an entry this run asked to delete or abort counts as removed when a fresh listing that ran
+to its end no longer shows it (a delete that returned without deleting is not counted; one that
+was applied and then raised is counted, and its error still makes the run incomplete). Where the
+fresh listing over an entry failed, the run is incomplete and only a call that returned counts.
+An object (a key) is counted by the run that leaves no version and no delete marker of it, so the
+counts summed over runs are what was removed (AE-M0-4), except where a run's fresh listing over
+an entry failed while that entry's call was applied and then raised (it is never counted), or
+returned without removing it (it is counted by that run and again by the run that removes it),
+or while something was written under the prefix (its key can be counted by that run and again
+by the next); every such run is incomplete.
 
 **No store.** :func:`resolve_object_store` returns the application's store
 (``app.infra.storage.storage``, read at call time) only when it has the four operations. At
@@ -217,12 +221,14 @@ class ObjectErasureStatus(StrEnum):
 class ObjectErasureReport:
     """What one run removed from one scope (or from many, merged), and whether it is complete.
 
-    Counts are of this run only, confirmed by its fresh listing, so retries never double-count
-    and the counts summed over runs are what was removed (module docstring)."""
+    Counts are of this run only, confirmed by its fresh listing, so a retry counts again only
+    what a failed fresh listing hid from the run before it, and the counts summed over runs are
+    what was removed except in the cases the module docstring names."""
 
     status: ObjectErasureStatus = ObjectErasureStatus.COMPLETE
     #: Object keys this run left with no version and no delete marker, of which it removed at
-    #: least one entry: an object is counted by the run that removes its last entry, never again.
+    #: least one entry: an object is counted by the run that removes its last entry, never again
+    #: (except in the cases the module docstring names).
     keys: int = 0
     #: Object versions removed, current and noncurrent.
     versions: int = 0

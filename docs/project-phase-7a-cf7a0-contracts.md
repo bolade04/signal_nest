@@ -340,24 +340,36 @@ resolves to. (Ruling CF7A0-3, CONTROLS C-2; no new setting.)
   - `docs/operations/data-inventory.md` keeps "no product path writes customer data to object
     storage": it stays true while no media route is mounted, and changes when M0-A's routes mount.
 - **Fix pass FXM0B-1** (added by M0-B; commits `7ea946ce`, `700fa64a` and this text; review
-  W7A-REV-M0B r1, F-1 to F-4). At M0-B's FXM0B-1 head:
+  W7A-REV-M0B r1, F-1 to F-4; qualified by fix pass FXM0B-2, re-bind N-1 and N-2). At M0-B's
+  FXM0B-1 head:
   - **Account deletion makes every refusal before any object erasure (F-1).** It refuses as the
     sole OWNER of an organization with other members (409 `account_deletion_sole_owner`), and every
     organization it would delete must pass that organization's own refusal (409
-    `organization_jobs_active` while one of its jobs is claimed or running), all before
-    `mark_privacy_writer` and before the first organization's object step. A refused account
-    deletion makes no storage call and changes nothing. It then erases the deleted organizations
-    in id order, each one's objects before its rows, and makes no refusal after a storage call.
-    If a later organization's object step is incomplete (503 `object_erasure_incomplete`), the
-    earlier organizations' objects are already erased while all their rows remain until the
-    retry, which completes them. Organization deletion makes its refusals (authority, name, active
-    job) before its object step, as before.
+    `organization_jobs_active` while one of its jobs is claimed, running or cancel requested), all
+    before `mark_privacy_writer` and before the first organization's object step. A refused
+    account deletion makes no storage call and changes nothing. It then erases the deleted
+    organizations in id order, each one's objects before its rows, and makes no refusal after a
+    storage call. If a later organization's object step is incomplete (503
+    `object_erasure_incomplete`), the earlier organizations' objects are already erased while all
+    their rows remain until the retry, which completes them. Organization deletion makes its
+    refusals (authority, name, active job) before its object step, as before. On PostgreSQL a job
+    claim locks only its job row, not the organization row, so a job that becomes active after
+    these refusals (for example while an earlier organization's objects are being erased) is not
+    refused, and its organization is deleted under it. Organization deletion has the same window
+    between its refusal and its commit, which the object step lengthens. On SQLite the deletion's
+    database writer lock blocks the claim. No refusal is made again after a storage call: on that
+    race it would refuse only after an earlier organization's objects were erased (review re-bind
+    RB1b).
   - **The counts are confirmed by the fresh listing (F-3, F-4).** An entry counts as removed when
     the fresh listing no longer shows it: a delete that returned without deleting is not counted;
     one that was applied and then raised is counted once, and still makes the run incomplete.
     Where the fresh listing over an entry failed, the run is incomplete and only a call that
     returned counts. `keys` counts an object key in the run that leaves no version and no delete
-    marker of it, so the counts summed over a run and its retries are what was removed (AE-M0-4).
+    marker of it, so the counts summed over a run and its retries are what was removed (AE-M0-4),
+    except where a run's fresh listing over an entry failed while that entry's call was applied
+    and then raised (it is never counted), or returned without removing it (it is counted by that
+    run and again by the run that removes it), or while something was written under the prefix
+    (its key can be counted by that run and again by the next); every such run is incomplete.
   - **Integration gate: the S3 permissions (F-2).** At this head M0-B's erasure calls no S3
     operation: the adapter before M0-A0 has none of the four, so the object step reports
     `unavailable`. Before any build in which M0-B's erasure is reachable with M0-A0's adapter runs

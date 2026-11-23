@@ -528,9 +528,10 @@ def _require_no_active_jobs(db: Session, organization_id: str) -> None:
 def _refuse_organization_erasure(db: Session, organization_id: str) -> None:
     """Every refusal of one organization's erasure, each made before any storage call.
 
-    409 ``organization_jobs_active`` while a job of the organization is claimed or running, so
-    no worker writes into a scope that is being deleted; and an id that is not one key segment
-    (never a server-made id) is refused before its prefix could be listed."""
+    409 ``organization_jobs_active`` while a job of the organization is claimed, running or cancel
+    requested, so no job active when the refusal is made writes into a scope being deleted (on
+    PostgreSQL a job claimed after it is not refused: contract §6); and an id that is not one key
+    segment (never a server-made id) is refused before its prefix could be listed."""
     _require_no_active_jobs(db, organization_id)
     organization_prefix(organization_id)
 
@@ -545,7 +546,8 @@ def erase_organization(
     """Delete one organization and everything that belongs to it; anonymise its audit.
 
     The caller has locked the organization and checked authority. Refuses (409) while a
-    job of the organization is claimed or running (:func:`_refuse_organization_erasure`).
+    job of the organization is claimed, running or cancel requested
+    (:func:`_refuse_organization_erasure`).
     Then erases the organization's stored objects, every version included (module docstring;
     ``object_store=None`` is the application's store), and raises
     :class:`~app.privacy.object_erasure.ObjectErasureIncompleteError` before any database write
