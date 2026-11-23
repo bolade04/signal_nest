@@ -12,7 +12,9 @@ On SQLite and on PostgreSQL, with synthetic media records:
 
 * **(a) incomplete:** a media purge that keeps a root over a failed storage deletion exits ``5``.
   The report keeps its shape, says ``complete: false`` with ``kept``, and its counts are exact;
-  the next sweep completes the root and exits ``0``.
+  the next sweep completes the root and exits ``0``. The same holds for the production
+  invocation, ``sweep`` with no ``--class`` (every class), as the runbook schedules it (review
+  F7 r1, N-F7-1; the test is the reviewer's, verbatim).
 * **(b) completed:** a sweep that removes every eligible root exits ``0``, with exact counts.
 * **(c) precedence:** a class with no duration (``policy_unset``) together with a kept media root
   exits ``2``.
@@ -189,6 +191,30 @@ def test_a_kept_media_root_over_a_failed_storage_deletion_exits_5(env, monkeypat
                                           "aborted_uploads": 0}
     assert _problems(media["objects"]) == NO_PROBLEMS
     assert set(media_rows(env)["media_assets"]) == {"m0bt-c3"}
+
+
+def test_the_production_invocation_with_a_kept_media_root_exits_5(env, monkeypatch, capsys):
+    """``python -m app.privacy.cli sweep`` with no ``--class`` (every class), every duration set:
+    a kept media root exits 5; healed, the next full sweep exits 0 (review F7 r1, N-F7-1)."""
+    for data_class in RetentionClass:
+        monkeypatch.setattr(get_settings(), data_class.setting_name, 36500)  # nothing else due
+    monkeypatch.setattr(get_settings(), "retention_media_uploads_days", 30)
+    monkeypatch.setattr(get_settings(), "retention_media_records_days", 30)
+    store = _world(env)
+    store.fail_deletes(C1_OBJ_KEY)
+    _use(monkeypatch, store)
+
+    code, report = _run(capsys)  # no --class: every class
+
+    assert code == cli.EXIT_INCOMPLETE == 5, (code, report)
+    assert [o["data_class"] for o in report["classes"]] == [c.value for c in RetentionClass]
+    assert not any(o["status"] == "policy_unset" for o in report["classes"])
+    (media,) = [o for o in report["classes"] if o["data_class"] == "media_uploads"]
+    assert (media["complete"], media["kept"]) == (False, {"media_assets": 1, "media_objects": 1})
+
+    store.heal()
+    code, report = _run(capsys)
+    assert code == cli.EXIT_OK == 0, (code, report)
 
 
 # --------------------------------------------------------------------------- #
