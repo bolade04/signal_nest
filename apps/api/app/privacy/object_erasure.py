@@ -30,7 +30,14 @@ ignores a version id other than ``"null"``) is therefore still caught. A report 
 complete over a failed or skipped deletion.
 
 **Safe to retry.** Each run lists what is there now and counts only what it removed, so a second
-run after a partial failure removes the rest and counts nothing twice.
+run after a partial failure removes the rest and counts nothing twice. Removal is confirmed by the
+same fresh listing, not assumed from a call: an entry this run asked to delete or abort counts as
+removed when a fresh listing that ran to its end no longer shows it (a delete that returned
+without deleting is not counted; one that was applied and then raised is counted, and its error
+still makes the run incomplete). Where the fresh listing over an entry failed, the run is
+incomplete and only a call that returned counts. An object (a key) is counted by the run that
+leaves no version and no delete marker of it, so the counts summed over runs are what was
+removed (AE-M0-4).
 
 **No store.** :func:`resolve_object_store` returns the application's store
 (``app.infra.storage.storage``, read at call time) only when it has the four operations. At
@@ -210,10 +217,12 @@ class ObjectErasureStatus(StrEnum):
 class ObjectErasureReport:
     """What one run removed from one scope (or from many, merged), and whether it is complete.
 
-    Counts are of this run only, so retries never double-count."""
+    Counts are of this run only, confirmed by its fresh listing, so retries never double-count
+    and the counts summed over runs are what was removed (module docstring)."""
 
     status: ObjectErasureStatus = ObjectErasureStatus.COMPLETE
-    #: Distinct keys this run removed at least one version or delete marker of.
+    #: Object keys this run left with no version and no delete marker, of which it removed at
+    #: least one entry: an object is counted by the run that removes its last entry, never again.
     keys: int = 0
     #: Object versions removed, current and noncurrent.
     versions: int = 0
@@ -318,11 +327,21 @@ def _drain(iterator_factory) -> tuple[list, bool]:
     return items, True
 
 
+def _covered(prefixes: Iterable[str], key: str) -> bool:
+    """Whether ``key`` is under one of ``prefixes`` (literal ``prefix/``, as in S3)."""
+    return any(key.startswith(prefix + "/") for prefix in prefixes)
+
+
 @dataclass
 class _Listing:
     versions: dict[tuple[str, str], Any] = field(default_factory=dict)
     uploads: dict[tuple[str, str], Any] = field(default_factory=dict)
+    #: The prefixes whose version listing or upload listing raised.
     failed: set[str] = field(default_factory=set)
+    #: The prefixes whose version listing, and those whose upload listing, ran to its end: an
+    #: entry under one of them that the listing does not show is not in the store.
+    full_versions: set[str] = field(default_factory=set)
+    full_uploads: set[str] = field(default_factory=set)
 
 
 def _list(store: VersionedObjectStore, prefixes: Iterable[str]) -> _Listing:
@@ -330,6 +349,10 @@ def _list(store: VersionedObjectStore, prefixes: Iterable[str]) -> _Listing:
     for prefix in sorted(set(prefixes)):
         versions, ok_versions = _drain(lambda p=prefix: store.list_object_versions(p))
         uploads, ok_uploads = _drain(lambda p=prefix: store.list_multipart_uploads(p))
+        if ok_versions:
+            out.full_versions.add(prefix)
+        if ok_uploads:
+            out.full_uploads.add(prefix)
         if not (ok_versions and ok_uploads):
             out.failed.add(prefix)
         for v in versions:
@@ -347,7 +370,8 @@ def erase_scopes(
     For each listing prefix the scopes need: list every version and delete marker and every
     in-progress upload; delete each version and marker a scope owns (``delete_version``) and
     abort each upload it owns; then list again and record what is left. A scope whose listing
-    failed, or one of whose calls raised, or that still has anything left, is ``incomplete``."""
+    failed, or one of whose calls raised, or that still has anything left, is ``incomplete``.
+    What it removed is counted against that fresh listing (module docstring)."""
     reports = {name: ObjectErasureReport() for name in scopes}
     exact: dict[str, str] = {}
     areas: dict[str, str] = {}
@@ -378,7 +402,10 @@ def erase_scopes(
 
     before = _list(store, prefixes)
     note_failed_listings(before)
-    removed_keys: dict[str, set[str]] = {name: set() for name in scopes}
+    # Each entry this run asks the store to remove: its scope, whether it is a delete marker, and
+    # whether the call returned. Whether it is gone is decided by the fresh listing below.
+    asked: dict[tuple[str, str], tuple[str, bool, bool]] = {}
+    asked_uploads: dict[tuple[str, str], tuple[str, bool]] = {}
     for (key, version_id), version in sorted(before.versions.items()):
         name = owner_of(key)
         if name is None:
@@ -386,29 +413,27 @@ def erase_scopes(
         if _unsafe(key):
             reports[name].refused_keys += 1  # ours, but never passed to the store: incomplete
             continue
+        returned = True
         try:
             store.delete_version(key, version_id)
         except Exception:
             reports[name].failed_deletions += 1
-            continue
-        if version.is_delete_marker:
-            reports[name].delete_markers += 1
-        else:
-            reports[name].versions += 1
-        removed_keys[name].add(key)
-    for (key, _upload_id), upload in sorted(before.uploads.items()):
+            returned = False
+        asked[(key, version_id)] = (name, bool(version.is_delete_marker), returned)
+    for (key, upload_id), upload in sorted(before.uploads.items()):
         name = owner_of(key)
         if name is None:
             continue
         if _unsafe(key):
             reports[name].refused_keys += 1
             continue
+        returned = True
         try:
             store.abort_multipart_upload(upload)
         except Exception:
             reports[name].failed_aborts += 1
-            continue
-        reports[name].aborted_uploads += 1
+            returned = False
+        asked_uploads[(key, upload_id)] = (name, returned)
 
     after = _list(store, prefixes)
     note_failed_listings(after)
@@ -424,8 +449,38 @@ def erase_scopes(
         name = owner_of(key)
         if name is not None:
             reports[name].remaining_uploads += 1
+
+    # Removed: asked for, and not shown by the fresh listing. Where no fresh listing over the
+    # entry ran to its end (the run is then incomplete), only a call that returned counts.
+    touched: dict[str, set[str]] = {name: set() for name in scopes}
+    for (key, version_id), (name, marker, returned) in asked.items():
+        if (key, version_id) in after.versions:
+            continue  # still there: a failed call, or a call that returned without deleting
+        if not (returned or _covered(after.full_versions, key)):
+            continue  # its call raised and nothing shows whether it was applied
+        if marker:
+            reports[name].delete_markers += 1
+        else:
+            reports[name].versions += 1
+        touched[name].add(key)
+    for (key, upload_id), (name, returned) in asked_uploads.items():
+        if (key, upload_id) in after.uploads:
+            continue
+        if returned or _covered(after.full_uploads, key):
+            reports[name].aborted_uploads += 1
+
+    # An object (key) counts in the run that leaves no version and no delete marker of it: a
+    # fresh listing that ran to its end shows none, or, where that listing failed, this run saw
+    # every entry of the key in a full first listing and every call on them returned.
+    left = {key for key, _version_id in after.versions}
+    raised = {key for (key, _v), (_name, _marker, returned) in asked.items() if not returned}
     for name, report in reports.items():
-        report.keys = len(removed_keys[name])
+        report.keys = sum(
+            1
+            for key in touched[name] - left
+            if _covered(after.full_versions, key)
+            or (_covered(before.full_versions, key) and key not in raised)
+        )
         report.settle()
     return reports
 
