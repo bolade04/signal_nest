@@ -37,6 +37,15 @@ same test author:
   and changed nothing, in any organization.
 * A failed listing, of versions or of uploads, alone stops an organization's erasure before any
   database write (F-5, RM04); a delete marker left behind keeps the report incomplete (RM03).
+
+Fix pass FXM0B-2 (review re-bind r1, N-3), added by the same test author:
+
+* No refusal is made again after a storage call: in an account deletion, every active-job
+  refusal of the organizations it deletes comes before the first store call, once each (MX3).
+* Where the fresh version listing failed, a version whose delete raised is not counted and its
+  key is not counted as an object removed (MX7); a failed listing is never taken for one that ran
+  to its end, so the versions whose deletes raised are not counted (MX8). The retry counts them,
+  and the sums are exact.
 """
 
 from __future__ import annotations
@@ -48,6 +57,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 import app.infra.storage as infra_storage
+import app.privacy.erasure as privacy_erasure
 from app.jobs.models import Job
 from app.organizations.models import Organization, OrganizationMember, Workspace
 from app.privacy.erasure import erase_organization
@@ -219,6 +229,20 @@ def test_the_apply_then_raise_fault_removes_the_entry_and_then_raises():
     assert list(store.list_multipart_uploads("o")) == []
     store.heal()
     store.delete_version("o/w/k", v1)  # healed: no error
+    assert store.holds("o/w/k") == (0, 0)
+
+
+def test_the_per_entry_fault_fails_exactly_that_version_without_removing_it():
+    store = VersionedStore()
+    v1, v2 = store.put("o/w/k"), store.put("o/w/k")
+    store.fail_delete_versions(("o/w/k", v2))
+    with pytest.raises(StoreFault):
+        store.delete_version("o/w/k", v2)
+    assert store.holds("o/w/k") == (2, 0)  # not applied
+    store.delete_version("o/w/k", v1)  # the key's other entry deletes normally
+    assert store.holds("o/w/k") == (1, 0)
+    store.heal()
+    store.delete_version("o/w/k", v2)  # healed: no error
     assert store.holds("o/w/k") == (0, 0)
 
 
@@ -504,6 +528,60 @@ def test_a_delete_marker_whose_deletion_silently_does_nothing_leaves_the_report_
     assert store.tally(ORG_A).empty
 
 
+def _newest_version(store: VersionedStore, key: str) -> str:
+    """The version id of ``key``'s latest entry (read without a protocol call)."""
+    versions, _uploads = store.snapshot()
+    return [version_id for k, version_id, _marker, _data in versions if k == key][-1]
+
+
+def test_where_the_fresh_listing_failed_a_key_with_a_raised_delete_is_not_counted_as_removed():
+    """Review re-bind N-3, MX7 (contract section 6, FXM0B-1: where the fresh listing over an
+    entry failed, "only a call that returned counts", and ``keys`` counts an object in the run
+    that leaves nothing of it). K1's newest version refuses to go and the fresh version listing
+    fails: run 1 counts K1's two other versions but neither that version nor K1 as an object;
+    the retry removes it and counts K1 and that version once."""
+    store = _store()
+    store.fail_delete_versions((K1, _newest_version(store, K1)))
+    store.fail_listing("versions", call=2)  # the fresh listing after the deletions
+
+    first = erase_organization_objects(ORG_A, object_store=store)
+
+    assert first.status is ObjectErasureStatus.INCOMPLETE and not first.complete, first.as_dict()
+    assert (first.failed_deletions, first.failed_listings) == (1, 1), first.as_dict()
+    assert store.holds(K1) == (1, 0)
+    assert _removed(first) == (4, 6, 3, 2), first.as_dict()  # K1 not counted as an object
+
+    store.heal()
+    second = erase_organization_objects(ORG_A, object_store=store)
+
+    assert second.complete and _removed(second) == (1, 1, 0, 0), second.as_dict()
+    assert _summed(first, second) == A_REMOVED
+    assert store.tally(ORG_A).empty
+
+
+def test_a_failed_fresh_listing_never_counts_the_versions_whose_deletes_raised():
+    """Review re-bind N-3, MX8: a failed version listing is not one that ran to its end, so it
+    proves nothing gone. Every delete of K1 raises and the fresh version listing fails: run 1
+    counts everything but K1, the retry counts K1's object and three versions, and the sum is
+    what A held."""
+    store = _store()
+    store.fail_deletes(K1)
+    store.fail_listing("versions", call=2)  # the fresh listing after the deletions
+
+    first = erase_organization_objects(ORG_A, object_store=store)
+
+    assert first.status is ObjectErasureStatus.INCOMPLETE and not first.complete, first.as_dict()
+    assert (first.failed_deletions, first.failed_listings) == (3, 1), first.as_dict()
+    assert _removed(first) == (4, 4, 3, 2), first.as_dict()  # none of K1's three versions
+
+    store.heal()
+    second = erase_organization_objects(ORG_A, object_store=store)
+
+    assert second.complete and _removed(second) == (1, 3, 0, 0), second.as_dict()
+    assert _summed(first, second) == A_REMOVED
+    assert store.tally(ORG_A).empty
+
+
 def test_a_store_without_the_version_operations_is_unavailable_and_never_complete(monkeypatch):
     report = erase_organization_objects(ORG_A, object_store=object())
     assert report.status is ObjectErasureStatus.UNAVAILABLE
@@ -709,9 +787,11 @@ KD2 = upload_key(ORG_D, WS_D, "m0bt-ed1-up")
 ACTIVE_JOB_STATES = ("claimed", "running", "cancel_requested")
 
 
-def _organization_d(env: PrivacyEnv, store: VersionedStore, *, job_status: str) -> None:
-    """D: BOB its only member (as of B), a job of ``job_status``, and stored objects: a key with
-    a noncurrent version and a delete marker, and an in-progress upload."""
+def _organization_d(
+    env: PrivacyEnv, store: VersionedStore, *, job_status: str | None
+) -> None:
+    """D: BOB its only member (as of B), a job of ``job_status`` (none if ``None``), and stored
+    objects: a key with a noncurrent version and a delete marker, and an in-progress upload."""
     assert ORG_B < ORG_D
     with env.session() as s:
         s.add(Organization(id=ORG_D, name="Delta Privacy", slug=ORG_D))
@@ -719,13 +799,14 @@ def _organization_d(env: PrivacyEnv, store: VersionedStore, *, job_status: str) 
         s.add(Workspace(id=WS_D, organization_id=ORG_D, name=WS_D, slug=WS_D))
         s.add(OrganizationMember(organization_id=ORG_D, user_id=BOB, role="owner"))
         s.flush()
-        s.add(
-            Job(
-                id="m0bt-d-job", organization_id=ORG_D, workspace_id=WS_D,
-                job_type="scout_request.execute", payload={}, payload_hash="0" * 64,
-                status=job_status,
+        if job_status is not None:
+            s.add(
+                Job(
+                    id="m0bt-d-job", organization_id=ORG_D, workspace_id=WS_D,
+                    job_type="scout_request.execute", payload={}, payload_hash="0" * 64,
+                    status=job_status,
+                )
             )
-        )
         s.commit()
     store.put(KD1)
     store.put(KD1)
@@ -799,6 +880,62 @@ def test_with_the_later_organizations_job_finished_the_account_deletion_erases_b
         assert env.count(Organization, Organization.id == org) == 0
     assert _outside(store, ORG_B, ORG_D) == others  # A, C and the sibling untouched
     assert all(key.startswith((ORG_B + "/", ORG_D + "/")) for key in store.keys_acted_on())
+
+
+class _LoggedStore:
+    """The four protocol calls of a store, each logged as ``("store", method)`` in a shared log
+    before it is passed on."""
+
+    def __init__(self, store: VersionedStore, log: list[tuple[str, str]]) -> None:
+        self._store, self._log = store, log
+
+    def list_object_versions(self, prefix):
+        self._log.append(("store", "list_object_versions"))
+        return self._store.list_object_versions(prefix)
+
+    def delete_version(self, key, version_id):
+        self._log.append(("store", "delete_version"))
+        return self._store.delete_version(key, version_id)
+
+    def list_multipart_uploads(self, prefix):
+        self._log.append(("store", "list_multipart_uploads"))
+        return self._store.list_multipart_uploads(prefix)
+
+    def abort_multipart_upload(self, upload):
+        self._log.append(("store", "abort_multipart_upload"))
+        return self._store.abort_multipart_upload(upload)
+
+
+def test_an_account_deletion_makes_every_refusal_before_its_first_store_call(env, monkeypatch):
+    """Review re-bind N-3, MX3 (contract section 6, FXM0B-1: every organization the deletion
+    deletes passes its own refusal "before the first organization's object step", and "no
+    refusal after a storage call"). BOB, the only member of B and D, has no active job: the
+    deletion answers 200, and one log of the active-job refusals and the store's protocol calls
+    shows each refusal, of B and of D once each, before the first store call."""
+    _rows(env)
+    store = _store()
+    _organization_d(env, store, job_status=None)
+    log: list[tuple[str, str]] = []
+    original = privacy_erasure._require_no_active_jobs
+
+    def recording(db, organization_id):
+        log.append(("refusal", organization_id))
+        return original(db, organization_id)
+
+    monkeypatch.setattr(privacy_erasure, "_require_no_active_jobs", recording)
+    monkeypatch.setattr(infra_storage, "storage", _LoggedStore(store, log))
+    headers = env.auth(BOB)
+
+    r = _delete_account(env, headers)
+
+    assert r.status_code == 200, r.text
+    assert [o["organization_id"] for o in r.json()["deleted_organizations"]] == [ORG_B, ORG_D]
+    refusals = [i for i, (kind, _what) in enumerate(log) if kind == "refusal"]
+    calls = [i for i, (kind, _what) in enumerate(log) if kind == "store"]
+    assert calls, log  # the object steps ran through the logged store
+    assert refusals and max(refusals) < min(calls), log
+    assert sorted(log[i][1] for i in refusals) == [ORG_B, ORG_D], log  # once each
+    assert store.tally(ORG_B).empty and store.tally(ORG_D).empty
 
 
 # --------------------------------------------------------------------------- #
