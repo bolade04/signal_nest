@@ -22,7 +22,8 @@ and 8; plan section 2.6; AE-M0-4):
   newest first, and the listing is lazy, as a paged listing is.
 
 **Faults** (the incomplete and retry paths): a ``delete_version`` or ``abort_multipart_upload``
-that raises for chosen keys without acting; one that is applied and then raises (the entry is
+that raises for chosen keys without acting, or a ``delete_version`` that does so for chosen
+entries only (a key and a version id); one that is applied and then raises (the entry is
 gone, but the caller sees an error: a lost response); one that returns without doing anything; a
 listing that raises, on every call or only on its n-th call, before its first entry or after n
 entries, for every prefix or one; and a store that over-returns entries outside the prefix it
@@ -131,6 +132,7 @@ class VersionedStore:
     def heal(self) -> None:
         """Clear every injected fault (the stored state is kept)."""
         self._failing_deletes: set[str] = set()
+        self._failing_versions: set[tuple[str, str]] = set()
         self._applied_failing_deletes: set[str] = set()
         self._silent_deletes: set[str] = set()
         self._failing_aborts: set[str] = set()
@@ -142,6 +144,11 @@ class VersionedStore:
     def fail_deletes(self, *keys: str) -> None:
         """``delete_version`` of any version or marker of these keys raises."""
         self._failing_deletes.update(keys)
+
+    def fail_delete_versions(self, *entries: tuple[str, str]) -> None:
+        """``delete_version`` of exactly these ``(key, version_id)`` entries raises, without
+        removing anything; the key's other entries delete normally."""
+        self._failing_versions.update(entries)
 
     def apply_then_fail_deletes(self, *keys: str) -> None:
         """``delete_version`` of these keys removes the entry, then raises (a lost response)."""
@@ -216,7 +223,7 @@ class VersionedStore:
 
     def delete_version(self, key: str, version_id: str) -> None:
         self.calls.append(("delete_version", key, version_id))
-        if key in self._failing_deletes:
+        if key in self._failing_deletes or (key, version_id) in self._failing_versions:
             raise StoreFault("injected delete failure")
         if key in self._silent_deletes:
             return
