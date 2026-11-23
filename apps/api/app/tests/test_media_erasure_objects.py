@@ -24,11 +24,19 @@ involved:
 * The attester rule (R-5): after an account deletion, the rights record keeps its content and
   loses the identity; the organizations the account does not delete keep their objects.
 
-Two tests are marked ``xfail(strict=True)``. Each pins a defect in the report's counts that the
-test author reported to the coordinator and did not fix (no product code is changed here):
-D-M0BT-1, a ``delete_version`` that returns without deleting is counted as removed; D-M0BT-2, a
-key whose entries are removed over two runs is counted as a removed object by both. A fix turns
-each into an unexpected pass, which fails, so the marker cannot outlive the defect.
+Fix pass FXM0B-1 (review W7A-REV-M0B r1; contract section 6 "Fix pass FXM0B-1"), added by the
+same test author:
+
+* The counts are confirmed by the fresh listing (F-3 = D-M0BT-1, F-4 = D-M0BT-2). A delete that
+  returns without deleting is not counted; one that is applied and then raises (a lost response)
+  is counted once and still leaves the run incomplete; an object is counted by the run that
+  removes its last entry. The two tests that pinned D-M0BT-1 and D-M0BT-2 as strict xfails are
+  ordinary tests now, and the fault table's summed counts are exact in every case.
+* An account deletion makes every refusal before any object erasure (F-1): refused with a 409
+  because a later organization it would delete has an active job, it has made no storage call
+  and changed nothing, in any organization.
+* A failed listing, of versions or of uploads, alone stops an organization's erasure before any
+  database write (F-5, RM04); a delete marker left behind keeps the report incomplete (RM03).
 """
 
 from __future__ import annotations
@@ -40,6 +48,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 import app.infra.storage as infra_storage
+from app.jobs.models import Job
+from app.organizations.models import Organization, OrganizationMember, Workspace
 from app.privacy.erasure import erase_organization
 from app.privacy.object_erasure import (
     ObjectErasureIncompleteError,
@@ -71,6 +81,7 @@ from app.tests._privacy_support import (
 from app.tests._versioned_store_support import (
     ENGINES,
     MediaRows,
+    StoreFault,
     Tally,
     VersionedStore,
     asset_key,
@@ -192,6 +203,25 @@ def test_the_local_store_behaves_as_a_versioned_bucket():
         store.list_object_versions("o/")
 
 
+def test_the_apply_then_raise_fault_removes_the_entry_and_then_raises():
+    """A lost response: the store did the work, the caller sees an error."""
+    store = VersionedStore()
+    v1, v2 = store.put("o/w/k"), store.put("o/w/k")
+    store.start_upload("o/w/u")
+    store.apply_then_fail_deletes("o/w/k")
+    store.apply_then_fail_aborts("o/w/u")
+    with pytest.raises(StoreFault):
+        store.delete_version("o/w/k", v2)
+    assert store.holds("o/w/k") == (1, 0)  # v2 is gone, v1 is left
+    (upload,) = store.list_multipart_uploads("o")
+    with pytest.raises(StoreFault):
+        store.abort_multipart_upload(upload)
+    assert list(store.list_multipart_uploads("o")) == []
+    store.heal()
+    store.delete_version("o/w/k", v1)  # healed: no error
+    assert store.holds("o/w/k") == (0, 0)
+
+
 # --------------------------------------------------------------------------- #
 # The erasure itself (no database)
 # --------------------------------------------------------------------------- #
@@ -304,8 +334,6 @@ class Fault:
     #: What the first run removed (keys, versions, markers, aborted uploads).
     first: tuple[int, int, int, int] | None
     counter: str  # the report field that must be non-zero after the first run
-    #: The first run removes some, not all, of one key's entries (D-M0BT-2's case).
-    splits_a_key: bool = False
 
 
 FAULTS = (
@@ -315,9 +343,10 @@ FAULTS = (
     # nothing may be reported complete. The uploads are still listed and aborted.
     Fault("versions_listing_fails", lambda s: s.fail_listing("versions"), (0, 0, 0, 2),
           "failed_listings"),
-    # The first version listing fails after 4 entries (a later page): those are removed.
+    # The first version listing fails after 4 entries (a later page): those are removed, and K5
+    # is split between the runs (D-M0BT-2's case).
     Fault("versions_listing_fails_midway", lambda s: s.fail_listing("versions", call=1, after=4),
-          None, "failed_listings", splits_a_key=True),
+          None, "failed_listings"),
     Fault("uploads_listing_fails", lambda s: s.fail_listing("uploads"), (5, 7, 3, 0),
           "failed_listings"),
     # Everything is deleted, but the fresh listing that proves it fails.
@@ -345,11 +374,9 @@ def test_no_failed_call_is_ever_reported_complete_and_the_retry_completes_it(fau
 
     assert second.complete, second.as_dict()
     assert store.tally(ORG_A).empty
-    # Each removal is counted once over both runs: every version, delete marker and upload, and
-    # every object (key) unless one key's entries were split between the runs (D-M0BT-2).
-    assert _summed(first, second)[1:] == A_REMOVED[1:]
-    if not fault.splits_a_key:
-        assert _summed(first, second) == A_REMOVED
+    # Each removal is counted once over both runs: every object (key), version, delete marker and
+    # upload, even when one key's entries are split between the runs (FXM0B-1, F-4).
+    assert _summed(first, second) == A_REMOVED, (first.as_dict(), second.as_dict())
     assert _outside_a(store) == before
     assert verify_organization_objects_erased(store, organization_id=ORG_A).verified
 
@@ -372,18 +399,11 @@ def test_a_deletion_that_silently_does_nothing_is_never_reported_complete():
     assert store.tally(ORG_A).empty
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "D-M0BT-1 (reported, not fixed by the test author): erase_scopes counts a version as "
-        "removed when delete_version returns, so a delete that silently does nothing is counted "
-        "as removed and counted again by the retry that really removes it"
-    ),
-)
 def test_a_deletion_that_silently_does_nothing_is_not_counted_as_removed():
-    """The report counts what was removed (AE-M0-4; STORAGE-INTERFACE section 3.2: "versions:
-    object versions this run removed"). K1's three versions survive the first run, so it removed
-    4 keys' worth (4 versions, 3 markers, 2 uploads), and the retry counts K1's three once."""
+    """D-M0BT-1 (review F-3, fixed in FXM0B-1). The report counts what was removed (AE-M0-4;
+    contract section 6: "a delete that returned without deleting is not counted"). K1's three
+    versions survive the first run, so it removed 4 keys' worth (4 versions, 3 markers, 2
+    uploads), and the retry counts K1's three once."""
     store = _store()
     store.silence_deletes(K1)
 
@@ -395,19 +415,12 @@ def test_a_deletion_that_silently_does_nothing_is_not_counted_as_removed():
     assert _summed(first, second) == A_REMOVED
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "D-M0BT-2 (reported, not fixed by the test author): ObjectErasureReport.keys counts every "
-        "key a run removed at least one entry of, so a key whose entries are removed over two "
-        "runs is counted as a removed object by both"
-    ),
-)
 def test_an_object_erased_over_two_runs_is_counted_as_removed_once():
-    """AE-M0-4: the report counts the objects removed. The first listing fails after K1's three
-    versions and K5's delete marker: K5 is not removed by that run (its two versions remain), so
-    the first run removed one object (K1) and the retry four (K2, K3, K4, K5): five in all, as A
-    held. STORAGE-INTERFACE section 3.2: "the sum over runs is what was removed"."""
+    """D-M0BT-2 (review F-4, fixed in FXM0B-1). AE-M0-4: the report counts the objects removed.
+    The first listing fails after K1's three versions and K5's delete marker: K5 is not removed
+    by that run (its two versions remain), so the first run removed one object (K1) and the
+    retry four (K2, K3, K4, K5): five in all, as A held. Contract section 6: "`keys` counts an
+    object key in the run that leaves no version and no delete marker of it"."""
     store = _store()
     store.fail_listing("versions", call=1, after=4)
 
@@ -417,6 +430,78 @@ def test_an_object_erased_over_two_runs_is_counted_as_removed_once():
 
     assert store.holds(K5) == (0, 0) and second.complete
     assert _summed(first, second) == A_REMOVED, (first.as_dict(), second.as_dict())
+
+
+@dataclass(frozen=True)
+class LostResponse:
+    name: str
+    inject: object  # (store) -> None
+    counter: str  # the report field that counts the calls that raised
+    calls: int  # how many calls raised in the first run
+
+
+LOST_RESPONSES = (
+    # Each of K1's three version deletes is applied, then raises.
+    LostResponse("version_deletes", lambda s: s.apply_then_fail_deletes(K1), "failed_deletions", 3),
+    # K4's only entry, a delete marker: its delete is applied, then raises.
+    LostResponse("marker_delete", lambda s: s.apply_then_fail_deletes(K4), "failed_deletions", 1),
+    # U2's in-progress upload is aborted, then the call raises.
+    LostResponse("upload_abort", lambda s: s.apply_then_fail_aborts(U2), "failed_aborts", 1),
+)
+
+
+@pytest.mark.parametrize("fault", LOST_RESPONSES, ids=lambda f: f.name)
+def test_a_removal_applied_before_its_call_raised_is_counted_once_and_the_retry_counts_nothing(
+    fault: LostResponse,
+):
+    """Review F-3, the mirror of D-M0BT-1 (contract section 6, FXM0B-1: a delete "that was
+    applied and then raised is counted once, and still makes the run incomplete"). The fresh
+    listing shows the entry gone, so the first run counts it; the failed call keeps that run
+    incomplete; the retry finds nothing and counts nothing; the sum is what A held."""
+    store = _store()
+    before = _outside_a(store)
+    fault.inject(store)
+
+    first = erase_organization_objects(ORG_A, object_store=store)
+
+    assert first.status is ObjectErasureStatus.INCOMPLETE and not first.complete, first.as_dict()
+    assert getattr(first, fault.counter) == fault.calls, first.as_dict()
+    assert store.tally(ORG_A).empty  # every removal was applied
+    assert (first.remaining_versions, first.remaining_delete_markers,
+            first.remaining_uploads) == (0, 0, 0)
+    assert _removed(first) == A_REMOVED, first.as_dict()  # each entry counted once, by this run
+
+    store.heal()
+    second = erase_organization_objects(ORG_A, object_store=store)
+
+    assert second.complete and _failures(second) == NO_FAILURES, second.as_dict()
+    assert _removed(second) == (0, 0, 0, 0), second.as_dict()
+    assert _summed(first, second) == A_REMOVED
+    assert _outside_a(store) == before
+    assert verify_organization_objects_erased(store, organization_id=ORG_A).verified
+
+
+def test_a_delete_marker_whose_deletion_silently_does_nothing_leaves_the_report_incomplete():
+    """Review F-5, RM03: a delete marker left after the deletions is counted as remaining, so the
+    report is incomplete; it is neither counted as removed nor its key as an object removed."""
+    store = _store()
+    store.silence_deletes(K4)  # K4 holds only a delete marker
+
+    first = erase_organization_objects(ORG_A, object_store=store)
+
+    assert first.status is ObjectErasureStatus.INCOMPLETE and not first.complete, first.as_dict()
+    assert (first.remaining_delete_markers, first.remaining_versions,
+            first.remaining_uploads) == (1, 0, 0), first.as_dict()
+    assert store.holds(K4) == (0, 1)
+    assert _removed(first) == (4, 7, 2, 2), first.as_dict()
+    assert not verify_organization_objects_erased(store, organization_id=ORG_A).verified
+
+    store.heal()
+    second = erase_organization_objects(ORG_A, object_store=store)
+
+    assert second.complete and _removed(second) == (1, 0, 1, 0), second.as_dict()
+    assert _summed(first, second) == A_REMOVED
+    assert store.tally(ORG_A).empty
 
 
 def test_a_store_without_the_version_operations_is_unavailable_and_never_complete(monkeypatch):
@@ -556,6 +641,164 @@ def test_erase_organization_raises_with_its_report_before_any_database_write(env
     assert exc.value.report.status is ObjectErasureStatus.INCOMPLETE
     assert exc.value.report.remaining_versions == 3
     assert env.snapshot() == before_db
+
+
+#: Review F-5, RM04: a listing that fails on every call (the missing-permission case of F-2),
+#: of versions or of uploads, with no deletion failing.
+LISTINGS = ("versions", "uploads")
+
+
+@pytest.mark.parametrize("listing", LISTINGS)
+def test_a_failing_listing_alone_makes_erase_organization_raise_before_any_database_write(
+    env, listing
+):
+    _rows(env)
+    store = _store()
+    store.fail_listing(listing)
+    before_db = env.snapshot()
+
+    with env.session() as s:
+        with pytest.raises(ObjectErasureIncompleteError) as exc:
+            erase_organization(s, organization_id=ORG_A, object_store=store)
+        s.flush()
+        s.commit()  # even a commit after the refusal writes nothing
+
+    report = exc.value.report
+    assert exc.value.status_code == 503 and exc.value.retryable
+    assert report.status is ObjectErasureStatus.INCOMPLETE and report.failed_listings >= 1
+    assert (report.failed_deletions, report.failed_aborts) == (0, 0), report.as_dict()
+    assert env.snapshot() == before_db
+
+
+@pytest.mark.parametrize("listing", LISTINGS)
+def test_a_failing_listing_alone_answers_503_through_the_route_and_writes_nothing(
+    env, monkeypatch, listing
+):
+    _rows(env)
+    store = _store()
+    store.fail_listing(listing)
+    monkeypatch.setattr(infra_storage, "storage", store)
+    headers = env.auth(ALICE)
+    before_db = env.snapshot()
+    before_outside = _outside_a(store)
+
+    r = _delete_org(env, headers)
+
+    assert r.status_code == 503, r.text
+    assert r.json()["error"]["code"] == "object_erasure_incomplete"
+    assert env.snapshot() == before_db
+    assert _outside_a(store) == before_outside
+
+    store.heal()
+    retry = _delete_org(env, headers)
+
+    assert retry.status_code == 200, retry.text
+    assert store.tally(ORG_A).empty
+    assert _outside_a(store) == before_outside
+    assert verify_organization_objects_erased(store, organization_id=ORG_A).verified
+
+
+# --------------------------------------------------------------------------- #
+# Account deletion makes every refusal before any object erasure (review F-1, FXM0B-1)
+# --------------------------------------------------------------------------- #
+#: A second organization of which BOB is the only member, after B in id order.
+ORG_D, WS_D = "prv-org-d", "prv-ws-d"
+KD1 = asset_key(ORG_D, WS_D, "m0bt-ed1", "m0bt-ed1-obj")
+KD2 = upload_key(ORG_D, WS_D, "m0bt-ed1-up")
+#: The job states in which a worker holds (or is meant to hold) a lease on a job.
+ACTIVE_JOB_STATES = ("claimed", "running", "cancel_requested")
+
+
+def _organization_d(env: PrivacyEnv, store: VersionedStore, *, job_status: str) -> None:
+    """D: BOB its only member (as of B), a job of ``job_status``, and stored objects: a key with
+    a noncurrent version and a delete marker, and an in-progress upload."""
+    assert ORG_B < ORG_D
+    with env.session() as s:
+        s.add(Organization(id=ORG_D, name="Delta Privacy", slug=ORG_D))
+        s.flush()
+        s.add(Workspace(id=WS_D, organization_id=ORG_D, name=WS_D, slug=WS_D))
+        s.add(OrganizationMember(organization_id=ORG_D, user_id=BOB, role="owner"))
+        s.flush()
+        s.add(
+            Job(
+                id="m0bt-d-job", organization_id=ORG_D, workspace_id=WS_D,
+                job_type="scout_request.execute", payload={}, payload_hash="0" * 64,
+                status=job_status,
+            )
+        )
+        s.commit()
+    store.put(KD1)
+    store.put(KD1)
+    store.delete(KD1)
+    store.start_upload(KD2)
+
+
+def _delete_account(env: PrivacyEnv, headers: dict) -> object:
+    active_rate_limiter()._hits.clear()
+    return env.client.post(
+        f"{API}/account/delete",
+        headers=headers,
+        json={"current_password": PASSWORD, "confirmation": "DELETE"},
+    )
+
+
+def _outside(store: VersionedStore, *organizations: str) -> tuple:
+    """Every entry and upload not under any of ``organizations``' prefixes."""
+    versions, uploads = store.snapshot()
+    under = tuple(org + "/" for org in organizations)
+    return (tuple(v for v in versions if not v[0].startswith(under)),
+            tuple(u for u in uploads if not u[0].startswith(under)))
+
+
+@pytest.mark.parametrize("job_status", ACTIVE_JOB_STATES)
+def test_an_account_deletion_refused_for_a_later_organizations_job_touches_no_stored_object(
+    env, monkeypatch, job_status
+):
+    """BOB is the only member of B and of D (after B in id order); D has an active job. The
+    deletion answers 409 ``organization_jobs_active``, and B's objects, erased first in id order
+    before the fix, are untouched: no storage call was made, no row changed."""
+    _rows(env)
+    store = _store()
+    _organization_d(env, store, job_status=job_status)
+    monkeypatch.setattr(infra_storage, "storage", store)
+    headers = env.auth(BOB)
+    everything = store.snapshot()
+    b_and_d = (store.tally(ORG_B), store.tally(ORG_D))
+    before_db = env.snapshot()
+
+    r = _delete_account(env, headers)
+
+    assert r.status_code == 409, r.text
+    assert r.json()["error"]["code"] == "organization_jobs_active"
+    assert store.mutating_calls() == []
+    assert store.calls == []  # contract section 6: "makes no storage call and changes nothing"
+    assert store.snapshot() == everything  # B's and D's objects, versions and uploads included
+    assert (store.tally(ORG_B), store.tally(ORG_D)) == b_and_d
+    assert not b_and_d[0].empty and not b_and_d[1].empty
+    assert env.snapshot() == before_db
+
+
+def test_with_the_later_organizations_job_finished_the_account_deletion_erases_both(
+    env, monkeypatch
+):
+    _rows(env)
+    store = _store()
+    _organization_d(env, store, job_status="succeeded")
+    monkeypatch.setattr(infra_storage, "storage", store)
+    headers = env.auth(BOB)
+    others = _outside(store, ORG_B, ORG_D)
+
+    r = _delete_account(env, headers)
+
+    assert r.status_code == 200, r.text
+    assert [o["organization_id"] for o in r.json()["deleted_organizations"]] == [ORG_B, ORG_D]
+    for org in (ORG_B, ORG_D):
+        assert store.tally(org).empty, org
+        check = verify_organization_objects_erased(store, organization_id=org)
+        assert check.verified, check.as_dict()
+        assert env.count(Organization, Organization.id == org) == 0
+    assert _outside(store, ORG_B, ORG_D) == others  # A, C and the sibling untouched
+    assert all(key.startswith((ORG_B + "/", ORG_D + "/")) for key in store.keys_acted_on())
 
 
 # --------------------------------------------------------------------------- #

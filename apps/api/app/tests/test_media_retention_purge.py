@@ -28,6 +28,9 @@ Every test runs on SQLite and on PostgreSQL, with synthetic records:
 * **A failed storage deletion stays visibly incomplete:** its root is kept with all its rows,
   the class reports ``complete: false`` with ``kept`` and an incomplete ``objects`` report, and
   the next sweep completes it, counting only what was left.
+* **A root whose stored key left its own tenant is refused and kept** (fix pass FXM0B-1, review
+  F-5, RM02): it is never erased by key, the class is incomplete with ``refused_keys`` 1, and
+  nothing is asked of the store or changed in the database.
 """
 
 from __future__ import annotations
@@ -518,3 +521,34 @@ def test_a_store_that_cannot_erase_versions_keeps_every_root(env):
     assert outcome.objects["status"] == "unavailable" and outcome.objects["complete"] is False
     assert env.snapshot() == before_db
     assert world.store.snapshot() == before_store
+
+
+def test_a_root_whose_stored_key_is_outside_its_tenant_is_refused_and_kept(env):
+    """Review F-5, RM02. Contract section 8: every key of a tenant's media is under
+    ``{organization_id}/{workspace_id}/media/``. An old asset of (A, WS_A) whose stored object's
+    row names organization B (the schema allows it: its key is under ``{B}/{WS_A}/media/``) is a
+    root whose key left its tenant: it is refused, never erased by key, and kept with its rows."""
+    old = datetime.now(UTC) - timedelta(days=400)
+    rows, store = MediaRows(), VersionedStore()
+    rows.asset(ORG_A, WS_A, "m0bt-x1", state="active", at=old, created_by=CAROL)
+    outside = rows.stored(ORG_B, WS_A, "m0bt-x1-obj", "m0bt-x1", at=old)
+    rows.rights_record(ORG_A, WS_A, "m0bt-x1", attested_by=CAROL, at=old)
+    rows.insert(env.engine)
+    assert outside.startswith(f"{ORG_B}/{WS_A}/media/")
+    store.put(outside)
+    store.put(outside)
+    store.put(asset_key(ORG_A, WS_A, "m0bt-x1", "m0bt-x1-rendition"))  # in the asset's own area
+    before_db, before_store = env.snapshot(), store.snapshot()
+
+    (outcome,) = retention.sweep(
+        env.session, classes=(UPLOADS,), settings=POLICY, object_store=store
+    )
+
+    assert (outcome.status, outcome.complete, outcome.deleted, outcome.kept) == (
+        "purged", False, {}, {"media_assets": 1}
+    ), outcome
+    assert outcome.objects["status"] == "incomplete" and outcome.objects["complete"] is False
+    assert outcome.objects["refused_keys"] == 1, outcome.objects
+    assert store.mutating_calls() == []
+    assert store.snapshot() == before_store
+    assert env.snapshot() == before_db  # the asset, its object, provenance and rights are kept
