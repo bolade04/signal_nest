@@ -232,6 +232,8 @@ A sweep that kept root rows past their cut-off because their stored objects coul
 erased (`complete: false` with `kept`) exits `5`, so a scheduler sees the incomplete deletion;
 `policy_unset` (`2`) takes precedence. A completed sweep, a dry run, a class with nothing due and
 a class stopped at its batch limit (`complete: false` with nothing kept) exit `0`.
+So does a sweep whose workspace classes were only enqueued: their `retention.purge` jobs run
+later, and their failures are failed jobs, not this exit status.
 `environment=production` **refuses to start** until all ten are set explicitly
 (1–36500 days); development, test and staging may leave them unset. The cut-off is the
 start of the current UTC day (database clock) minus the duration, so a purge never

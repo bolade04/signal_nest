@@ -290,6 +290,9 @@ python -m app.privacy.cli sweep [--class <class> ...] [--dry-run]
   (`notifications` joined the seven in Project Phase 5E, D-N4 item 30).
 - A sweep that kept roots whose stored objects could not all be erased (`complete: false`,
   `kept`) exits `5`; `2` takes precedence. A scheduler must treat `5` as a failed run.
+  Exit `0` does not cover the workspace classes: the sweep only enqueues their `retention.purge`
+  jobs, which run later, and a failed one is the job system's to alert on (a re-run the same day
+  lists a failed first link under `jobs_existing` and still exits `0`).
 - Platform classes are purged by the command itself in bounded batches (`notifications` among
   them: its rows carry a workspace, but by ruling it is never enqueued); workspace classes are
   enqueued as one `retention.purge` job per workspace (idempotent per day) and run by the worker.

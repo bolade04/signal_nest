@@ -18,6 +18,8 @@ contain the subject's identifier, so an operator must decide whose it is
 (``complete: false`` with ``kept``; the next sweep retries them). ``2`` takes precedence over
 ``5``. A completed sweep, a dry run, a class with nothing due and a class stopped at its batch
 limit (``complete: false`` with nothing kept; the next sweep continues) exit ``0``.
+Exit ``0`` does not cover the workspace classes, whose deletions run later as
+``retention.purge`` jobs.
 
 An address given on the command line can be visible to whoever can read the process
 list or the task definition's overrides; prefer running these where that is acceptable.
