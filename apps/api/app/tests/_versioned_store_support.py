@@ -22,10 +22,11 @@ and 8; plan section 2.6; AE-M0-4):
   newest first, and the listing is lazy, as a paged listing is.
 
 **Faults** (the incomplete and retry paths): a ``delete_version`` or ``abort_multipart_upload``
-that raises for chosen keys; a ``delete_version`` or ``abort_multipart_upload`` that returns
-without doing anything; a listing that raises, on every call or only on its n-th call, before
-its first entry or after n entries, for every prefix or one; and a store that over-returns
-entries outside the prefix it was asked for. :meth:`VersionedStore.heal` clears them all.
+that raises for chosen keys without acting; one that is applied and then raises (the entry is
+gone, but the caller sees an error: a lost response); one that returns without doing anything; a
+listing that raises, on every call or only on its n-th call, before its first entry or after n
+entries, for every prefix or one; and a store that over-returns entries outside the prefix it
+was asked for. :meth:`VersionedStore.heal` clears them all.
 
 **Inspection.** Every call is recorded in ``calls``, so a test can show that nothing was asked
 of the store, or that no call named a key outside a tenant's prefix. :meth:`VersionedStore.tally`
@@ -130,8 +131,10 @@ class VersionedStore:
     def heal(self) -> None:
         """Clear every injected fault (the stored state is kept)."""
         self._failing_deletes: set[str] = set()
+        self._applied_failing_deletes: set[str] = set()
         self._silent_deletes: set[str] = set()
         self._failing_aborts: set[str] = set()
+        self._applied_failing_aborts: set[str] = set()
         self._silent_aborts: set[str] = set()
         self._listing_faults: list[_ListingFault] = []
         self._over_return: tuple[str, ...] = ()
@@ -139,6 +142,14 @@ class VersionedStore:
     def fail_deletes(self, *keys: str) -> None:
         """``delete_version`` of any version or marker of these keys raises."""
         self._failing_deletes.update(keys)
+
+    def apply_then_fail_deletes(self, *keys: str) -> None:
+        """``delete_version`` of these keys removes the entry, then raises (a lost response)."""
+        self._applied_failing_deletes.update(keys)
+
+    def apply_then_fail_aborts(self, *keys: str) -> None:
+        """``abort_multipart_upload`` of these keys aborts the upload, then raises."""
+        self._applied_failing_aborts.update(keys)
 
     def silence_deletes(self, *keys: str) -> None:
         """``delete_version`` of these keys returns without deleting anything."""
@@ -214,6 +225,8 @@ class VersionedStore:
             self._objects[key] = held
         else:
             self._objects.pop(key, None)
+        if key in self._applied_failing_deletes:
+            raise StoreFault("injected failure after the delete was applied")
 
     def list_multipart_uploads(self, prefix: str) -> Iterator[ListedUpload]:
         self.calls.append(("list_multipart_uploads", prefix))
@@ -238,6 +251,8 @@ class VersionedStore:
         held = self._uploads.get(upload.upload_id)
         if held is not None and held[0] == upload.key:
             del self._uploads[upload.upload_id]
+        if upload.key in self._applied_failing_aborts:
+            raise StoreFault("injected failure after the abort was applied")
 
     # -- inspection ----------------------------------------------------------
     def tally(self, prefix: str) -> Tally:
