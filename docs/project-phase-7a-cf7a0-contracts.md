@@ -356,10 +356,11 @@ resolves to. (Ruling CF7A0-3, CONTROLS C-2; no new setting.)
     claim locks only its job row, not the organization row, so a job that becomes active after
     these refusals (for example while an earlier organization's objects are being erased) is not
     refused, and its organization is deleted under it. Organization deletion has the same window
-    between its refusal and its commit, which the object step lengthens. On SQLite the deletion's
-    database writer lock blocks the claim. No refusal is made again after a storage call: on that
-    race it would refuse only after an earlier organization's objects were erased (review re-bind
-    RB1b).
+    between its refusal and its commit, which the object step lengthens. On SQLite, account
+    deletion's database writer lock (taken before its reads) blocks the claim; organization
+    deletion takes no such lock, so on SQLite it has the same window. No refusal is made again
+    after a storage call: on that race it would refuse only after an earlier organization's
+    objects were erased (review re-bind RB1b).
   - **The counts are confirmed by the fresh listing (F-3, F-4).** An entry counts as removed when
     the fresh listing no longer shows it: a delete that returned without deleting is not counted;
     one that was applied and then raised is counted once, and still makes the run incomplete.

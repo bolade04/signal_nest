@@ -529,8 +529,9 @@ def _refuse_organization_erasure(db: Session, organization_id: str) -> None:
     """Every refusal of one organization's erasure, each made before any storage call.
 
     409 ``organization_jobs_active`` while a job of the organization is claimed, running or cancel
-    requested, so no job active when the refusal is made writes into a scope being deleted (on
-    PostgreSQL a job claimed after it is not refused: contract §6); and an id that is not one key
+    requested, so no job active when the refusal is made writes into a scope being deleted (a job
+    claimed after it is not refused: on PostgreSQL in either deletion, and on SQLite in
+    organization deletion, which takes no writer lock; contract §6); and an id that is not one key
     segment (never a server-made id) is refused before its prefix could be listed."""
     _require_no_active_jobs(db, organization_id)
     organization_prefix(organization_id)
