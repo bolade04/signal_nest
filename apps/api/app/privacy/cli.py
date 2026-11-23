@@ -13,7 +13,11 @@ retention duration is not configured (nothing of that class was purged); ``3`` t
 was refused (for example an account with that verified email exists); ``4`` a verification
 is ``verified`` but ``content_ambiguous`` lists text where some registrable address could
 contain the subject's identifier, so an operator must decide whose it is
-(:mod:`app.privacy.matching`).
+(:mod:`app.privacy.matching`); ``5`` the sweep left required deletions incomplete: a class
+**kept** root rows past their cut-off because their stored objects could not all be erased
+(``complete: false`` with ``kept``; the next sweep retries them). ``2`` takes precedence over
+``5``. A completed sweep, a dry run, a class with nothing due and a class stopped at its batch
+limit (``complete: false`` with nothing kept; the next sweep continues) exit ``0``.
 
 An address given on the command line can be visible to whoever can read the process
 list or the task definition's overrides; prefer running these where that is acceptable.
@@ -38,6 +42,8 @@ from app.privacy.verification import (
 )
 
 EXIT_OK, EXIT_FINDINGS, EXIT_POLICY_UNSET, EXIT_REFUSED, EXIT_REVIEW = 0, 1, 2, 3, 4
+#: The sweep kept root rows whose required deletion is incomplete (``ClassOutcome.kept``).
+EXIT_INCOMPLETE = 5
 
 
 def _print(document: object) -> None:
@@ -55,7 +61,13 @@ def _sweep(args: argparse.Namespace) -> int:
     classes = tuple(RetentionClass(c) for c in args.data_class) if args.data_class else None
     outcomes = retention.sweep(SessionLocal, classes=classes, dry_run=args.dry_run)
     _print({"dry_run": args.dry_run, "classes": [asdict(o) for o in outcomes]})
-    return EXIT_POLICY_UNSET if any(o.status == "policy_unset" for o in outcomes) else EXIT_OK
+    if any(o.status == "policy_unset" for o in outcomes):
+        return EXIT_POLICY_UNSET
+    # Kept roots are past their cut-off but could not be erased: required deletions remain. A
+    # dry run never keeps; a class stopped at its batch limit keeps nothing (a normal bound).
+    if any(o.kept for o in outcomes):
+        return EXIT_INCOMPLETE
+    return EXIT_OK
 
 
 def _verify_account(args: argparse.Namespace) -> int:
