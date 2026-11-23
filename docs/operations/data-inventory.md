@@ -279,11 +279,64 @@ mechanism, with the procedure an operator follows.
 | **RDS automated backups / snapshots** | a full copy of every table at backup time | deleted rows persist in backups until those age out (`data_sql` module default `backup_retention_period` = 7 days; the root's configured value is not asserted here) and in any manual snapshot until it is deleted | after **any restore**, re-apply every erasure completed after the backup's timestamp, using the `privacy.account.deleted` / `privacy.organization.deleted` log events (they carry the pseudonymous subject id); manual snapshots must be covered by the same policy. This requires log retention ≥ backup retention — an operator item |
 | **Application logs (CloudWatch)** | pseudonymous user ids on security events (`security.*`, `privacy.*`), request metadata; no passwords, tokens or emails by the logging contract | log events are not edited or deleted per subject; they expire with the log group (the `ecs` module's staging baseline is 30 days) | treat log-group retention as the deletion bound; state it in the privacy notice |
 | **Redis** | job-available notifications and short-lived advisory locks; the cache adapter exists but no product path stores tenant data in it | — | none needed; TTL-bound |
-| **Object storage (S3 adapter)** | no product path writes customer data to object storage on `origin/main`. Phase 7A CF-7A-0 states the media entry for when one does (`OBJECT_STORES` in `app/privacy/inventory.py`: keys under `{organization_id}/{workspace_id}/media/`; an organization's erasure must remove every object version and delete marker under `{organization_id}/` and abort its in-progress multipart uploads). M0-B implements that erasure, the media purge and the verification listing (`app/privacy/object_erasure.py`; `verify_organization_objects_erased` in `app/privacy/verification.py`) through M0-A0's version-aware storage operations; with the adapter before M0-A0, which has none, the erasure reports `unavailable` and the purge keeps every root. This row stays true while no media route is mounted and changes when M0-A's routes are mounted | — | re-assess when M0-A's routes are mounted |
+| **Object storage (S3 adapter)** | no product path writes customer data to object storage on `origin/main`. Phase 7A CF-7A-0 states the media entry for when one does (`OBJECT_STORES` in `app/privacy/inventory.py`: keys under `{organization_id}/{workspace_id}/media/`; an organization's erasure must remove every object version and delete marker under `{organization_id}/` and abort its in-progress multipart uploads). M0-B implements that erasure, the media purge and the verification listing (`app/privacy/object_erasure.py`; `verify_organization_objects_erased` in `app/privacy/verification.py`) through M0-A0's version-aware storage operations; with the adapter before M0-A0, which has none, the erasure reports `unavailable` and the purge keeps every root. This row stays true while no media route is mounted and changes when M0-A's routes are mounted | the S3 permissions gate on the M0-A0 + M0-B integration; a key with an empty, `.` or `..` segment under an organization's prefix blocks that organization's deletion (both [below](#object-storage-the-s3-permissions-gate-and-a-key-that-blocks-an-erasure)) | re-assess when M0-A's routes are mounted; for a blocked deletion, the procedure [below](#object-storage-the-s3-permissions-gate-and-a-key-that-blocks-an-erasure) |
 | **Amazon SES** | account mail (reset and verification links) in transit; the SES **account-level suppression list** can hold an address that bounced or complained | SES content is not stored by the application; a suppressed address is not removed by account deletion | on an erasure request, check the SES suppression list for the address and remove it (operator, AWS-side) |
 | **Third-party LLM provider** | prompt text sent for classification | see `docs/operations/llm-data-processing.md` (`P6-PRIV-2`) | per that document |
 | **The user's browser** | the bearer token and the selected workspace in `localStorage` | cleared by sign-out and by the deletion flow in the web app | none |
 | **Evidence sets / exports handed to the customer** | whatever was exported | the export is the customer's copy | none |
+
+### Object storage: the S3 permissions gate and a key that blocks an erasure
+
+Phase 7A M0-B, fix pass FXM0B-1 (review W7A-REV-M0B r1, F-2 and F-8).
+
+**Integration gate: the S3 permissions.** M0-B's erasure, purge and verification list and remove
+object versions, delete markers and in-progress multipart uploads. Before any build in which that
+erasure is reachable with M0-A0's storage adapter runs with `STORAGE_BACKEND="s3"`, the
+application's ECS task role must hold `s3:ListBucketVersions` and `s3:ListBucketMultipartUploads`
+on the bucket that holds the media objects, and `s3:DeleteObjectVersion` and
+`s3:AbortMultipartUpload` on its objects (M0-C, applied under D-9). Today's role grants only
+`s3:ListBucket` (`infra/aws/modules/iam/main.tf:289`) and `s3:GetObject`, `s3:PutObject` and
+`s3:DeleteObject` (`:296-298`). Without the four, a denied listing or deletion is a failed call,
+never complete: every organization deletion, and every account deletion that deletes an
+organization, answers 503 `object_erasure_incomplete`, even for an organization that never stored
+media, and the media purge keeps every root. With the adapter before M0-A0 the erasure calls no
+S3 operation (it reports `unavailable`), so the gate binds at that integration.
+
+**A key that blocks an organization's erasure (fail-closed and visible).** M0-B never passes to
+the store a key under the organization's prefix that has an empty segment (for example an S3
+console "folder" object such as `{organization_id}/{workspace_id}/media/`, or `a//b`), a `.` or
+`..` segment, a backslash or a NUL: a filesystem store could resolve such a key into another
+tenant's path. The application's adapter refuses to write such a key (`validate_object_key`),
+so only a write from outside the application makes one. The erasure counts each entry of such a
+key in `refused_keys`, and the fresh listing still finds it, so the organization's object step
+is incomplete on every attempt:
+
+- organization deletion, and every account deletion that deletes that organization, answers 503
+  `object_erasure_incomplete` and changes nothing in the database;
+- the log event `privacy.objects.organization_erased` (level ERROR, outcome `failure`) carries
+  the organization id and `refused_keys` of 1 or more, never the key;
+- a media retention root whose asset area holds such a key is kept on every sweep in the same
+  way (`privacy.retention.objects_incomplete`, with `refused_keys`; in the purge `refused_keys`
+  also counts a root whose stored key is outside its own tenant's prefix, which is not this
+  case).
+
+`refused_keys` tells this case apart from a failed call (`failed_deletions`, `failed_aborts`,
+`failed_listings`, as with missing permissions). The operator's procedure:
+
+1. With the bucket's own tools, list every object version, delete marker and in-progress
+   multipart upload under exactly `{organization_id}/` (the trailing slash included). Pick out
+   the keys with an empty, `.` or `..` segment, a backslash or a NUL.
+2. Check that each one starts with `{organization_id}/`. Never act on a key outside that prefix.
+3. Permanently delete every version and every delete marker of each such key, by version id, and
+   abort each of its in-progress uploads.
+4. List `{organization_id}/` again: no object, version, delete marker or upload of those keys may
+   remain. Then the deletion is retried (the 503 told the person to try again; the retry erases
+   and counts only what is left) and answers 200.
+5. Record the action with the organization id alongside the deletion's log events, and find how
+   the key was written, since no product path writes one.
+
+For a blocked retention root, steps 1 to 3 apply to the asset's area
+`{organization_id}/{workspace_id}/media/assets/{asset_id}/`; the next sweep then purges it.
 
 ## Portability (export)
 

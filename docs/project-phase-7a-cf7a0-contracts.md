@@ -339,6 +339,37 @@ resolves to. (Ruling CF7A0-3, CONTROLS C-2; no new setting.)
   - **The account export** is unchanged by M0-B; R-5 is unchanged.
   - `docs/operations/data-inventory.md` keeps "no product path writes customer data to object
     storage": it stays true while no media route is mounted, and changes when M0-A's routes mount.
+- **Fix pass FXM0B-1** (added by M0-B; commits `7ea946ce`, `700fa64a` and this text; review
+  W7A-REV-M0B r1, F-1 to F-4). At M0-B's FXM0B-1 head:
+  - **Account deletion makes every refusal before any object erasure (F-1).** It refuses as the
+    sole OWNER of an organization with other members (409 `account_deletion_sole_owner`), and every
+    organization it would delete must pass that organization's own refusal (409
+    `organization_jobs_active` while one of its jobs is claimed or running), all before
+    `mark_privacy_writer` and before the first organization's object step. A refused account
+    deletion makes no storage call and changes nothing. It then erases the deleted organizations
+    in id order, each one's objects before its rows, and makes no refusal after a storage call.
+    If a later organization's object step is incomplete (503 `object_erasure_incomplete`), the
+    earlier organizations' objects are already erased while all their rows remain until the
+    retry, which completes them. Organization deletion makes its refusals (authority, name, active
+    job) before its object step, as before.
+  - **The counts are confirmed by the fresh listing (F-3, F-4).** An entry counts as removed when
+    the fresh listing no longer shows it: a delete that returned without deleting is not counted;
+    one that was applied and then raised is counted once, and still makes the run incomplete.
+    Where the fresh listing over an entry failed, the run is incomplete and only a call that
+    returned counts. `keys` counts an object key in the run that leaves no version and no delete
+    marker of it, so the counts summed over a run and its retries are what was removed (AE-M0-4).
+  - **Integration gate: the S3 permissions (F-2).** At this head M0-B's erasure calls no S3
+    operation: the adapter before M0-A0 has none of the four, so the object step reports
+    `unavailable`. Before any build in which M0-B's erasure is reachable with M0-A0's adapter runs
+    with `STORAGE_BACKEND="s3"`, the application's ECS task role must hold `s3:ListBucketVersions`
+    and `s3:ListBucketMultipartUploads` on the bucket that holds the media objects, and
+    `s3:DeleteObjectVersion` and `s3:AbortMultipartUpload` on its objects (M0-C, applied under
+    D-9). The role at this head grants only `s3:ListBucket` (`infra/aws/modules/iam/main.tf:289`)
+    and `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` (`:296-298`). Without the four, a denied
+    listing or deletion is a failed call: every organization deletion, and every account deletion
+    that deletes an organization, answers 503 `object_erasure_incomplete` (even for an
+    organization that never stored media), and the media purge keeps every root. M0-B changes
+    nothing under `infra/`; the gate belongs on the M0-A0 + M0-B integration checklist.
 
 ## 7. The CSP directive set (stated; M0-B changes the files)
 
@@ -514,7 +545,11 @@ purge; `::test_the_retention_bindings_are_stated_and_not_yet_wired` is now
 `::test_the_retention_bindings_are_stated_and_wired`. The two route placeholders stay until the
 routes are mounted. The test binding M0-B's storage protocol to M0-A0's adapters,
 `test_media_erasure_objects.py::test_the_m0a0_adapters_satisfy_the_m0b_erasure_protocol`, is added
-when M0-A0 lands (it cannot pass before).
+when M0-A0 lands (it cannot pass before). Besides the signatures, the value types and both real
+adapters erased and verified, it binds (fix pass FXM0B-1, F-6; added by M0-B): that
+`resolve_object_store()` returns the application's configured adapter, never `None`; a
+`media_uploads` sweep on the real adapter; and, on `S3Storage`, that a listing refused with
+`AccessDenied` gives `incomplete` and makes `erase_organization` raise.
 
 ## 12. The malware-scanning approach (decided: S-1)
 
