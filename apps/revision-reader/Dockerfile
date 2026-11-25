@@ -83,7 +83,7 @@ RUN python -m pip install --prefix=/install .
 # --- final: distroless, no shell, no package manager, no build tooling ---------------
 # Debian-based distroless is required: psycopg[binary]'s manylinux wheel bundles libpq
 # and is glibc-linked, so an Alpine/musl base would not work.
-FROM gcr.io/distroless/python3-debian13@sha256:5bac3c3ab33426c460db63504cd1a267b3326b9f804d21c63359492858d1beda AS reader
+FROM gcr.io/distroless/python3-debian13@sha256:7fa0d47901299aa0017c9ef24b8306f72567889977242dce2316b5cb81a06a1f AS reader
 
 # Provenance, stamped by the publication workflow from the trusted checkout.
 ARG GIT_REVISION=unknown
