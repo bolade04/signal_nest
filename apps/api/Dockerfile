@@ -54,6 +54,18 @@ RUN apt-get update \
     && test "$(dpkg-query -W -f='${Version}' zlib1g)" = "1:1.3.dfsg+really1.3.1-1+deb13u1" \
     && rm -rf /var/lib/apt/lists/*
 
+# zstd security repair (Debian DSA-6657-1: CVE-2026-124851). The pinned base predates the advisory (the fixed
+# package's trixie-security upload is dated 2026-11-24) and ships libzstd1 1.5.7+dfsg-1; no python:3.12-slim
+# carrying the fix had been published on 2026-11-26, when this step was written. This upgrades that ONE package
+# to exactly the version the advisory names, from the base's own trixie-security source: apt verifies the
+# archive's signed InRelease against the image's debian-archive-keyring (nothing here relaxes that), and the
+# build fails unless the installed version is exactly the fixed one. Nothing else is installed or upgraded.
+# Remove this step when the digest above moves to a python:3.12-slim that already carries the fix.
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y --only-upgrade libzstd1=1.5.7+dfsg-1+deb13u1 \
+    && test "$(dpkg-query -W -f='${Version}' libzstd1)" = "1.5.7+dfsg-1+deb13u1" \
+    && rm -rf /var/lib/apt/lists/*
+
 # ---------------------------------------------------------------------------
 # builder — install locked dependencies into an isolated virtualenv.
 # ---------------------------------------------------------------------------
