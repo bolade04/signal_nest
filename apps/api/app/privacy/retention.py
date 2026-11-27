@@ -119,6 +119,8 @@ _ROOTS: dict[RetentionClass, tuple[tuple[Any, Callable[[datetime], Any]], ...]] 
     # In-app notifications (Project Phase 5E; operator ruling D-N4 item 30): by age, once the
     # duration is set. Not a workspace class, so the sweep alone purges it (see above).
     RetentionClass.NOTIFICATIONS: ((Notification, lambda c: Notification.created_at < c),),
+    RetentionClass.MEDIA_UPLOADS: (),  # Phase 7A CF-7A-0: no roots until M0-B binds them
+    RetentionClass.MEDIA_RECORDS: (),  # Phase 7A CF-7A-0: no roots until M0-B binds them
 }
 
 

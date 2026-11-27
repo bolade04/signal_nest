@@ -495,9 +495,10 @@ def _step_down(w) -> None:
     (a7d2e9f4c1b8), CF-3 another (c3f8e1a6d2b9), 5D-W1's campaign-location data repair
     another (d5f616c0ec97), W21 ADDR's structured business address another (6f8a80cf1785),
     D-N4 item 37's append-only backstop another (d0a8bce8de6a), D-N4 item 36's closed claim
-    kinds another (1574637e56d3) and 5E-CF's capability-CHECK widening another (53fdde95354a),
-    so that is ten guarded steps down from the code head."""
-    for _ in range(10):
+    kinds another (1574637e56d3), 5E-CF's capability-CHECK widening another (53fdde95354a)
+    and Phase 7A CF-7A-0's media asset tables another (91a796f09399), so that is eleven
+    guarded steps down from the code head."""
+    for _ in range(11):
         token = _alembic(w, "app.db.migrate", "downgrade-confirmation", "-1")
         assert token.returncode == 0, token.stderr
         down = _alembic(w, "alembic", "-x", f"confirm={token.stdout.strip()}", "downgrade", "-1")

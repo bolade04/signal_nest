@@ -130,7 +130,10 @@ BACKSTOP = "d0a8bce8de6a"
 CLAIM_KINDS = "1574637e56d3"
 # Project Phase 5E 5E-CF (operator ruling O-12(B)): the capability-override CHECK admits
 # 'notifications_analytics'. It follows the claim kinds.
-CODE_HEAD = "53fdde95354a"
+NA_WIDENING = "53fdde95354a"
+# Phase 7A CF-7A-0: the media asset tables; the capability-override CHECK admits
+# 'media_assets'. It follows the 5E-CF widening.
+CODE_HEAD = "91a796f09399"
 
 
 # --------------------------------------------------------------------------- #
@@ -282,7 +285,8 @@ def _insert(con, table: str, id_: str, *, user: str = "u-1", **kw) -> None:
 def test_this_revision_follows_invitations_and_precedes_the_single_head() -> None:
     script = _script()
     assert [r.revision for r in script.get_revisions("heads")] == [CODE_HEAD]
-    assert script.get_revision(CODE_HEAD).down_revision == CLAIM_KINDS
+    assert script.get_revision(CODE_HEAD).down_revision == NA_WIDENING
+    assert script.get_revision(NA_WIDENING).down_revision == CLAIM_KINDS
     assert script.get_revision(CLAIM_KINDS).down_revision == BACKSTOP
     assert script.get_revision(BACKSTOP).down_revision == ADDR
     assert script.get_revision(ADDR).down_revision == D1_REPAIR

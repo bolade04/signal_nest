@@ -54,6 +54,9 @@ class Capability(StrEnum):
     #: both surfaces). Operator ruling O-12(B) of 2026-11-12, which amends O-4's
     #: three-flag limit. Added at 5E-CF.
     NOTIFICATIONS_ANALYTICS = "notifications_analytics"
+    #: Phase 7A media assets: the M0 asset library, uploads and signed GETs (media plan v3
+    #: §3.0, D-1). Added at CF-7A-0.
+    MEDIA_ASSETS = "media_assets"
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,6 +186,21 @@ _POLICIES: tuple[CapabilityPolicy, ...] = (
         subject_to_safety_ceiling=True,
         requires_workspace_context=True,
         future_activation_phase="5E",
+    ),
+    CapabilityPolicy(
+        capability=Capability.MEDIA_ASSETS,
+        label="Media Assets",
+        global_flag_attr="media_assets_enabled",
+        # Media plan v3 §3.0, adopted with D-1: each Phase 7A flag "defaults to False, fails
+        # closed, is capability-resolved and is reflected in FeatureFlagsOut". O-3's pattern
+        # for the Phase 5 flags: enableable per workspace, global default False (CF-7A-0's
+        # proposal for the review). Enabling customer uploads additionally needs the MD-4
+        # verification D-10 and the O-5 durations D-7; nothing here activates it.
+        workspace_enableable=True,
+        workspace_disableable=True,
+        subject_to_safety_ceiling=True,
+        requires_workspace_context=True,
+        future_activation_phase="7A",
     ),
 )
 

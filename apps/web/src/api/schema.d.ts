@@ -2711,6 +2711,14 @@ export interface components {
             locality_confirmations_made: {
                 [key: string]: unknown;
             }[];
+            /** Media Assets Uploaded */
+            media_assets_uploaded: {
+                [key: string]: unknown;
+            }[];
+            /** Media Rights Attested */
+            media_rights_attested: {
+                [key: string]: unknown;
+            }[];
             /** Memberships */
             memberships: {
                 [key: string]: unknown;
@@ -3230,7 +3238,7 @@ export interface components {
          *     registry below.
          * @enum {string}
          */
-        Capability: "opportunity_feedback" | "scout_scheduling" | "connector_rss" | "recommendation_briefs" | "creative_generation" | "content_export" | "notifications_analytics";
+        Capability: "opportunity_feedback" | "scout_scheduling" | "connector_rss" | "recommendation_briefs" | "creative_generation" | "content_export" | "notifications_analytics" | "media_assets";
         /**
          * CapabilityEffectiveListOut
          * @description Effective state for a workspace, one item per resolved capability.
@@ -4010,6 +4018,8 @@ export interface components {
             content_export_enabled: boolean;
             /** Creative Generation Enabled */
             creative_generation_enabled: boolean;
+            /** Media Assets Enabled */
+            media_assets_enabled: boolean;
             /** Notifications Analytics Enabled */
             notifications_analytics_enabled: boolean;
             /** Opportunity Feedback Enabled */

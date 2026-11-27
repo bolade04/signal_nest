@@ -38,8 +38,9 @@ def test_every_table_has_exactly_one_inventory_entry():
     assert set(TABLES) == set(Base.metadata.tables)
     # W16 (PROPOSED): + opportunity_observations. Project Phase 5 CF-1 (W21): +
     # recommendation_briefs, approvals. CF-2: + creative_drafts, content_reviews. CF-3: +
-    # campaign_locations, exports, notifications, notification_preferences.
-    assert len(TABLES) == 52
+    # campaign_locations, exports, notifications, notification_preferences. Phase 7A CF-7A-0:
+    # + media_assets, media_objects, media_provenance, media_rights.
+    assert len(TABLES) == 56
 
 
 def test_the_document_names_every_table():

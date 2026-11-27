@@ -267,7 +267,9 @@ The contract **requires**, throughout INFRA implementation and environment setup
 - `opportunity_feedback_enabled=False`, `scout_scheduling_enabled=False`,
   `connector_rss_enabled=False`, `recommendation_briefs_enabled=False`,
   `creative_generation_enabled=False`, `content_export_enabled=False`,
-  `notifications_analytics_enabled=False` (all seven global flags remain `False`; the fourth
+  `notifications_analytics_enabled=False`, `media_assets_enabled=False` (all eight global
+  flags remain `False`; the eighth was added by Phase 7A CF-7A-0, and the media upload
+  settings and media retention durations stay unset; the fourth
   was added by Project Phase 5 CF-1, the fifth by CF-2, the sixth by CF-3 and the seventh by
   5E-CF under operator ruling O-12(B), each defaulting `False`). The four
   Project Phase 5C ceilings (`llm_daily_cost_ceiling_usd_global`,

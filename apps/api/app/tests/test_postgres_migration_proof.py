@@ -58,9 +58,16 @@ from app.db.base import Base
 from app.tests._auth2_support import pg_database, require_postgres
 
 API_DIR = Path(__file__).resolve().parents[2]
-#: The code head (Project Phase 5E 5E-CF, operator ruling O-12(B): the capability-override CHECK
-#: admits ``notifications_analytics``; no table or column changes).
-HEAD = "53fdde95354a"
+#: The code head (Phase 7A CF-7A-0: the four media tables; the capability-override CHECK
+#: admits ``media_assets``). It follows 5E-CF's widening (``53fdde95354a``).
+HEAD = "91a796f09399"
+#: One below head (Project Phase 5E 5E-CF, operator ruling O-12(B): the capability-override
+#: CHECK admits ``notifications_analytics``; no table or column changes).
+NA_WIDENING = "53fdde95354a"
+#: The four tables CF-7A-0 adds (the head's own step removes exactly these).
+MEDIA_TABLES = frozenset(
+    {"media_assets", "media_objects", "media_provenance", "media_rights"}
+)
 #: One below head (D-N4 item 36, W21: the closed claim kinds; data only: the ``prohibited`` alias
 #: becomes ``blocked``, so no table or column changes).
 CLAIM_KINDS = "1574637e56d3"
@@ -351,11 +358,28 @@ def test_full_chain_round_trips_on_postgresql_under_the_confirmation_guard(pg_ur
     assert "jurisdiction_code" in _columns(pg_url, "business_locations")
     assert ADDR_COLUMNS <= _columns(pg_url, "geo_coverage_rules")
 
-    # One guarded step down undoes exactly the head revision: 5E-CF's widening of the
-    # capability-override CHECK, so no table or column goes and the backstop stays; the spent
-    # token does not authorize the next step, and the base token minted at head is refused from
-    # the moved source.
+    # One guarded step down undoes exactly the head revision: Phase 7A CF-7A-0, so the four media
+    # tables go and nothing else does, and the backstop stays; its spent token does not
+    # authorize the next step, and the base token minted at head is refused from the moved
+    # source (ruling CF7A0-2, R-13).
     base_token_at_head = _confirmation(pg_url, "base")
+    media_token = _confirmation(pg_url, "-1")
+    schema_with_media = {t: _columns(pg_url, t) for t in _tables(pg_url)}
+    assert MEDIA_TABLES <= set(schema_with_media)
+    _alembic(pg_url, "-x", f"confirm={media_token}", "downgrade", "-1")
+    assert _version(pg_url) == [NA_WIDENING]
+    assert {t: _columns(pg_url, t) for t in _tables(pg_url)} == {
+        t: c for t, c in schema_with_media.items() if t not in MEDIA_TABLES
+    }
+    assert _backstop_triggers(pg_url) == backstop | {("", "function")}
+    spent_media = _run(["-x", f"confirm={media_token}", "downgrade", "-1"], pg_url)
+    assert spent_media.returncode != 0 and _version(pg_url) == [NA_WIDENING]
+    stale_media = _run(["-x", f"confirm={base_token_at_head}", "downgrade", "base"], pg_url)
+    assert stale_media.returncode != 0 and _version(pg_url) == [NA_WIDENING]
+
+    # The next guarded step undoes 5E-CF's widening of the capability-override CHECK, so no
+    # table or column goes and the backstop stays; the spent token does not authorize the next
+    # step, and the base token minted at head is refused from the moved source.
     step_token = _confirmation(pg_url, "-1")
     schema_at_head = {t: _columns(pg_url, t) for t in _tables(pg_url)}
     _alembic(pg_url, "-x", f"confirm={step_token}", "downgrade", "-1")

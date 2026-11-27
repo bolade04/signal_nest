@@ -5,7 +5,7 @@
 > to **no** account; it deploys **nothing**; and it activates **no** capability. Every
 > value shown is a **name or a disposition**, never a credential. The global capability
 > feature flags (`opportunity_feedback_enabled`, `scout_scheduling_enabled`,
-> `connector_rss_enabled`, `recommendation_briefs_enabled`, `creative_generation_enabled`, `content_export_enabled`, `notifications_analytics_enabled`) remain Boolean **`False`**. Implementing the inventory
+> `connector_rss_enabled`, `recommendation_briefs_enabled`, `creative_generation_enabled`, `content_export_enabled`, `notifications_analytics_enabled`, `media_assets_enabled`) remain Boolean **`False`**. Implementing the inventory
 > checks and the G5 gate is the later, separately authorized INFRA-3 *implementation*
 > tranche.
 
@@ -53,7 +53,7 @@ The inventory is derived **only** from repository evidence, not assumption:
   **UPPERCASED** (`SettingsConfigDict(case_sensitive=False)`). The one exception is
   `migration_mode`, whose `validation_alias` also admits `SN_MIGRATION_MODE` (§3.5).
 - Field enumeration is taken mechanically from `Settings.model_fields`. As of this
-  document the model declares **155 fields**, of which **10** are marked
+  document the model declares **165 fields**, of which **10** are marked
   `repr=False` (secret-bearing, host-identifying or internal) and **0** use `SecretStr`.
   *(Recounted 2026-11-01 on `main` `102393fa`: the previous figure, 87 fields and 9
   `repr=False`, dated from 2026-07-21 and had drifted as settings were added; the 48
@@ -65,7 +65,11 @@ The inventory is derived **only** from repository evidence, not assumption:
   environment ceiling) added `scout_scheduling_ceiling_lifted`: 152 → 153. Project Phase 5E
   5E-CF added `notifications_analytics_enabled` (operator ruling O-12(B)) and
   `retention_notifications_days` (operator ruling on D-N4 item 30): 153 → 155, recounted
-  mechanically from `Settings.model_fields` on the 5E-CF branch, based on `main` `6a3afe3a`.)*
+  mechanically from `Settings.model_fields` on the 5E-CF branch, based on `main` `6a3afe3a`.
+  Phase 7A CF-7A-0 added `media_assets_enabled`, the seven media upload settings and
+  `retention_media_uploads_days` / `retention_media_records_days`: 155 → 165, recounted
+  mechanically from `Settings.model_fields` on the CF-7A-0 branch, based on `main`
+  `de9d2306`; every one is unset or `False` by default.)*
 - Secret sensitivity is read from the `repr=False` markers plus the field semantics
   documented in `config.py` and the runtime contract.
 - Staging requirement/forbidden conditions are read from the unconditional
@@ -116,7 +120,7 @@ that the one-disposition-per-field rule is auditable; §3.7 reconciles the count
 | `llm_allow_dev_fallback` | `LLM_ALLOW_DEV_FALLBACK` | no | Developer fallback; validator rejects `true` in staging, so it stays at its `False` default. |
 | `connector_rss_replay_origin` | `CONNECTOR_RSS_REPLAY_ORIGIN` | no | Development/test only: a loopback origin serving recorded feed captures; refused in staging/production, so it stays unset. |
 
-### 3.5 Non-secret configuration — 143 fields
+### 3.5 Non-secret configuration — 153 fields
 
 Safe as plaintext task-definition environment (or the model default). Grouped by
 concern; every row's disposition is **non-secret configuration**.
@@ -134,6 +138,7 @@ concern; every row's disposition is **non-secret configuration**.
 | `creative_generation_enabled` | `CREATIVE_GENERATION_ENABLED` | Project Phase 5C (CF-2); must remain `False` — activation is a separate future authorization (Project Phase 5 plan §10). |
 | `content_export_enabled` | `CONTENT_EXPORT_ENABLED` | Project Phase 5E (CF-3); must remain `False` — activation is a separate future authorization (Project Phase 5 plan §10). |
 | `notifications_analytics_enabled` | `NOTIFICATIONS_ANALYTICS_ENABLED` | Project Phase 5E notifications and analytics (5E-CF; operator ruling O-12(B), the fourth Phase 5 flag); must remain `False` — activation is a separate future authorization (Project Phase 5 plan §10). |
+| `media_assets_enabled` | `MEDIA_ASSETS_ENABLED` | Phase 7A media assets (CF-7A-0; media plan v3 §3.0); must remain `False` — no media route is mounted, and enabling uploads also needs D-10 and D-7. |
 
 **General / API:** `app_name` (`APP_NAME`), `app_mode` (`APP_MODE`, staging=`full`),
 `environment` (`ENVIRONMENT`, staging=`staging`), `debug` (`DEBUG`),
@@ -254,6 +259,8 @@ unset; a configured value must be positive):** `llm_daily_cost_ceiling_usd_globa
 (`LLM_MAX_CALLS_PER_WORKSPACE_PER_DAY`), `llm_max_output_tokens_per_call`
 (`LLM_MAX_OUTPUT_TOKENS_PER_CALL`).
 
+**Phase 7A media uploads (CF-7A-0; every one unset, no value chosen; M0-A refuses every upload while any is unset):** `media_upload_max_bytes` (`MEDIA_UPLOAD_MAX_BYTES`), `media_allowed_types` (`MEDIA_ALLOWED_TYPES`, a JSON list), `media_signed_url_ttl_seconds` (`MEDIA_SIGNED_URL_TTL_SECONDS`, clamped to `s3_signed_url_ttl_seconds`), `media_image_max_pixels` (`MEDIA_IMAGE_MAX_PIXELS`), `media_image_decode_timeout_seconds` (`MEDIA_IMAGE_DECODE_TIMEOUT_SECONDS`), `media_font_parse_timeout_seconds` (`MEDIA_FONT_PARSE_TIMEOUT_SECONDS`), `media_decoder_max_memory_bytes` (`MEDIA_DECODER_MAX_MEMORY_BYTES`).
+
 **Readiness probes:** `readiness_probe_timeout_seconds`
 (`READINESS_PROBE_TIMEOUT_SECONDS`), `readiness_total_timeout_seconds`
 (`READINESS_TOTAL_TIMEOUT_SECONDS`).
@@ -268,6 +275,9 @@ the class):** `retention_auth_sessions_days` (`RETENTION_AUTH_SESSIONS_DAYS`),
 `retention_audit_logs_days` (`RETENTION_AUDIT_LOGS_DAYS`),
 `retention_notifications_days` (`RETENTION_NOTIFICATIONS_DAYS`; Project Phase 5E, D-N4 item 30:
 unset, no duration chosen),
+`retention_media_uploads_days` (`RETENTION_MEDIA_UPLOADS_DAYS`) and
+`retention_media_records_days` (`RETENTION_MEDIA_RECORDS_DAYS`) (Phase 7A CF-7A-0, MD-6:
+unset, no duration chosen; D-7),
 `retention_purge_batch_size` (`RETENTION_PURGE_BATCH_SIZE`),
 `retention_purge_max_batches` (`RETENTION_PURGE_MAX_BATCHES`).
 
@@ -293,14 +303,16 @@ resource name into logs, but it is safe to supply as plaintext task environment.
 | IAM-derived | 2 |
 | Absent in staging | 2 |
 | Local-development-only | 4 |
-| Non-secret configuration | 143 |
-| **Total** | **155** |
+| Non-secret configuration | 153 |
+| **Total** | **165** |
 
-`4 + 2 + 2 + 4 + 143 = 155`, equal to the model's declared field count
+`4 + 2 + 2 + 4 + 153 = 165`, equal to the model's declared field count
 (`len(Settings.model_fields)`, recounted mechanically on 2026-11-01 and moved 145 → 146 by
 Project Phase 5 CF-1, 146 → 151 by CF-2, 151 → 152 by CF-3, 152 → 153 by FU-267-C1's
-`scout_scheduling_ceiling_lifted` and 153 → 155 by Project Phase 5E 5E-CF's
-`notifications_analytics_enabled` and `retention_notifications_days`). **Zero fields
+`scout_scheduling_ceiling_lifted`, 153 → 155 by Project Phase 5E 5E-CF's
+`notifications_analytics_enabled` and `retention_notifications_days`, and 155 → 165 by
+Phase 7A CF-7A-0's media flag, seven media upload settings and two media retention
+durations). **Zero fields
 are unclassified**, and **all 10 `repr=False` fields** (`secret_key`, `database_url`,
 `redis_url`, `llm_api_key` → Secrets Manager; `s3_access_key_id`,
 `s3_secret_access_key` → IAM-derived; `otlp_endpoint`, `s3_endpoint_url` → absent;

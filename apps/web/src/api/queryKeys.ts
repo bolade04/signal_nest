@@ -166,6 +166,15 @@ export const queryKeys = {
     ['workspaces', workspaceId, 'users', userId, 'notifications'] as const,
   notificationPreferences: (workspaceId: string, userId: string) =>
     ['workspaces', workspaceId, 'users', userId, 'notification-preferences'] as const,
+  // Phase 7A CF-7A-0: the media asset library (`/workspaces/{ws}/media/assets`, M0-A, mounted
+  // by M0-B). An asset's key sits under the library key, so invalidating the library reaches
+  // every asset of that workspace and no other; workspace-effective availability has its own
+  // per-workspace key, outside the library prefix.
+  mediaAssets: (workspaceId: string) => ['workspaces', workspaceId, 'media', 'assets'] as const,
+  mediaAsset: (workspaceId: string, assetId: string) =>
+    ['workspaces', workspaceId, 'media', 'assets', assetId] as const,
+  mediaAssetsCapability: (workspaceId: string) =>
+    ['workspaces', workspaceId, 'media-assets-capability'] as const,
 
   // Workspace-effective feedback availability (P6-UI-005). Deliberately NOT
   // `runtimeSummary`: that key carries the raw global flags, has no workspace in

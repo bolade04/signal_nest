@@ -16,7 +16,10 @@ Read-only: an export writes nothing, not even an audit record. Both shapes carry
   in-app notifications (event code, subject id, read and soft-delete instants) and its own
   notification preferences, and — W21 ADDR — the business-town confirmations it made (the
   coverage rule, its location and the instant; never the address, which is the
-  organization's). No credential, token or digest.
+  organization's), and — Phase 7A CF-7A-0 — the media assets it uploaded (ids, kind, state,
+  its own display name and the instant; never a storage key or the stored bytes) and the
+  rights attestations it made (the asset, the basis, the attestation wording's version and
+  the instant). No credential, token or digest.
   The invitations it accepted are bound to it by id and always listed; the others addressed
   to its email address are found by that address, so they are listed only when it is
   verified (:class:`~app.privacy.erasure.EmailScope`); ``email_keyed_data`` says which, in
@@ -57,6 +60,7 @@ from app.db.models import Base
 from app.exports.models import Export
 from app.feedback.models import OpportunityFeedback
 from app.locations.models import GeoCoverageRule
+from app.media.models import MediaAsset, MediaRightsRecord
 from app.notifications.models import Notification, NotificationPreference
 from app.organizations.models import (
     Organization,
@@ -378,6 +382,36 @@ def export_account(db: Session, *, user: User) -> dict[str, Any]:
             )
             .where(GeoCoverageRule.locality_confirmed_by_user_id == uid)
             .order_by(GeoCoverageRule.locality_confirmed_at, GeoCoverageRule.id),
+        ),
+        # Phase 7A CF-7A-0 (ruling CF7A0-3, DATA C3): the media assets this account uploaded
+        # and the rights attestations it made. Ids, vocabulary words, its own display name and
+        # instants; the storage key, the stored bytes and the provenance are the organization's,
+        # in the organization export.
+        "media_assets_uploaded": _rows(
+            db,
+            select(
+                MediaAsset.id,
+                MediaAsset.workspace_id,
+                MediaAsset.kind,
+                MediaAsset.state,
+                MediaAsset.display_name,
+                MediaAsset.created_at,
+            )
+            .where(MediaAsset.created_by == uid)
+            .order_by(MediaAsset.created_at, MediaAsset.id),
+        ),
+        "media_rights_attested": _rows(
+            db,
+            select(
+                MediaRightsRecord.id,
+                MediaRightsRecord.workspace_id,
+                MediaRightsRecord.asset_id,
+                MediaRightsRecord.basis,
+                MediaRightsRecord.attestation_text_version,
+                MediaRightsRecord.attested_at,
+            )
+            .where(MediaRightsRecord.attested_by == uid)
+            .order_by(MediaRightsRecord.attested_at, MediaRightsRecord.id),
         ),
     }
 

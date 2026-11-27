@@ -230,6 +230,6 @@ def test_inventory_of_the_two_tables():
     assert TABLES["content_reviews"].retention_class is None  # cascades with its draft
     # CF-2 added no retention class and decided no duration (the eighth class, Project Phase
     # 5E's ``notifications`` under D-N4 item 30, is unset too).
-    assert len(RetentionClass) == 8
+    assert len(RetentionClass) == 10  # + media_uploads, media_records (CF-7A-0)
     settings = Settings(_env_file=None)
     assert all(getattr(settings, c.setting_name) is None for c in RetentionClass)

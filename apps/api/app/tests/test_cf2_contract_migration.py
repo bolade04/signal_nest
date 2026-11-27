@@ -73,9 +73,12 @@ ADDR = "6f8a80cf1785"
 BACKSTOP = "d0a8bce8de6a"
 #: D-N4 item 36's closed claim kinds (data only), which follows the backstop.
 CLAIM_KINDS = "1574637e56d3"
-#: The code head (Project Phase 5E 5E-CF, operator ruling O-12(B): the capability-override CHECK
-#: admits ``notifications_analytics``), which follows the claim kinds.
-HEAD = "53fdde95354a"
+#: Project Phase 5E 5E-CF (operator ruling O-12(B): the capability-override CHECK admits
+#: ``notifications_analytics``), which follows the claim kinds.
+NA_WIDENING = "53fdde95354a"
+#: The code head (Phase 7A CF-7A-0: the media asset tables; the CHECK admits
+#: ``media_assets``), which follows the 5E-CF widening.
+HEAD = "91a796f09399"
 CF1 = "f3a9c1e7b2d5"
 OVERRIDES = "workspace_capability_overrides"
 NEW_TABLES = {"creative_drafts", "content_reviews"}
@@ -134,7 +137,8 @@ def test_the_head_is_single_and_follows_cf1() -> None:
 
     script = ScriptDirectory.from_config(Config(str(API_DIR / "alembic.ini")))
     assert [r.revision for r in script.get_revisions("heads")] == [HEAD]
-    assert script.get_revision(HEAD).down_revision == CLAIM_KINDS
+    assert script.get_revision(HEAD).down_revision == NA_WIDENING
+    assert script.get_revision(NA_WIDENING).down_revision == CLAIM_KINDS
     assert script.get_revision(CLAIM_KINDS).down_revision == BACKSTOP
     assert script.get_revision(BACKSTOP).down_revision == ADDR
     assert script.get_revision(ADDR).down_revision == D1_REPAIR

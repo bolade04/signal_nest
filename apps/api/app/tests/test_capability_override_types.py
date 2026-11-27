@@ -178,6 +178,8 @@ _RAW_FLAGS = frozenset(
         # Project Phase 5E, W21 5E-CF (operator ruling O-12(B)): likewise for the
         # notification and analytics gates and the emitter when they land.
         "notifications_analytics_enabled",
+        # Phase 7A CF-7A-0: likewise for the M0-A media gates when they land.
+        "media_assets_enabled",
     }
 )
 #: The only production module allowed to read them: the deliberately raw-global

@@ -363,6 +363,6 @@ def test_inventory_of_the_cf3_tables():
     assert TABLES["campaign_locations"].retention_class is None
     # CF-3 decided no duration; the one class added since (notifications, item 30) is unset:
     # eight unset settings.
-    assert len(RetentionClass) == 8
+    assert len(RetentionClass) == 10  # + media_uploads, media_records (CF-7A-0)
     settings = Settings(_env_file=None)
     assert all(getattr(settings, c.setting_name) is None for c in RetentionClass)
