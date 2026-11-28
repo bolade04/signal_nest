@@ -1,14 +1,17 @@
 """Phase 7A CF-7A-0: the media privacy contract (AE-M0-5, and the rules AE-M0-4 builds on).
 
 * **Inventory:** the four media tables have exactly the stated ``TableEntry`` (category, export,
-  no time-based class until M0-B binds one), and the stated retention bindings name real
-  classes; the object-storage entry exists with its layout, prefix, class and erasure duty.
+  and the time-based class M0-B bound: ``media_uploads`` for assets and objects, none for the
+  cascading provenance and rights records), and the stated retention bindings name real classes,
+  wired as M0-B bound them; the object-storage entry exists with its layout, prefix, class and
+  erasure duty.
 * **Retention:** ``media_uploads`` and ``media_records`` are classes with unset durations;
   production refuses to start while either is unset, staging and the migration actor do not;
-  the sweep refuses both (``policy_unset``) without opening a session. With a media duration
-  set (coordinator ruling CF7A0-2, R-12: the classes are listed with no purge roots until M0-B),
-  the sweep and its dry run run, purge nothing for the media classes and write no media row, on
-  SQLite and on PostgreSQL. M0-B replaces that test when it binds the real roots.
+  the sweep refuses both (``policy_unset``) without opening a session. With media durations set
+  and a store that cannot erase object versions (M0-B: the media purge erases a root's objects
+  before its rows), the sweep and its dry run run, purge nothing for the media classes, report
+  every root kept, and write no media row, on SQLite and on PostgreSQL. The purge with a
+  versioned store is ``test_media_retention_purge.py``'s (contract §11).
 * **Account deletion** (the attester rule, stated in the contract and holding by the keys):
   through the real route, the account's media asset and rights record are kept, with
   ``created_by`` and ``attested_by`` cleared and the rights content intact; the verifier then
@@ -75,19 +78,20 @@ def env(tmp_path) -> Iterator[PrivacyEnv]:
 # --------------------------------------------------------------------------- #
 def test_the_media_tables_have_their_stated_entries() -> None:
     expected = {
-        "media_assets": Category.TENANT_CONTENT,
-        "media_objects": Category.TENANT_CONTENT,
-        "media_provenance": Category.TENANT_CONTENT,
-        "media_rights": Category.COMPLIANCE,
+        "media_assets": (Category.TENANT_CONTENT, RetentionClass.MEDIA_UPLOADS),
+        "media_objects": (Category.TENANT_CONTENT, RetentionClass.MEDIA_UPLOADS),
+        "media_provenance": (Category.TENANT_CONTENT, None),
+        "media_rights": (Category.COMPLIANCE, None),
     }
-    for table, category in expected.items():
+    for table, (category, retention_class) in expected.items():
         entry = TABLES[table]
         assert (entry.category, entry.exported, entry.excluded_columns) == (category, True, ())
-        # No time-based class until M0-B binds one with its purge roots (contract §5).
-        assert entry.retention_class is None, table
+        # M0-B bound the purge roots (contract §5): only the media_uploads bindings moved into
+        # their TableEntry; provenance and rights cascade with their object and asset (TC-1).
+        assert entry.retention_class is retention_class, table
 
 
-def test_the_retention_bindings_are_stated_and_not_yet_wired() -> None:
+def test_the_retention_bindings_are_stated_and_wired() -> None:
     assert dict(MEDIA_RETENTION_BINDINGS) == {
         "media_assets": RetentionClass.MEDIA_UPLOADS,
         "media_objects": RetentionClass.MEDIA_UPLOADS,
@@ -95,9 +99,13 @@ def test_the_retention_bindings_are_stated_and_not_yet_wired() -> None:
         "media_rights": RetentionClass.MEDIA_RECORDS,
     }
     rooted = {model.__tablename__ for roots in _ROOTS.values() for model, _ in roots}
-    assert not rooted & set(MEDIA_TABLES)
-    # A media class purges no table yet (M0-B binds the roots with the object erasure).
-    assert all(_ROOTS.get(data_class, ()) == () for data_class in MEDIA_CLASSES)
+    assert rooted & set(MEDIA_TABLES) == {"media_assets", "media_objects"}
+    # M0-B bound the roots with the object erasure: media_uploads roots exactly its two tables;
+    # media_records has no root in M0 (every record cascades with an existing object or asset).
+    assert [m.__tablename__ for m, _ in _ROOTS[RetentionClass.MEDIA_UPLOADS]] == [
+        "media_assets", "media_objects"
+    ]
+    assert _ROOTS[RetentionClass.MEDIA_RECORDS] == ()
     with pytest.raises(TypeError):
         MEDIA_RETENTION_BINDINGS["media_assets"] = RetentionClass.AUDIT_LOGS  # read-only
 
@@ -303,11 +311,14 @@ def sweep_env(request, tmp_path) -> Iterator[PrivacyEnv]:
 
 
 def test_with_a_media_duration_set_the_sweep_runs_and_purges_nothing_for_media(sweep_env):
-    """Today's behaviour, pinned (ruling CF7A0-2, R-12 condition (c)): ``retention.py`` lists the
-    media classes with no purge roots, so a sweep with their durations set runs to completion,
-    selects and deletes nothing for them, and writes no media row, even rows far older than the
-    cut-off. M0-B must bind the real roots (the media tables, and the stored objects with every
-    version, per AE-M0-4) before any media route is mounted, and then replaces this test."""
+    """M0-B's behaviour without a versioned store, pinned: M0-B bound the real roots (the asset
+    and its upload records), and the media purge erases a root's stored objects, every version
+    included, before it deletes the root's rows. With a store that cannot list versions (as the
+    application's adapter cannot before M0-A0), the sweep and its dry run run to completion,
+    select the roots past the cut-off, and keep every one of them: ``media_uploads`` reports them
+    kept, its objects ``unavailable`` and itself not complete, ``media_records`` has no root, and
+    no media row changes, even rows far older than the cut-off. The purge with a versioned store
+    is ``test_media_retention_purge.py``'s (contract §11)."""
     env = sweep_env
     _add_media(env, at=datetime.now(UTC) - timedelta(days=400))
     before = {model.__tablename__: env.rows(model) for model in MEDIA_MODELS}
@@ -315,17 +326,24 @@ def test_with_a_media_duration_set_the_sweep_runs_and_purges_nothing_for_media(s
     settings = Settings(
         _env_file=None, retention_media_uploads_days=1, retention_media_records_days=1
     )
+    no_versions = object()  # a store without M0-B's four version-aware operations
 
-    dry = retention.sweep(env.session, classes=MEDIA_CLASSES, settings=settings, dry_run=True)
+    dry = retention.sweep(
+        env.session, classes=MEDIA_CLASSES, settings=settings, dry_run=True,
+        object_store=no_versions,
+    )
     assert [(o.data_class, o.status, o.candidates) for o in dry] == [
-        ("media_uploads", "dry_run", 0),
+        ("media_uploads", "dry_run", 4),  # two assets and their two upload records
         ("media_records", "dry_run", 0),
     ]
-    swept = retention.sweep(env.session, classes=MEDIA_CLASSES, settings=settings)
-    assert [(o.data_class, o.status, o.complete, o.deleted) for o in swept] == [
-        ("media_uploads", "purged", True, {}),
-        ("media_records", "purged", True, {}),
+    swept = retention.sweep(
+        env.session, classes=MEDIA_CLASSES, settings=settings, object_store=no_versions
+    )
+    assert [(o.data_class, o.status, o.complete, o.deleted, o.kept) for o in swept] == [
+        ("media_uploads", "purged", False, {}, {"media_assets": 2, "media_objects": 2}),
+        ("media_records", "purged", True, {}, {}),
     ]
+    assert (swept[0].objects or {}).get("status") == "unavailable"
     assert {model.__tablename__: env.rows(model) for model in MEDIA_MODELS} == before
 
 

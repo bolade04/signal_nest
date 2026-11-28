@@ -46,6 +46,22 @@ write, as :func:`app.privacy.retention.purge_batch` does. The helpers (:func:`de
 ``anonymise_*`` functions) do not mark: on a migrated PostgreSQL database they reach a guarded
 row only inside a marked transaction.
 
+**Stored objects (Phase 7A M0-B; AE-M0-4).** :func:`erase_organization` first erases every
+object version, delete marker and in-progress multipart upload under ``{organization_id}/`` in the
+media store (:func:`app.privacy.object_erasure.erase_organization_objects`), before any database
+write, and does not rely on the media rows to find them. If that step is incomplete it raises
+:class:`~app.privacy.object_erasure.ObjectErasureIncompleteError` (503) and writes nothing, so the
+organization stays as the handle a retry erases the rest from; a retry counts only what it
+removes. If the store cannot list versions (the adapter before M0-A0, under which no media route
+is mounted and no media object can have been written) the step reports ``unavailable`` and the
+database erasure proceeds; the report says so and never says complete. Account deletion erases
+each organization it deletes the same way, in id order, after every refusal of every one of them
+(the sole-owner refusal, each organization's active-job refusal): a refused deletion has touched
+no stored object. If a later organization's object step is incomplete (503), the earlier ones'
+objects are already erased while all their rows remain, and the retry completes them. The
+attester rule (contract §6, R-5) is unchanged: it is the walk's ``SET NULL`` of
+``media_rights.attested_by`` and ``media_assets.created_by``.
+
 Locks: account deletion locks the user row, then each of its organizations in id order
 (``SELECT … FOR UPDATE``); organization deletion locks the organization and re-reads the
 actor's role under the lock, as every membership mutation does
@@ -106,6 +122,13 @@ from app.privacy.matching import (
     mention,
     prefilter,
     same_address,
+)
+from app.privacy.object_erasure import (
+    ObjectErasureIncompleteError,
+    ObjectErasureReport,
+    ObjectErasureStatus,
+    erase_organization_objects,
+    organization_prefix,
 )
 from app.privacy.writer import mark_privacy_writer
 
@@ -481,6 +504,9 @@ class OrganizationErasure:
     organization_id: str
     workspace_ids: tuple[str, ...]
     counts: ErasureCounts
+    #: The organization's objects in the media store (M0-B, AE-M0-4): what was removed, and
+    #: whether it is ``complete`` or ``unavailable`` (an incomplete step raises instead).
+    objects: ObjectErasureReport | None = None
 
 
 def _require_no_active_jobs(db: Session, organization_id: str) -> None:
@@ -499,14 +525,44 @@ def _require_no_active_jobs(db: Session, organization_id: str) -> None:
         )
 
 
-def erase_organization(db: Session, *, organization_id: str) -> OrganizationErasure:
+def _refuse_organization_erasure(db: Session, organization_id: str) -> None:
+    """Every refusal of one organization's erasure, each made before any storage call.
+
+    409 ``organization_jobs_active`` while a job of the organization is claimed, running or cancel
+    requested, so no job active when the refusal is made writes into a scope being deleted (a job
+    claimed after it is not refused: on PostgreSQL in either deletion, and on SQLite in
+    organization deletion, which takes no writer lock; contract §6); and an id that is not one key
+    segment (never a server-made id) is refused before its prefix could be listed."""
+    _require_no_active_jobs(db, organization_id)
+    organization_prefix(organization_id)
+
+
+def erase_organization(
+    db: Session,
+    *,
+    organization_id: str,
+    object_store: object | None = None,
+    refusals_made: bool = False,
+) -> OrganizationErasure:
     """Delete one organization and everything that belongs to it; anonymise its audit.
 
     The caller has locked the organization and checked authority. Refuses (409) while a
-    job of the organization is claimed or running, so no worker writes into a scope that
-    is being deleted.
+    job of the organization is claimed, running or cancel requested
+    (:func:`_refuse_organization_erasure`).
+    Then erases the organization's stored objects, every version included (module docstring;
+    ``object_store=None`` is the application's store), and raises
+    :class:`~app.privacy.object_erasure.ObjectErasureIncompleteError` before any database write
+    if that is incomplete.
+
+    ``refusals_made=True`` is for :func:`delete_account` only: it has made these refusals for
+    every organization it deletes, under the same locks, before the first one's object step, so
+    none is made again after a storage call has removed anything.
     """
-    _require_no_active_jobs(db, organization_id)
+    if not refusals_made:
+        _refuse_organization_erasure(db, organization_id)
+    objects = erase_organization_objects(organization_id, object_store=object_store)
+    if objects.status is ObjectErasureStatus.INCOMPLETE:
+        raise ObjectErasureIncompleteError(objects)
     mark_privacy_writer(db)  # the PostgreSQL append-only backstop's exception (D-N4 item 37)
     workspace_ids = tuple(
         db.execute(
@@ -527,7 +583,7 @@ def erase_organization(db: Session, *, organization_id: str) -> OrganizationEras
     )
     counts.merge(delete_rows(db, Organization.__table__, [organization_id]))
     db.flush()
-    return OrganizationErasure(organization_id, workspace_ids, counts)
+    return OrganizationErasure(organization_id, workspace_ids, counts, objects)
 
 
 def _verify_current_password(user: User, current_password: str) -> tuple[int, str]:
@@ -564,6 +620,7 @@ def delete_organization(
     organization_id: str,
     current_password: str,
     confirm_organization_name: str,
+    object_store: object | None = None,
 ) -> OrganizationErasure:
     """Delete an organization on its OWNER's request (``POST /organizations/{id}/delete``).
 
@@ -590,7 +647,7 @@ def delete_organization(
             "Type the organization's name exactly to confirm.",
             code="organization_name_mismatch",
         )
-    return erase_organization(db, organization_id=organization_id)
+    return erase_organization(db, organization_id=organization_id, object_store=object_store)
 
 
 # --------------------------------------------------------------------------- #
@@ -685,7 +742,7 @@ def invitations_accepted_by(db: Session, *, user_id: str) -> dict[str, AcceptedI
 
 
 def delete_account(
-    db: Session, *, user: User, current_password: str
+    db: Session, *, user: User, current_password: str, object_store: object | None = None
 ) -> AccountErasure:
     """Delete the signed-in account on its own request (``POST /account/delete``).
 
@@ -694,12 +751,16 @@ def delete_account(
     its credential state re-checked; every organization the account belongs to is locked
     in id order and the plan is re-made under those locks. Then, all in the caller's
     transaction: refuse if the account is the sole OWNER of an organization with other
-    members; erase every organization of which it is the only member; delete the
-    invitations it accepted and clear their address from the audit records about them;
+    members, and refuse if an organization it would delete refuses its erasure (an active job),
+    both before the first organization's object step; erase every organization of which it is
+    the only member, in id order; delete the invitations it accepted and clear their address
+    from the audit records about them;
     anonymise audit records that name it; delete the user row and everything that depends on
     it (memberships, sessions, account tokens), clearing the attribution columns that point
-    at it. Only when its email address is verified (:class:`EmailScope`, read from the row
-    under the lock) are the other invitations addressed to that address deleted and the
+    at it (so a media rights record keeps its content and loses the attester, R-5). Each deleted
+    organization's stored objects are erased first (:func:`erase_organization`; ``object_store``
+    is passed to it). Only when its email address is verified (:class:`EmailScope`, read from
+    the row under the lock) are the other invitations addressed to that address deleted and the
     other audit values naming it cleared too. Flushes, never commits.
     """
     epoch, current_hash = _verify_current_password(user, current_password)
@@ -723,15 +784,23 @@ def delete_account(
             "member an owner, or delete the organization, before deleting your account.",
             code="account_deletion_sole_owner",
         )
+    deleting = [
+        i.organization_id for i in impacts if i.outcome is MembershipOutcome.ORGANIZATION_DELETED
+    ]
+    # Every refusal of every organization this deletes comes before the first irreversible step:
+    # no organization's stored objects are erased while another one would still refuse.
+    for organization_id in deleting:
+        _refuse_organization_erasure(db, organization_id)
 
     mark_privacy_writer(db)  # the PostgreSQL append-only backstop's exception (D-N4 item 37)
     counts = ErasureCounts()
     deleted: list[OrganizationErasure] = []
-    for impact in impacts:
-        if impact.outcome is MembershipOutcome.ORGANIZATION_DELETED:
-            erased = erase_organization(db, organization_id=impact.organization_id)
-            counts.merge(erased.counts)
-            deleted.append(erased)
+    for organization_id in deleting:
+        erased = erase_organization(
+            db, organization_id=organization_id, object_store=object_store, refusals_made=True
+        )
+        counts.merge(erased.counts)
+        deleted.append(erased)
     accepted = invitations_accepted_by(db, user_id=user_id)
     invitation_ids = {*accepted, *(_invitations_addressed_to(db, email) if email else ())}
     if invitation_ids:

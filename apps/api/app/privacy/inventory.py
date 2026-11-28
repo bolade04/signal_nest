@@ -38,9 +38,10 @@ class RetentionClass(StrEnum):
     ``MEDIA_UPLOADS`` and ``MEDIA_RECORDS`` are Phase 7A's (CF-7A-0, media plan v3 §2.6; MD-6:
     "with durations governed by O-5 ... Do not create an indefinite compliance-retention
     exception"). Their durations are unset (D-7), so production refuses to start and the sweep
-    reports ``policy_unset``. Which tables each purges is stated in
-    :data:`MEDIA_RETENTION_BINDINGS`; the purge itself (its roots in
-    ``app.privacy.retention``, with the version-aware object erasure) is M0-B's.
+    reports ``policy_unset`` (for both while either is unset). Which tables each purges is stated
+    in :data:`MEDIA_RETENTION_BINDINGS`; M0-B bound the purge: ``media_uploads`` roots in
+    ``app.privacy.retention`` with the version-aware object erasure
+    (``app.privacy.object_erasure``), and no ``media_records`` root in M0.
     """
 
     AUTH_SESSIONS = "auth_sessions"
@@ -181,15 +182,17 @@ TABLES: dict[str, TableEntry] = {
         # carry organization and workspace keys (CASCADE): deleted with the workspace or the
         # organization, never kept as compliance records (MD-6). Exported with the
         # organization (rows only; the stored bytes are the object store's, below). The
-        # retention class of each is fixed by contract in ``MEDIA_RETENTION_BINDINGS`` and
-        # becomes ``retention_class`` here when M0-B adds the purge roots; until then it is
-        # None, and the sweep refuses both media classes while their durations are unset.
+        # retention class of each is fixed by contract in ``MEDIA_RETENTION_BINDINGS``. M0-B
+        # bound the ``media_uploads`` purge (roots in ``app.privacy.retention``, with the
+        # stored objects), so ``media_assets`` and ``media_objects`` carry that class here; the
+        # sweep refuses both media classes while either duration is unset.
         # ``media_assets``: the logical asset (kind, state, the customer's display name, the
         # uploading account - set null when that account is deleted).
-        TableEntry("media_assets", _TENANT),
+        TableEntry("media_assets", _TENANT, retention_class=RetentionClass.MEDIA_UPLOADS),
         # ``media_objects``: stored objects and upload records (key, size, content type,
         # sha256, storage version id, state). No personal data beyond what the bytes hold.
-        TableEntry("media_objects", _TENANT),
+        # Only upload records are roots; a stored object goes with its asset.
+        TableEntry("media_objects", _TENANT, retention_class=RetentionClass.MEDIA_UPLOADS),
         # ``media_provenance``: how each stored object was made (origin, inputs hash, parent
         # object, processor, scanner, job). No account and no rights field (MD-4).
         TableEntry("media_provenance", _TENANT),
@@ -317,13 +320,12 @@ TABLES: dict[str, TableEntry] = {
 
 
 #: Phase 7A (CF-7A-0): the retention class each media table is purged by, fixed by contract.
-#: ``TableEntry.retention_class`` stays None for these tables until M0-B adds their purge roots
-#: (``app.privacy.retention._ROOTS``) together with the object erasure; M0-B then moves the
-#: ``media_uploads`` bindings (``media_assets``, ``media_objects``) into their ``TableEntry``.
+#: M0-B added the ``media_uploads`` purge roots (``app.privacy.retention._ROOTS``) together with
+#: the object erasure and moved the ``media_uploads`` bindings (``media_assets``,
+#: ``media_objects``) into their ``TableEntry`` (contract limitation L-1 is resolved by M0-B).
 #: ``media_provenance`` and ``media_rights`` keep ``retention_class=None`` while they cascade (the
 #: ``CASCADE``-dependent convention of ``recommendation_briefs``), so the inventory's partition
-#: test holds with ``_ROOTS[MEDIA_RECORDS]`` empty. Until then, with a media duration set, the
-#: sweep cannot purge the class (CF-7A-0 contract, limitation L-1).
+#: test holds with ``_ROOTS[MEDIA_RECORDS]`` empty.
 #: ``media_provenance`` and ``media_rights`` are ``CASCADE`` dependents of their object and
 #: asset. They are removed with them under ``media_uploads``, and a ``media_records`` purge never
 #: selects the provenance record of an existing object or the rights record of an existing asset;
@@ -353,13 +355,15 @@ class ObjectStoreEntry:
     erasure_prefix: str
     #: The retention class that purges its objects (duration unset, D-7).
     retention_class: RetentionClass
-    #: What erasure must remove there (implemented and verified by M0-B).
+    #: What erasure must remove there (M0-B: ``app.privacy.object_erasure``, verified by
+    #: ``app.privacy.verification.verify_organization_objects_erased``).
     erasure: str
 
 
-#: Object storage entries (CF-7A-0). Nothing writes under these prefixes until M0-A and M0-B
-#: ship; ``docs/operations/data-inventory.md`` still states that no product path writes
-#: customer data to object storage.
+#: Object storage entries (CF-7A-0; erasure, purge and verification by M0-B). Nothing writes
+#: under these prefixes until M0-A's routes are mounted; ``docs/operations/data-inventory.md``
+#: still states that no product path writes customer data to object storage, and that row
+#: changes when the routes mount.
 OBJECT_STORES: dict[str, ObjectStoreEntry] = {
     e.name: e
     for e in (

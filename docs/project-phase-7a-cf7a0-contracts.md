@@ -250,6 +250,29 @@ resolves to. (Ruling CF7A0-3, CONTROLS C-2; no new setting.)
   because no media row can be written before M0-B mounts the routes.
 - `media_intermediates` and `media_approved_packages` arrive with CF-7A-1 and CF-7A-2.
 - **No indefinite exception (MD-6).** No media class is exempt from the purge or from erasure.
+- **Bound by M0-B** (added by M0-B; local branch `feat/p7a-m0b-retention-erasure-01`, commits
+  `478ee0cf`, `50a2f54e`, `2e2cdac2`, placeholders `ee15e7d4`; its review is pending). The bullets
+  above that say "until M0-B", "registered with no roots" or "placeholder" describe CF-7A-0's head.
+  At M0-B's head:
+  - `_ROOTS[MEDIA_UPLOADS]` is `media_assets` (any state) and the `media_objects` that are not
+    `stored` (upload records), each selected when its `created_at` is past the cut-off. A `stored`
+    object is never a root of its own: it goes with its asset (`CASCADE`), as do the asset's
+    provenance and rights records. **The age is measured from `created_at`** (DATA r1 O-3): an asset
+    still in use is purged once its creation is older than the duration; a last-use clock would need
+    a schema change, which M0-B does not make. D-7's decision material must say so.
+  - `_ROOTS[MEDIA_RECORDS]` stays empty, and only the `media_uploads` bindings (`media_assets`,
+    `media_objects`) are in their `TableEntry` (TC-1); the partition test holds.
+  - **Objects first, rows second.** For each root the purge erases every object version, delete
+    marker and in-progress multipart upload of the asset's area
+    `{organization_id}/{workspace_id}/media/assets/{asset_id}/` and of each of the root's exact
+    `storage_key`s (`app/privacy/object_erasure.py`), and deletes only the rows of the roots whose
+    object erasure is complete: no failed call, and nothing left in a fresh listing. Every other
+    root is kept for the next sweep, which retries it; the class is reported `complete: false`, with
+    `kept` (rows per table) and `objects` (counts and status), and stops for that run. A store
+    without version-aware operations (the adapter at CF-7A-0) erases nothing and keeps every root.
+  - **Both durations or nothing.** While **any** media duration is unset, both media classes report
+    `policy_unset` and nothing of them runs (AE-M0-5).
+  - Both media classes stay platform classes (DATA r1 O-2): the sweep purges them; no job does.
 
 ## 6. Privacy inventory, erasure and export
 
@@ -294,6 +317,72 @@ resolves to. (Ruling CF7A0-3, CONTROLS C-2; no new setting.)
   are counted in its reference check without a change. `media_assets.display_name` is customer
   text that its content scan reads; a display name that names an erased person is a finding, as
   in any tenant text column.
+- **Implemented by M0-B** (added by M0-B; commits `478ee0cf`, `50a2f54e`; review pending). The
+  bullets above that leave the object erasure and its verification to M0-B describe CF-7A-0's head.
+  At M0-B's head:
+  - **The storage protocol** is `VersionedObjectStore` (`app/privacy/object_erasure.py`): four of
+    M0-A0's operations at `5e5fa350`, with M0-A0's names and signatures (`list_object_versions`,
+    `delete_version`, `list_multipart_uploads`, `abort_multipart_upload`). The adapter at CF-7A-0
+    has none of them; M0-A0's `LocalStorage` and `S3Storage` satisfy it unchanged.
+  - **Organization deletion** (`erase_organization`) erases every object version, delete marker and
+    in-progress multipart upload under `{organization_id}/` before any database write, without
+    relying on the media rows, and counts them (`OrganizationErasure.objects`: keys, versions,
+    delete markers, aborted uploads). If that is incomplete it raises
+    `ObjectErasureIncompleteError` (503 `object_erasure_incomplete`) and writes nothing; a retry
+    erases and counts only what is left. If the store has no version-aware operations, the report
+    is `unavailable` (never complete) and the database erasure proceeds: safe only because no media
+    object can be written with that adapter and no media route is mounted.
+  - **Verification:** `verify_organization_objects_erased(store, organization_id=…)` in
+    `app/privacy/verification.py` lists the objects, the noncurrent versions and delete markers, and
+    the in-progress uploads under `{organization_id}/` independently. The deletion routes' receipts
+    do not report objects yet; adding that is a contract change for the mount.
+  - **The account export** is unchanged by M0-B; R-5 is unchanged.
+  - `docs/operations/data-inventory.md` keeps "no product path writes customer data to object
+    storage": it stays true while no media route is mounted, and changes when M0-A's routes mount.
+- **Fix pass FXM0B-1** (added by M0-B; commits `7ea946ce`, `700fa64a` and this text; review
+  W7A-REV-M0B r1, F-1 to F-4; qualified by fix pass FXM0B-2, re-bind N-1 and N-2). At M0-B's
+  FXM0B-1 head:
+  - **Account deletion makes every refusal before any object erasure (F-1).** It refuses as the
+    sole OWNER of an organization with other members (409 `account_deletion_sole_owner`), and every
+    organization it would delete must pass that organization's own refusal (409
+    `organization_jobs_active` while one of its jobs is claimed, running or cancel requested), all
+    before `mark_privacy_writer` and before the first organization's object step. A refused
+    account deletion makes no storage call and changes nothing. It then erases the deleted
+    organizations in id order, each one's objects before its rows, and makes no refusal after a
+    storage call. If a later organization's object step is incomplete (503
+    `object_erasure_incomplete`), the earlier organizations' objects are already erased while all
+    their rows remain until the retry, which completes them. Organization deletion makes its
+    refusals (authority, name, active job) before its object step, as before. On PostgreSQL a job
+    claim locks only its job row, not the organization row, so a job that becomes active after
+    these refusals (for example while an earlier organization's objects are being erased) is not
+    refused, and its organization is deleted under it. Organization deletion has the same window
+    between its refusal and its commit, which the object step lengthens. On SQLite, account
+    deletion's database writer lock (taken before its reads) blocks the claim; organization
+    deletion takes no such lock, so on SQLite it has the same window. No refusal is made again
+    after a storage call: on that race it would refuse only after an earlier organization's
+    objects were erased (review re-bind RB1b).
+  - **The counts are confirmed by the fresh listing (F-3, F-4).** An entry counts as removed when
+    the fresh listing no longer shows it: a delete that returned without deleting is not counted;
+    one that was applied and then raised is counted once, and still makes the run incomplete.
+    Where the fresh listing over an entry failed, the run is incomplete and only a call that
+    returned counts. `keys` counts an object key in the run that leaves no version and no delete
+    marker of it, so the counts summed over a run and its retries are what was removed (AE-M0-4),
+    except where a run's fresh listing over an entry failed while that entry's call was applied
+    and then raised (it is never counted), or returned without removing it (it is counted by that
+    run and again by the run that removes it), or while something was written under the prefix
+    (its key can be counted by that run and again by the next); every such run is incomplete.
+  - **Integration gate: the S3 permissions (F-2).** At this head M0-B's erasure calls no S3
+    operation: the adapter before M0-A0 has none of the four, so the object step reports
+    `unavailable`. Before any build in which M0-B's erasure is reachable with M0-A0's adapter runs
+    with `STORAGE_BACKEND="s3"`, the application's ECS task role must hold `s3:ListBucketVersions`
+    and `s3:ListBucketMultipartUploads` on the bucket that holds the media objects, and
+    `s3:DeleteObjectVersion` and `s3:AbortMultipartUpload` on its objects (M0-C, applied under
+    D-9). The role at this head grants only `s3:ListBucket` (`infra/aws/modules/iam/main.tf:289`)
+    and `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` (`:296-298`). Without the four, a denied
+    listing or deletion is a failed call: every organization deletion, and every account deletion
+    that deletes an organization, answers 503 `object_erasure_incomplete` (even for an
+    organization that never stored media), and the media purge keeps every root. M0-B changes
+    nothing under `infra/`; the gate belongs on the M0-A0 + M0-B integration checklist.
 
 ## 7. The CSP directive set (stated; M0-B changes the files)
 
@@ -464,6 +553,16 @@ binds the purge and mounts the routes:
 `::test_the_media_tables_have_their_stated_entries`, and
 `test_cf7a0_contracts.py::test_no_route_serves_a_media_surface` and
 `::test_the_router_mounts_no_media_module`.
+M0-B (commit `ee15e7d4`; added by M0-B) restated the three retention placeholders to state the bound
+purge; `::test_the_retention_bindings_are_stated_and_not_yet_wired` is now
+`::test_the_retention_bindings_are_stated_and_wired`. The two route placeholders stay until the
+routes are mounted. The test binding M0-B's storage protocol to M0-A0's adapters,
+`test_media_erasure_objects.py::test_the_m0a0_adapters_satisfy_the_m0b_erasure_protocol`, is added
+when M0-A0 lands (it cannot pass before). Besides the signatures, the value types and both real
+adapters erased and verified, it binds (fix pass FXM0B-1, F-6; added by M0-B): that
+`resolve_object_store()` returns the application's configured adapter, never `None`; a
+`media_uploads` sweep on the real adapter; and, on `S3Storage`, that a listing refused with
+`AccessDenied` gives `incomplete` and makes `erase_organization` raise.
 
 ## 12. The malware-scanning approach (decided: S-1)
 
@@ -565,7 +664,11 @@ activate anything.
   media duration set the sweep reports the classes purged and deletes nothing for them, so media
   retention is not enforced until M0-B binds the real roots, which it must do before any media
   route is mounted. (Before the ruling, the sweep raised `KeyError` there, and two existing
-  retention tests failed; both pass now.)
+  retention tests failed; both pass now.) **Resolved by M0-B** (`2e2cdac2`; added by M0-B): the
+  `media_uploads` roots are bound with the object erasure (section 5, "Bound by M0-B"); with a
+  media duration set the sweep purges eligible roots and their objects, or keeps and reports the
+  roots it cannot erase. Live change 4 above then reads: `policy_unset` while either media duration
+  is unset; with both set, `purged` with what was deleted and kept.
 - **L-2.** `ck_media_object_sha256` and `ck_media_provenance_inputs_hash` check length and case,
   not that every character is hexadecimal (a portable CHECK cannot); the request schema and the
   writer do.

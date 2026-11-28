@@ -31,6 +31,14 @@ W21 CF-1, Project Phase 5B ``approvals`` rows and, since CF-3, Project Phase 5E 
 rows — whose ``organization_id`` is the subject are reported as *retained*, and each must have
 every identifying column cleared, or it is a finding. Nothing here writes.
 
+**Object storage (Phase 7A M0-B; AE-M0-4).** An organization's stored media are outside the
+database, so :func:`verify_organization_objects_erased` asks the media store itself, through its
+version-aware listings and nothing else, three independent questions about
+``{organization_id}/``: are there objects, are there noncurrent versions or delete markers, are
+there in-progress multipart uploads. Each is its own listing call, counted on its own; a listing
+that fails is reported as failed, never as empty. It reads neither the erasure code nor the
+inventory, and it writes nothing.
+
 Cost: the content scan reads every text column of every table (519 at W21 ADDR) once
 per identifier. That is acceptable for an operator tool and for the pilot's data volume; it
 is not an online path. The deletion routes therefore run only the reference check
@@ -340,4 +348,113 @@ def verify_organization_erased(
     return _stamp(report, tables)
 
 
-__all__ = ["ErasureReport", "Finding", "verify_organization_erased", "verify_subject_erased"]
+# --------------------------------------------------------------------------- #
+# Object storage (Phase 7A M0-B; AE-M0-4)
+# --------------------------------------------------------------------------- #
+#: The media store's name in the inventory's ``OBJECT_STORES``. Repeated here rather than
+#: imported, like :data:`_ERASED_MARKER`, so this module reads neither the inventory nor the
+#: erasure code.
+_MEDIA_STORE = "media"
+
+
+@dataclass
+class ObjectListingCheck:
+    """Three independent listings of an organization's prefix in the media store.
+
+    ``objects``: the current object versions (a key's latest entry that is not a delete marker),
+    from one version-aware listing. ``noncurrent_versions`` and ``delete_markers``: from a second
+    version-aware listing. ``in_progress_uploads``: from the multipart-upload listing. A listing
+    that raised leaves its counts ``None`` and is named in ``failed_listings`` (``"objects"``,
+    ``"versions"``, ``"uploads"``; ``"store"`` when the store cannot list at all). Verified only
+    when all three ran and found nothing."""
+
+    store: str
+    #: The erasure prefix checked, ``"{organization_id}/"``.
+    prefix: str
+    objects: int | None = None
+    noncurrent_versions: int | None = None
+    delete_markers: int | None = None
+    in_progress_uploads: int | None = None
+    failed_listings: list[str] = field(default_factory=list)
+    generated_at: str = ""
+
+    @property
+    def verified(self) -> bool:
+        counts = (
+            self.objects,
+            self.noncurrent_versions,
+            self.delete_markers,
+            self.in_progress_uploads,
+        )
+        return not self.failed_listings and all(count == 0 for count in counts)
+
+    def as_dict(self) -> dict:
+        out = asdict(self)
+        out["verified"] = self.verified
+        return out
+
+
+def _single_segment(value: str) -> str:
+    if (
+        not isinstance(value, str)
+        or value in ("", ".", "..")
+        or any(character in value for character in ("/", "\\", "\x00"))
+    ):
+        raise ValueError("an organization id must be a single key segment")
+    return value
+
+
+def verify_organization_objects_erased(store, *, organization_id: str) -> ObjectListingCheck:
+    """Prove the media store holds nothing under ``{organization_id}/``: no object, no noncurrent
+    version, no delete marker and no in-progress multipart upload (AE-M0-4).
+
+    ``store`` is any object with ``list_object_versions(prefix)`` and
+    ``list_multipart_uploads(prefix)`` (M0-A0's adapters; M0-B's protocol). Only entries strictly
+    under the prefix count, whatever the store returns. Read-only."""
+    prefix = _single_segment(organization_id)
+    under = prefix + "/"
+    check = ObjectListingCheck(store=_MEDIA_STORE, prefix=under)
+    list_versions = getattr(store, "list_object_versions", None)
+    list_uploads = getattr(store, "list_multipart_uploads", None)
+    if not callable(list_versions) or not callable(list_uploads):
+        check.failed_listings.append("store")
+        check.generated_at = datetime.now(UTC).isoformat()
+        return check
+    try:  # 1. objects
+        check.objects = sum(
+            1
+            for v in list_versions(prefix)
+            if v.key.startswith(under) and v.is_latest and not v.is_delete_marker
+        )
+    except Exception:
+        check.failed_listings.append("objects")
+    try:  # 2. versions and delete markers
+        noncurrent = markers = 0
+        for v in list_versions(prefix):
+            if not v.key.startswith(under):
+                continue
+            if v.is_delete_marker:
+                markers += 1
+            elif not v.is_latest:
+                noncurrent += 1
+        check.noncurrent_versions, check.delete_markers = noncurrent, markers
+    except Exception:
+        check.failed_listings.append("versions")
+    try:  # 3. in-progress multipart uploads
+        check.in_progress_uploads = sum(
+            1 for u in list_uploads(prefix) if u.key.startswith(under)
+        )
+    except Exception:
+        check.failed_listings.append("uploads")
+    check.generated_at = datetime.now(UTC).isoformat()
+    return check
+
+
+__all__ = [
+    "ErasureReport",
+    "Finding",
+    "ObjectListingCheck",
+    "verify_organization_erased",
+    "verify_organization_objects_erased",
+    "verify_subject_erased",
+]
